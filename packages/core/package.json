@@ -1,0 +1,24 @@
+{
+  "name": "@qa/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "^2.1.0",
+    "@qa/checkers": "workspace:*",
+    "@qa/types": "workspace:*",
+    "playwright": "^1.49.1",
+    "pngjs": "^7.0.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

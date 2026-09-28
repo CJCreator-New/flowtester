@@ -1,0 +1,28 @@
+# Runner: the service the wizard and QA Flow Studio talk to. Needs real browsers, so it builds on
+# Playwright's image, whose version must match the `playwright` package in the lockfile.
+FROM mcr.microsoft.com/playwright:v1.63.0-noble
+RUN corepack enable && corepack prepare pnpm@11.10.0 --activate
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+WORKDIR /app
+
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY packages/types/package.json packages/types/
+COPY packages/checkers/package.json packages/checkers/
+COPY packages/core/package.json packages/core/
+COPY packages/runner/package.json packages/runner/
+RUN pnpm install --frozen-lockfile --filter "@qa/runner..."
+
+COPY packages/types packages/types
+COPY packages/checkers packages/checkers
+COPY packages/core packages/core
+COPY packages/runner packages/runner
+RUN pnpm --filter "@qa/runner..." run build
+
+ENV NODE_ENV=production \
+    RUNNER_HOST=0.0.0.0 \
+    RUNNER_PORT=3001 \
+    RUNNER_DATA_DIR=/data \
+    RUNNER_OUTPUT_DIR=/data/reports
+EXPOSE 3001
+CMD ["node", "packages/runner/dist/cli.js"]

@@ -1,0 +1,30 @@
+{
+  "name": "@qa/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "qa-test": "./bin/qa-test.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@qa/types": "workspace:*",
+    "@qa/core": "workspace:*",
+    "@qa/checkers": "workspace:*",
+    "@qa/dashboard": "workspace:*",
+    "@qa/hub": "workspace:*",
+    "@qa/runner": "workspace:*",
+    "commander": "^13.0.0",
+    "picocolors": "^1.1.1"
+
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

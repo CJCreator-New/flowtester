@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-paper font-sans text-base text-ink antialiased;
+    min-height: 100vh;
+  }
+
+  /* One focus style everywhere: a violet ring with a paper-coloured gap, visible on any background. */
+  :focus-visible {
+    outline: 3px solid theme('colors.stamp');
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex min-h-[48px] items-center justify-center gap-2 rounded-md px-6 text-base font-bold transition-colors disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-stamp text-surface hover:bg-stamp-dark disabled:bg-edge;
+  }
+  .btn-quiet {
+    @apply btn border-2 border-edge bg-surface text-ink hover:border-ink;
+  }
+  .btn-link {
+    @apply inline-flex min-h-[44px] items-center font-bold text-stamp underline decoration-2 underline-offset-4 hover:text-stamp-dark;
+  }
+  .field {
+    @apply block w-full rounded-md border-2 border-edge bg-surface px-4 py-3 text-base text-ink placeholder:text-ink-soft focus:border-stamp;
+  }
+  .label {
+    @apply mb-2 block font-bold;
+  }
+  .hint {
+    @apply text-ink-soft;
+  }
+}
+
+/* The verdict stamp is the one moment of motion: it lands once when the report appears. */
+@keyframes stamp-land {
+  0% {
+    opacity: 0;
+    transform: scale(1.35) rotate(-9deg);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(0.97) rotate(-4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(-4deg);
+  }
+}
+
+.stamp {
+  transform: rotate(-4deg);
+  animation: stamp-land 420ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+@keyframes working {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+.progress-indeterminate {
+  animation: working 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stamp,
+  .progress-indeterminate {
+    animation: none;
+  }
+  .progress-indeterminate {
+    transform: none;
+    width: 100%;
+    opacity: 0.35;
+  }
+}

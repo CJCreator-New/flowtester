@@ -1,0 +1,85 @@
+import { createHash } from 'node:crypto';
+
+export interface FingerprintParams {
+  productId: string;
+  route: string;
+  checkerId: string;
+  ruleCode: string;
+  selector?: string;
+}
+
+/**
+ * Normalizes a URL or path string into an invariant pathname route:
+ * - Strips protocol, hostname, and port (e.g. http://localhost:3000/checkout -> /checkout)
+ * - Strips query parameters (?foo=bar) and URL hashes (#section)
+ * - Collapses multiple slashes and removes trailing slash (except for root '/')
+ */
+export function normalizeRoute(rawRoute: string): string {
+  if (!rawRoute || rawRoute.trim() === '') {
+    return '/';
+  }
+
+  let route = rawRoute.trim();
+
+  // If full URL, extract only pathname
+  try {
+    if (route.startsWith('http://') || route.startsWith('https://')) {
+      const parsed = new URL(route);
+      route = parsed.pathname;
+    }
+  } catch {
+    // If not a valid standard URL, continue with path manipulation
+  }
+
+  // Strip query string and hash
+  route = route.split('?')[0].split('#')[0];
+
+  // Replace multiple slashes with single slash
+  route = route.replace(/\/+/g, '/');
+
+  // Strip trailing slash if not root
+  if (route.length > 1 && route.endsWith('/')) {
+    route = route.slice(0, -1);
+  }
+
+  if (!route.startsWith('/')) {
+    route = '/' + route;
+  }
+
+  return route.toLowerCase();
+}
+
+/**
+ * Normalizes an element selector:
+ * - Standardizes attribute quoting (single to double quotes)
+ * - Trims unnecessary internal whitespace
+ */
+export function normalizeSelector(rawSelector?: string): string {
+  if (!rawSelector || rawSelector.trim() === '') {
+    return '';
+  }
+
+  return rawSelector
+    .trim()
+    .replace(/'/g, '"')
+    .replace(/\s*([>+~])\s*/g, ' $1 ')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+/**
+ * Computes a deterministic Structural Fingerprint for a finding.
+ * Invariant against host, port, developer machine, timestamps, or dynamic query params.
+ */
+export function computeStructuralFingerprint(params: FingerprintParams): string {
+  const normProduct = params.productId.trim().toLowerCase();
+  const normRoute = normalizeRoute(params.route);
+  const normChecker = params.checkerId.trim().toLowerCase();
+  const normRule = params.ruleCode.trim().toLowerCase();
+  const normSelector = normalizeSelector(params.selector);
+
+  const payload = [normProduct, normRoute, normChecker, normRule, normSelector].join('|');
+  const hash = createHash('sha256').update(payload).digest('hex').substring(0, 16);
+
+  return `fp_${hash}`;
+}
