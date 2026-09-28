@@ -98,6 +98,7 @@ describe('Wizard end to end', () => {
     runner = new RunnerServer({
       port: RUNNER_PORT,
       outputDir,
+      dataDir: `${outputDir}-data`,
       keyResolver: new KeyResolver(outputDir, new MemoryStore()),
       openRouter: new OpenRouterClient(fakeOpenRouterFetch),
       createAIProvider: () => new MockAIProvider(),
@@ -124,6 +125,7 @@ describe('Wizard end to end', () => {
     await runner?.stop();
     await new Promise<void>((resolve) => fixtureServer.close(() => resolve()));
     await fs.rm(outputDir, { recursive: true, force: true });
+    await fs.rm(`${outputDir}-data`, { recursive: true, force: true }).catch(() => {});
   });
 
   afterEach(() => {
@@ -177,10 +179,18 @@ describe('Wizard end to end', () => {
     openRouterModels.list = [FREE_MODEL];
     await save.click();
     await expect.poll(() => heading().innerText()).toBe('What would you like to check?');
-    expect(await page.evaluate(() => localStorage.getItem('qa-wizard.ai-model'))).toBe(FREE_MODEL.id);
+    // The QA Tool, not this browser, remembers the key and the model it chose.
+    expect(await (await fetch(`${runnerUrl}/api/ai/openrouter/key`)).json()).toMatchObject({ configured: true, model: FREE_MODEL.id });
 
     await page.reload();
     await expect.poll(() => heading().innerText()).toBe('What would you like to check?');
+
+    // A different browser (nothing stored in it) skips the key screen too.
+    const otherBrowser = await browser.newContext();
+    const otherPage = await otherBrowser.newPage();
+    await otherPage.goto(wizardUrl);
+    await expect.poll(() => otherPage.locator('h1').first().innerText(), { timeout: 10000 }).toBe('What would you like to check?');
+    await otherBrowser.close();
 
     await page.getByRole('button', { name: 'Change AI key' }).click();
     await expect.poll(() => heading().innerText()).toBe('Connect an AI helper');

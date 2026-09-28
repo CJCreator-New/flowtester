@@ -22,6 +22,8 @@ export interface ReportSummary {
   counts: SeverityCount[];
   top: TopIssue[];
   readOnly: boolean;
+  /** Checks based on an AI guess the site didn't match: not issues until someone confirms them. */
+  toConfirm: number;
 }
 
 const SEVERITY_ORDER: FindingSeverity[] = ['Blocker', 'Major', 'Minor', 'Suggestion'];
@@ -43,6 +45,8 @@ function category(f: Finding): string {
       return 'Looks different from the design';
     case 'permission-matrix':
       return 'Who can see what';
+    case 'security':
+      return 'Keeping people’s data safe';
     case 'ux-quality':
       return f.id.includes('A11Y') ? 'Hard for some people to use' : 'Awkward to use';
     default:
@@ -65,11 +69,47 @@ export function plainTitle(f: Finding): string {
   if (/^Horizontal page overflow/.test(t)) return 'The page is wider than the screen and scrolls sideways';
   if (/^Visual regression/.test(t)) return 'A screen looks different from its approved version';
   if (/^Design Token Mismatch/.test(t)) return 'A colour or shape doesn’t match the design';
-  return t.replace(/^WCAG Violation:\s*/, '').replace(/\s*\([a-z0-9-]+\)$/i, '');
+  if ((m = t.match(/^URL did not match expected pattern:?\s*["']?(?:\^)?(.*?)(?:\$)?["']?$/i))) {
+    const raw = m[1].replace(/\\\//g, '/').replace(/\/\.\*$/, '').replace(/\\[a-zA-Z0-9+*.]+/g, '').replace(/\/+$/, '');
+    const target = raw || 'the expected page';
+    return `Didn’t reach “${target}” as expected`;
+  }
+  if (/^URL did not match/i.test(t)) return 'Didn’t reach the expected page';
+
+  if (/Elements must meet minimum color contrast ratio thresholds/i.test(t) || /color-contrast/i.test(t)) {
+    return 'Text doesn’t have enough contrast with its background';
+  }
+  if (/Images must have alternate text/i.test(t) || /image-alt/i.test(t)) {
+    return 'An image is missing a text description for screen readers';
+  }
+  if (/Buttons must have discernible text/i.test(t) || /button-name/i.test(t)) {
+    return 'A button is missing a visible or spoken label';
+  }
+  if (/Links must have discernible text/i.test(t) || /link-name/i.test(t)) {
+    return 'A link has no text explaining where it goes';
+  }
+  if (/Document should have one main landmark/i.test(t) || /landmark-one-main/i.test(t)) {
+    return 'The page is missing a main landmark';
+  }
+  if (/All page content should be contained by landmarks/i.test(t) || /region/i.test(t)) {
+    return 'Some page content is outside layout landmarks';
+  }
+  if (/Page should have title element/i.test(t) || /document-title/i.test(t)) {
+    return 'The page is missing a title';
+  }
+  if (/Heading order should be sequential/i.test(t) || /heading-order/i.test(t)) {
+    return 'Headings are out of order';
+  }
+  if (/Form elements must have labels/i.test(t) || /label/i.test(t)) {
+    return 'A form field is missing a label';
+  }
+  return t.replace(/^WCAG Violation:\s*/i, '').replace(/\s*\([a-z0-9-]+\)$/i, '');
 }
 
+
 export function summarizeReport(report: ReleaseReport): ReportSummary {
-  const active = report.findings.filter((f) => f.triageStatus !== 'Intended' && f.triageStatus !== 'False Positive');
+  const untriaged = report.findings.filter((f) => f.triageStatus !== 'Intended' && f.triageStatus !== 'False Positive');
+  const active = untriaged.filter((f) => !f.needsConfirmation);
   const bySeverity = (s: FindingSeverity) => active.filter((f) => f.severity === s).length;
   const blockers = bySeverity('Blocker');
   const majors = bySeverity('Major');
@@ -99,5 +139,6 @@ export function summarizeReport(report: ReleaseReport): ReportSummary {
     counts,
     top,
     readOnly: report.scanMode === 'safe-public',
+    toConfirm: untriaged.length - active.length,
   };
 }

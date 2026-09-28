@@ -109,7 +109,8 @@ describe('summarizeReport', () => {
     expect(s.top).toEqual([
       { title: 'A request to your site failed (error 500)', category: 'Something broke', severity: 'Blocker' },
       { title: 'The page reported an error behind the scenes', category: 'Something broke', severity: 'Major' },
-      { title: 'Buttons must have discernible text', category: 'Hard for some people to use', severity: 'Minor' },
+      { title: 'A button is missing a visible or spoken label', category: 'Hard for some people to use', severity: 'Minor' },
+
     ]);
     // No raw severity enum words reach the summary text
     expect(JSON.stringify(s.counts.map((c) => c.sentence))).not.toMatch(/Blocker|Major|Minor|Suggestion/);
@@ -118,5 +119,13 @@ describe('summarizeReport', () => {
   it('flags a read-only scan', () => {
     expect(summarizeReport(report([], { scanMode: 'safe-public' })).readOnly).toBe(true);
     expect(summarizeReport(report([])).readOnly).toBe(false);
+  });
+
+  it('keeps unconfirmed AI guesses out of the issues, and counts them separately', () => {
+    const guess = { ...finding('F-SPEC-1', 'Suggestion', 'Could not verify: expected the page to say "Saved".'), needsConfirmation: true };
+    const s = summarizeReport(report([guess, finding('F-BUG-1', 'Minor', 'Console Error in step "Save"')]));
+    expect(s.total).toBe(1);
+    expect(s.toConfirm).toBe(1);
+    expect(s.top.map((t) => t.title)).not.toContain(guess.title);
   });
 });

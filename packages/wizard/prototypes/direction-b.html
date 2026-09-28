@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Direction B — Blueprint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ─── Direction B: Blueprint ────────────────────────────────────
+   Tone: Industrial / Utilitarian — inverted to deep navy
+   Anchor: white rectangular "drawings" on a dark grid canvas,
+           coloured journey paths like architect's mark-up lines.
+   DFII: Impact 5, Fit 4, Feasibility 5, Performance 5, Risk 2 = 17 → 15
+   ─────────────────────────────────────────────────────────────── */
+:root {
+  --bg: #111827;
+  --canvas: #0D1322;
+  --card: #1E2A3B;
+  --card-hover: #243044;
+  --surface: #1A2438;
+  --ink: #E8EDF5;
+  --ink-soft: #8896AB;
+  --accent: #5B8DEF;
+  --edge: #2A3A52;
+  --grid: rgba(91,141,239,0.08);
+  --pass: #34D399;
+  --warn: #FBBF24;
+  --fail: #F87171;
+  --J1: #A78BFA; /* purple */
+  --J2: #60A5FA; /* blue */
+  --J3: #34D399; /* green */
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: 'Atkinson Hyperlegible Next', 'Atkinson Hyperlegible', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.5;
+}
+code, .mono {
+  font-family: 'DM Mono', 'Fira Code', monospace;
+  font-size: 0.85em;
+}
+
+/* ─── TOPBAR ─── */
+.topbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--edge);
+  position: sticky; top: 0; z-index: 100;
+}
+.topbar-brand { font-weight: 700; font-size: 1rem; color: var(--ink); flex: 1; }
+.topbar-badge {
+  font-size: 0.65rem; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--accent);
+  padding: 2px 8px; border: 1px solid var(--accent);
+  border-radius: 4px; font-family: 'DM Mono', monospace;
+}
+.back-link { font-size: 0.8rem; color: var(--ink-soft); text-decoration: none; }
+.back-link:hover { color: var(--accent); }
+.screen-tabs {
+  display: flex; gap: 1px;
+  background: var(--edge);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.screen-tab {
+  font-size: 0.72rem; font-weight: 700; padding: 6px 14px;
+  border: none; background: var(--surface);
+  cursor: pointer; color: var(--ink-soft); transition: all 0.12s;
+  white-space: nowrap; font-family: inherit;
+}
+.screen-tab.active { background: var(--accent); color: #fff; }
+.screen-tab:hover:not(.active) { background: var(--card-hover); color: var(--ink); }
+
+/* ─── SCREENS ─── */
+.screen { display: none; }
+.screen.active { display: block; }
+
+/* ══ SCREEN 1: URL ══════════════════════════════════════════════ */
+.url-wrap {
+  max-width: 580px; margin: 0 auto; padding: 80px 24px;
+}
+.url-eyebrow {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.72rem; color: var(--accent); letter-spacing: 0.15em;
+  text-transform: uppercase; margin-bottom: 36px;
+  display: flex; align-items: center; gap: 10px;
+}
+.url-eyebrow::before { content:''; display:block; width:32px; height:1px; background:var(--accent); }
+.url-question {
+  font-size: 2.6rem; font-weight: 700; line-height: 1.15;
+  margin-bottom: 44px; color: var(--ink);
+}
+.url-question span { color: var(--accent); }
+.url-field-group {
+  background: var(--card); border: 1px solid var(--edge);
+  border-radius: 8px; overflow: hidden; margin-bottom: 16px;
+  display: flex; align-items: center; transition: border-color 0.15s;
+}
+.url-field-group:focus-within { border-color: var(--accent); }
+.url-prefix {
+  font-family: 'DM Mono', monospace; font-size: 0.85rem;
+  color: var(--ink-soft); padding: 0 16px; flex-shrink: 0;
+  border-right: 1px solid var(--edge); height: 52px; display:flex; align-items:center;
+}
+.url-input {
+  flex: 1; padding: 14px 16px; background: none; border: none; outline: none;
+  font-size: 1rem; color: var(--ink); font-family: inherit;
+}
+.url-input::placeholder { color: var(--ink-soft); opacity: 0.6; }
+.owner-row {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 16px 20px; background: var(--card); border: 1px solid var(--edge);
+  border-radius: 8px; cursor: pointer; user-select: none; margin-bottom: 36px;
+  transition: border-color 0.15s;
+}
+.owner-row:hover { border-color: var(--accent); }
+.owner-check {
+  width: 18px; height: 18px; border: 1px solid var(--edge); border-radius: 3px;
+  flex-shrink: 0; margin-top: 2px; display: flex; align-items: center; justify-content: center;
+  transition: all 0.12s; background: var(--canvas);
+}
+.owner-check.checked { background: var(--accent); border-color: var(--accent); }
+.owner-check.checked::after { content:'✓'; color:#fff; font-size:0.78rem; font-weight:700; }
+.owner-text { font-size: 0.95rem; font-weight: 700; color: var(--ink); }
+.owner-hint { font-size: 0.8rem; color: var(--ink-soft); margin-top: 3px; }
+.url-actions { display: flex; gap: 16px; align-items: center; }
+.btn-primary {
+  padding: 14px 32px; background: var(--accent); color: var(--bg);
+  font-family: inherit; font-size: 1rem; font-weight: 700;
+  border: none; border-radius: 6px; cursor: pointer;
+  transition: opacity 0.15s; letter-spacing: 0.01em;
+}
+.btn-primary:hover { opacity: 0.88; }
+.btn-ghost {
+  font-family: inherit; font-size: 0.88rem; font-weight: 700;
+  color: var(--ink-soft); background: none; border: 1px solid var(--edge);
+  border-radius: 6px; padding: 14px 20px; cursor: pointer; transition: all 0.15s;
+}
+.btn-ghost:hover { border-color: var(--ink-soft); color: var(--ink); }
+
+/* ══ SCREENS 2+3: MAP ═══════════════════════════════════════════ */
+.map-shell { display:flex; height:calc(100vh - 57px); }
+
+/* sidebar */
+.map-sidebar {
+  width: 260px; flex-shrink: 0;
+  background: var(--surface); border-right: 1px solid var(--edge);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.sidebar-head { padding:20px 20px 0; border-bottom:1px solid var(--edge); }
+.sidebar-title { font-weight:700; font-size:1rem; margin-bottom:2px; }
+.sidebar-sub { font-size:0.78rem; color:var(--ink-soft); margin-bottom:14px; font-family:'DM Mono',monospace; }
+.journey-tabs { display:flex; gap:0; overflow-x:auto; scrollbar-width:none; }
+.journey-tab {
+  font-size:0.7rem; font-weight:700; padding:8px 12px;
+  border:none; background:none; cursor:pointer; color:var(--ink-soft);
+  border-bottom:2px solid transparent; white-space:nowrap; transition:all 0.12s; flex-shrink:0;
+  font-family:inherit;
+}
+.journey-tab.active { color:var(--ink); border-bottom-color:var(--accent); }
+.sidebar-body { overflow-y:auto; padding:16px 0; flex:1; }
+.sidebar-section-label {
+  font-size:0.65rem; font-weight:700; letter-spacing:0.12em;
+  text-transform:uppercase; color:var(--ink-soft); padding:0 20px; margin:12px 0 6px;
+  font-family:'DM Mono',monospace;
+}
+.sidebar-item {
+  display:flex; align-items:center; gap:10px;
+  padding:8px 20px; cursor:pointer; transition:background 0.1s;
+}
+.sidebar-item:hover { background:var(--card); }
+.sidebar-item.selected { background:rgba(91,141,239,0.12); }
+.s-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.s-dot.pass { background:var(--pass); }
+.s-dot.warn { background:var(--warn); }
+.s-dot.fail { background:var(--fail); }
+.s-dot.pending { background:var(--edge); }
+.s-dot.running { background:var(--accent); animation:bpulse 1s infinite; }
+@keyframes bpulse { 0%,100%{opacity:1}50%{opacity:0.35} }
+.s-name { font-size:0.83rem; flex:1; }
+.s-count { font-size:0.7rem; color:var(--ink-soft); font-family:'DM Mono',monospace; }
+
+/* canvas — blueprint grid */
+.map-canvas-wrap {
+  flex:1; overflow:auto; position:relative; background:var(--canvas);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(to right, var(--grid) 1px, transparent 1px);
+  background-size:40px 40px;
+}
+.map-canvas { position:relative; width:920px; min-height:580px; padding:48px; }
+.connectors { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+.connector { fill:none; stroke-width:1.5; }
+.connector.J1 { stroke:var(--J1); }
+.connector.J2 { stroke:var(--J2); }
+.connector.J3 { stroke:var(--J3); }
+.connector.other { stroke:var(--edge); stroke-dasharray:5 4; }
+
+/* blueprint page cards */
+.bp-card {
+  position:absolute; width:156px;
+  background:var(--card); border:1px solid var(--edge);
+  border-radius:6px; cursor:pointer; overflow:hidden;
+  transition:border-color 0.12s, box-shadow 0.12s;
+}
+.bp-card:hover { border-color:var(--accent); box-shadow:0 0 0 2px rgba(91,141,239,0.25); }
+.bp-card.selected { border-color:var(--accent); box-shadow:0 0 0 3px rgba(91,141,239,0.3); }
+.bp-card.running { border-color:var(--accent); animation:bglow 1.4s ease-in-out infinite; }
+@keyframes bglow { 0%,100%{box-shadow:0 0 0 0 rgba(91,141,239,0)} 50%{box-shadow:0 0 0 6px rgba(91,141,239,0.25)} }
+.bp-card.pass { border-color:var(--pass); border-left-width:3px; }
+.bp-card.warn { border-color:var(--warn); border-left-width:3px; }
+.bp-card.fail { border-color:var(--fail); border-left-width:3px; }
+
+/* corner label (like a drawing ref) */
+.bp-card-ref {
+  font-family:'DM Mono',monospace; font-size:0.58rem; color:var(--ink-soft);
+  padding:6px 10px 0; letter-spacing:0.04em; text-transform:uppercase;
+}
+.bp-thumb {
+  margin:4px 8px; border-radius:3px; background:var(--canvas);
+  aspect-ratio:16/9; overflow:hidden; position:relative;
+}
+.bp-thumb-line { height:3px; background:var(--edge); border-radius:1px; margin:5px 6px 3px; }
+.bp-thumb-line.w70 { width:70%; }
+.bp-thumb-line.w50 { width:50%; }
+.bp-thumb-block { height:18px; background:rgba(91,141,239,0.12); border-radius:2px; margin:4px 6px; }
+.bp-card-footer {
+  padding:6px 10px 10px;
+  display:flex; align-items:center; justify-content:space-between;
+}
+.bp-card-name { font-size:0.82rem; font-weight:700; }
+.bp-card-tags { display:flex; gap:3px; }
+.bp-tag {
+  width:8px; height:8px; border-radius:50%; flex-shrink:0;
+}
+.bp-tag.J1 { background:var(--J1); }
+.bp-tag.J2 { background:var(--J2); }
+.bp-tag.J3 { background:var(--J3); }
+
+/* group */
+.bp-group {
+  position:absolute; width:140px;
+  border:1px dashed var(--edge); border-radius:6px;
+  padding:14px; cursor:pointer; transition:border-color 0.12s;
+  display:flex; flex-direction:column; align-items:center; gap:6px;
+}
+.bp-group:hover { border-color:var(--ink-soft); }
+.bp-group-label { font-size:0.75rem; font-weight:700; text-align:center; color:var(--ink-soft); }
+.bp-group-count { font-size:0.65rem; color:var(--ink-soft); font-family:'DM Mono',monospace; }
+
+/* side panel */
+.side-panel {
+  width:320px; flex-shrink:0;
+  background:var(--surface); border-left:1px solid var(--edge);
+  display:none; flex-direction:column; overflow-y:auto;
+}
+.side-panel.open { display:flex; }
+.panel-head {
+  padding:20px 20px 16px; border-bottom:1px solid var(--edge);
+  position:sticky; top:0; background:var(--surface); z-index:5;
+}
+.panel-ref { font-family:'DM Mono',monospace; font-size:0.68rem; color:var(--ink-soft); margin-bottom:4px; }
+.panel-title { font-size:1.05rem; font-weight:700; margin-bottom:10px; }
+.panel-close {
+  position:absolute; top:16px; right:14px;
+  width:26px; height:26px; border-radius:4px;
+  border:1px solid var(--edge); background:none;
+  cursor:pointer; font-size:0.9rem; color:var(--ink-soft);
+  display:flex; align-items:center; justify-content:center;
+  transition:all 0.12s; font-family:inherit;
+}
+.panel-close:hover { border-color:var(--ink); color:var(--ink); }
+.panel-tags { display:flex; gap:6px; flex-wrap:wrap; }
+.bp-badge {
+  font-size:0.65rem; font-weight:700; padding:2px 8px;
+  border-radius:3px; letter-spacing:0.06em; text-transform:uppercase;
+}
+.bp-badge.J1 { background:rgba(167,139,250,0.15); color:var(--J1); }
+.bp-badge.J2 { background:rgba(96,165,250,0.15); color:var(--J2); }
+.bp-badge.J3 { background:rgba(52,211,153,0.12); color:var(--J3); }
+.bp-badge.other { background:var(--card); color:var(--ink-soft); }
+.panel-body { padding:18px 20px; flex:1; }
+.panel-section { margin-bottom:22px; }
+.psec-title {
+  font-family:'DM Mono',monospace; font-size:0.65rem; font-weight:500;
+  letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);
+  margin-bottom:10px;
+}
+.step-list { list-style:none; counter-reset:step; }
+.step-item { counter-increment:step; display:flex; gap:10px; margin-bottom:8px; align-items:flex-start; }
+.step-item::before {
+  content:counter(step,'01'); flex-shrink:0;
+  font-family:'DM Mono',monospace; font-size:0.65rem; color:var(--accent);
+  margin-top:3px; opacity:0.7;
+}
+.step-text { font-size:0.83rem; line-height:1.5; }
+.check-item {
+  display:flex; gap:10px; align-items:flex-start;
+  padding:9px 12px; border-radius:4px; margin-bottom:5px;
+}
+.check-item.pending-item { background:rgba(255,255,255,0.03); border:1px solid var(--edge); }
+.check-item.pass-item { background:rgba(52,211,153,0.08); border:1px solid rgba(52,211,153,0.25); }
+.check-item.warn-item { background:rgba(251,191,36,0.08); border:1px solid rgba(251,191,36,0.25); }
+.check-item.fail-item { background:rgba(248,113,113,0.08); border:1px solid rgba(248,113,113,0.25); }
+.check-icon { font-size:0.9rem; flex-shrink:0; margin-top:1px; }
+.check-name { font-size:0.82rem; font-weight:700; }
+.check-detail { font-size:0.75rem; color:var(--ink-soft); margin-top:1px; }
+.q-item { padding:10px 12px; border:1px solid var(--edge); border-radius:4px; margin-bottom:8px; }
+.q-text { font-size:0.82rem; margin-bottom:8px; }
+.q-choices { display:flex; gap:6px; flex-wrap:wrap; }
+.q-choice {
+  font-size:0.75rem; padding:4px 10px;
+  border:1px solid var(--edge); border-radius:3px;
+  cursor:pointer; background:none; font-family:inherit; color:var(--ink-soft);
+  transition:all 0.12s;
+}
+.q-choice:hover, .q-choice.picked { border-color:var(--accent); background:rgba(91,141,239,0.12); color:var(--accent); }
+
+/* ══ LIVE status bar ══ */
+.live-bar {
+  display:flex; align-items:center; gap:16px;
+  padding:9px 20px; background:var(--surface); border-bottom:1px solid var(--edge);
+}
+.live-indicator {
+  display:flex; align-items:center; gap:8px;
+  font-family:'DM Mono',monospace; font-size:0.72rem; color:var(--accent);
+}
+.live-dot { width:8px; height:8px; border-radius:50%; background:var(--accent); animation:bpulse 1s infinite; }
+.live-msg { font-size:0.82rem; font-weight:700; flex:1; }
+.live-count { font-family:'DM Mono',monospace; font-size:0.72rem; color:var(--ink-soft); }
+.progress-track { width:140px; height:3px; background:var(--edge); border-radius:2px; overflow:hidden; }
+.progress-fill { height:100%; background:var(--accent); width:45%; }
+
+/* ══ REPORT ═══════════════════════════════════════════════════ */
+.report-wrap { max-width:960px; margin:0 auto; padding:48px 24px; }
+.verdict-band {
+  display:flex; align-items:stretch; gap:0;
+  background:var(--card); border:1px solid var(--edge);
+  border-radius:8px; overflow:hidden; margin-bottom:40px;
+}
+.verdict-status {
+  background:rgba(248,113,113,0.1); border-right:1px solid rgba(248,113,113,0.3);
+  padding:28px 28px; display:flex; flex-direction:column; justify-content:center; align-items:center;
+  min-width:140px;
+}
+.verdict-status-label {
+  font-family:'DM Mono',monospace; font-size:0.65rem; letter-spacing:0.15em;
+  text-transform:uppercase; color:var(--fail); margin-bottom:6px;
+}
+.verdict-status-word { font-size:1.8rem; font-weight:700; color:var(--fail); line-height:1; }
+.verdict-copy { padding:28px 32px; }
+.verdict-copy h2 { font-size:1.5rem; font-weight:700; margin-bottom:8px; }
+.verdict-copy p { font-size:0.9rem; color:var(--ink-soft); line-height:1.6; }
+.report-section { margin-bottom:36px; }
+.rsec-title {
+  font-family:'DM Mono',monospace; font-size:0.65rem; font-weight:500;
+  letter-spacing:0.14em; text-transform:uppercase; color:var(--ink-soft);
+  margin-bottom:16px; padding-bottom:8px; border-bottom:1px solid var(--edge);
+}
+.finding-list { display:grid; gap:10px; }
+.f-card {
+  background:var(--card); border:1px solid var(--edge); border-radius:6px;
+  padding:14px 18px; display:flex; gap:14px;
+}
+.f-card.fail-card { border-left:3px solid var(--fail); }
+.f-card.warn-card { border-left:3px solid var(--warn); }
+.f-icon { font-size:1.1rem; flex-shrink:0; margin-top:2px; }
+.f-body {}
+.f-title { font-size:0.9rem; font-weight:700; margin-bottom:3px; }
+.f-detail { font-size:0.78rem; color:var(--ink-soft); line-height:1.5; }
+.f-page { font-size:0.7rem; color:var(--ink-soft); margin-top:6px; font-family:'DM Mono',monospace; }
+.f-page a { color:var(--accent); text-decoration:none; }
+
+/* report map mini */
+.rmap {
+  background:var(--canvas); border:1px solid var(--edge); border-radius:8px;
+  position:relative; height:240px; overflow:hidden;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(to right,var(--grid) 1px,transparent 1px);
+  background-size:32px 32px;
+}
+.rmap-card {
+  position:absolute; border-radius:4px; padding:7px 10px;
+  font-size:0.72rem; border-left:3px solid; cursor:pointer;
+  transition:opacity 0.12s; background:var(--card);
+}
+.rmap-card.pass { border-color:var(--pass); }
+.rmap-card.warn { border-color:var(--warn); }
+.rmap-card.fail { border-color:var(--fail); }
+.rmap-card-path { font-family:'DM Mono',monospace; font-size:0.62rem; color:var(--ink-soft); }
+.rmap-card-name { font-weight:700; margin-top:1px; }
+.rmap-card-status { font-size:0.62rem; margin-top:3px; }
+.rmap-card.pass .rmap-card-status { color:var(--pass); }
+.rmap-card.warn .rmap-card-status { color:var(--warn); }
+.rmap-card.fail .rmap-card-status { color:var(--fail); }
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <a class="back-link" href="index.html">← All directions</a>
+  <span class="topbar-brand">Direction B — Blueprint</span>
+  <span class="topbar-badge">Dark · Architectural</span>
+  <div class="screen-tabs">
+    <button class="screen-tab active" onclick="showScreen(0)">1 · Enter URL</button>
+    <button class="screen-tab" onclick="showScreen(1)">2 · Review plan</button>
+    <button class="screen-tab" onclick="showScreen(2)">3 · Live view</button>
+    <button class="screen-tab" onclick="showScreen(3)">4 · Report</button>
+  </div>
+</div>
+
+<!-- ══ SCREEN 1 ══════════════════════════════════════════════════ -->
+<div class="screen active" id="s0">
+  <div class="url-wrap">
+    <div class="url-eyebrow">QA Tool · Site check</div>
+    <h2 class="url-question">Enter the address<br>of the site to <span>check</span></h2>
+
+    <div class="url-field-group">
+      <div class="url-prefix">https://</div>
+      <input class="url-input" type="text" value="shop.example.com" placeholder="your-site.com" />
+    </div>
+
+    <div class="owner-row" onclick="toggleOwner(this)">
+      <div class="owner-check" id="ownerCheck"></div>
+      <div>
+        <div class="owner-text">I own this site or it's a test copy</div>
+        <div class="owner-hint">Required for interactive testing — filling and submitting forms</div>
+      </div>
+    </div>
+
+    <div class="url-actions">
+      <button class="btn-primary" onclick="showScreen(1)">Start review →</button>
+      <button class="btn-ghost" onclick="showScreen(1)">Skip review, just test it</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 2: PLAN MAP ════════════════════════════════════════ -->
+<div class="screen" id="s1">
+  <div class="map-shell">
+    <div class="map-sidebar">
+      <div class="sidebar-head">
+        <div class="sidebar-title">shop.example.com</div>
+        <div class="sidebar-sub">online-shop · 3 journeys · 9 pages</div>
+        <div class="journey-tabs">
+          <button class="journey-tab active" onclick="setTab(this)">All</button>
+          <button class="journey-tab" onclick="setTab(this)" style="color:var(--J1)">Sign in</button>
+          <button class="journey-tab" onclick="setTab(this)" style="color:var(--J2)">Browse</button>
+          <button class="journey-tab" onclick="setTab(this)" style="color:var(--J3)">Checkout</button>
+        </div>
+      </div>
+      <div class="sidebar-body">
+        <div class="sidebar-section-label">Journeys</div>
+        <div class="sidebar-item" onclick="openPanel('home')"><div class="s-dot pending"></div><span class="s-name">Home</span></div>
+        <div class="sidebar-item" onclick="openPanel('login')"><div class="s-dot pending"></div><span class="s-name">Sign in</span></div>
+        <div class="sidebar-item" onclick="openPanel('products')"><div class="s-dot pending"></div><span class="s-name">Products</span></div>
+        <div class="sidebar-item" onclick="openPanel('product')"><div class="s-dot pending"></div><span class="s-name">Product detail</span></div>
+        <div class="sidebar-item" onclick="openPanel('cart')"><div class="s-dot pending"></div><span class="s-name">Cart</span></div>
+        <div class="sidebar-item" onclick="openPanel('checkout')"><div class="s-dot pending"></div><span class="s-name">Checkout</span></div>
+        <div class="sidebar-section-label">Other</div>
+        <div class="sidebar-item"><div class="s-dot pending"></div><span class="s-name">About</span></div>
+        <div class="sidebar-item"><div class="s-dot pending"></div><span class="s-name">Blog · 12 pages</span></div>
+        <div style="padding:20px;border-top:1px solid var(--edge);margin-top:16px;">
+          <button class="btn-primary" style="width:100%;justify-content:center;display:block;text-align:center" onclick="showScreen(2)">Looks good, start testing →</button>
+          <div style="margin-top:10px;text-align:center">
+            <button class="btn-ghost" style="font-size:0.78rem;padding:8px 16px" onclick="showScreen(2)">Skip review</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="map-canvas-wrap">
+      <div class="map-canvas" id="canvas">
+        <svg class="connectors" id="svgLayer" xmlns="http://www.w3.org/2000/svg">
+          <path class="connector J1" id="c-home-login" d=""/>
+          <path class="connector J1" id="c-login-products" d=""/>
+          <path class="connector J2" id="c-home-products" d=""/>
+          <path class="connector J2" id="c-products-product" d=""/>
+          <path class="connector J3" id="c-product-cart" d=""/>
+          <path class="connector J3" id="c-cart-checkout" d=""/>
+          <path class="connector other" id="c-home-about" d=""/>
+        </svg>
+
+        <div class="bp-card" id="card-home" style="left:100px;top:210px" onclick="openPanel('home')">
+          <div class="bp-card-ref">pg-01 · /</div>
+          <div class="bp-thumb"><div class="bp-thumb-line w70"></div><div class="bp-thumb-block"></div><div class="bp-thumb-line w50"></div></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Home</span><div class="bp-card-tags"><span class="bp-tag J1"></span><span class="bp-tag J2"></span></div></div>
+        </div>
+
+        <div class="bp-card" id="card-login" style="left:340px;top:70px" onclick="openPanel('login')">
+          <div class="bp-card-ref">pg-02 · /login</div>
+          <div class="bp-thumb"><div class="bp-thumb-line w50"></div><div class="bp-thumb-block"></div><div class="bp-thumb-line w70"></div></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Sign in</span><div class="bp-card-tags"><span class="bp-tag J1"></span></div></div>
+        </div>
+
+        <div class="bp-card" id="card-products" style="left:340px;top:290px" onclick="openPanel('products')">
+          <div class="bp-card-ref">pg-03 · /products</div>
+          <div class="bp-thumb"><div class="bp-thumb-line w70"></div><div class="bp-thumb-block"></div><div class="bp-thumb-line w50"></div></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Products</span><div class="bp-card-tags"><span class="bp-tag J1"></span><span class="bp-tag J2"></span></div></div>
+        </div>
+
+        <div class="bp-card" id="card-product" style="left:560px;top:170px" onclick="openPanel('product')">
+          <div class="bp-card-ref">pg-04 · /products/:id</div>
+          <div class="bp-thumb"><div class="bp-thumb-line w70"></div><div class="bp-thumb-block"></div></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Product detail</span><div class="bp-card-tags"><span class="bp-tag J2"></span><span class="bp-tag J3"></span></div></div>
+        </div>
+
+        <div class="bp-card" id="card-cart" style="left:560px;top:370px" onclick="openPanel('cart')">
+          <div class="bp-card-ref">pg-05 · /cart</div>
+          <div class="bp-thumb"><div class="bp-thumb-line w50"></div><div class="bp-thumb-block"></div></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Cart</span><div class="bp-card-tags"><span class="bp-tag J3"></span></div></div>
+        </div>
+
+        <div class="bp-card" id="card-checkout" style="left:740px;top:270px" onclick="openPanel('checkout')">
+          <div class="bp-card-ref">pg-06 · /checkout</div>
+          <div class="bp-thumb"><div class="bp-thumb-line w70"></div><div class="bp-thumb-block"></div><div class="bp-thumb-line w50"></div></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Checkout</span><div class="bp-card-tags"><span class="bp-tag J3"></span></div></div>
+        </div>
+
+        <div class="bp-group" style="left:100px;top:80px" onclick="openPanel('blog')">
+          <div style="font-size:1.2rem">📰</div>
+          <div class="bp-group-label">Blog</div>
+          <div class="bp-group-count">12 pages · 1 layout</div>
+        </div>
+
+        <div class="bp-group" id="card-about" style="left:100px;top:410px" onclick="openPanel('about')">
+          <div style="font-size:1.2rem">📄</div>
+          <div class="bp-group-label">About</div>
+          <div class="bp-group-count">1 page</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SIDE PANEL -->
+    <div class="side-panel" id="sidePanel">
+      <div class="panel-head">
+        <div class="panel-ref" id="panelRef"></div>
+        <div class="panel-title" id="panelTitle"></div>
+        <button class="panel-close" onclick="closePanel()">✕</button>
+        <div class="panel-tags" id="panelTags"></div>
+      </div>
+      <div class="panel-body" id="panelBody"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 3: LIVE ════════════════════════════════════════════ -->
+<div class="screen" id="s2">
+  <div class="live-bar">
+    <div class="live-indicator"><div class="live-dot"></div> LIVE</div>
+    <div class="live-msg">Checking Products — Browse journey · step 2 of 4</div>
+    <div class="live-count">7 pages done · 2 issues</div>
+    <div class="progress-track"><div class="progress-fill"></div></div>
+  </div>
+  <div class="map-shell">
+    <div class="map-sidebar">
+      <div class="sidebar-head">
+        <div class="sidebar-title">shop.example.com</div>
+        <div class="sidebar-sub">testing · 3 journeys</div>
+        <div class="journey-tabs">
+          <button class="journey-tab active" onclick="setTab(this)">All</button>
+          <button class="journey-tab" onclick="setTab(this)" style="color:var(--J1)">Sign in</button>
+          <button class="journey-tab" onclick="setTab(this)" style="color:var(--J2)">Browse</button>
+          <button class="journey-tab" onclick="setTab(this)" style="color:var(--J3)">Checkout</button>
+        </div>
+      </div>
+      <div class="sidebar-body">
+        <div class="sidebar-item selected"><div class="s-dot running"></div><span class="s-name">Products</span><span class="s-count">running</span></div>
+        <div class="sidebar-item"><div class="s-dot pass"></div><span class="s-name">Home</span><span class="s-count">pass</span></div>
+        <div class="sidebar-item"><div class="s-dot warn"></div><span class="s-name">Sign in</span><span class="s-count">1 issue</span></div>
+        <div class="sidebar-item"><div class="s-dot pending"></div><span class="s-name">Product detail</span><span class="s-count">waiting</span></div>
+        <div class="sidebar-item"><div class="s-dot pending"></div><span class="s-name">Cart</span><span class="s-count">waiting</span></div>
+        <div class="sidebar-item"><div class="s-dot pending"></div><span class="s-name">Checkout</span><span class="s-count">waiting</span></div>
+      </div>
+    </div>
+    <div class="map-canvas-wrap">
+      <div class="map-canvas">
+        <svg class="connectors" xmlns="http://www.w3.org/2000/svg">
+          <path class="connector J1" d="M 256 230 C 340 160 340 130 340 110" opacity="0.9"/>
+          <path class="connector J1" d="M 496 110 C 540 170 540 240 496 310" opacity="0.3"/>
+          <path class="connector J2" d="M 256 230 C 310 260 340 290 340 310" opacity="0.9"/>
+          <path class="connector J2" d="M 496 310 C 540 290 556 250 556 210" opacity="0.3"/>
+          <path class="connector J3" d="M 716 210 C 740 270 720 370 716 390" opacity="0.2"/>
+          <path class="connector J3" d="M 716 390 C 740 400 756 320 756 290" opacity="0.2"/>
+        </svg>
+
+        <div class="bp-card pass" style="left:100px;top:210px">
+          <div class="bp-card-ref">pg-01 · /</div>
+          <div class="bp-thumb"><div class="bp-thumb-line w70"></div><div class="bp-thumb-block"></div></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Home</span><div style="font-size:0.65rem;color:var(--pass)">✓ pass</div></div>
+        </div>
+
+        <div class="bp-card warn" style="left:340px;top:70px">
+          <div class="bp-card-ref">pg-02 · /login</div>
+          <div class="bp-thumb"><div class="bp-thumb-line w50"></div><div class="bp-thumb-block"></div></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Sign in</span><div style="font-size:0.65rem;color:var(--warn)">⚠ 1 issue</div></div>
+        </div>
+
+        <div class="bp-card running" style="left:340px;top:290px">
+          <div class="bp-card-ref">pg-03 · /products</div>
+          <div class="bp-thumb" style="background:linear-gradient(90deg,rgba(91,141,239,0.2) 40%,var(--canvas) 40%)"><div class="bp-thumb-line w70" style="opacity:0.4"></div></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Products</span><div style="font-size:0.65rem;color:var(--accent);animation:bpulse 1s infinite">● checking</div></div>
+        </div>
+
+        <div class="bp-card" style="left:560px;top:170px;opacity:0.4">
+          <div class="bp-card-ref">pg-04 · /products/:id</div>
+          <div class="bp-thumb"></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Product detail</span><div style="font-size:0.65rem;color:var(--ink-soft)">waiting</div></div>
+        </div>
+
+        <div class="bp-card" style="left:560px;top:370px;opacity:0.4">
+          <div class="bp-card-ref">pg-05 · /cart</div>
+          <div class="bp-thumb"></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Cart</span><div style="font-size:0.65rem;color:var(--ink-soft)">waiting</div></div>
+        </div>
+
+        <div class="bp-card" style="left:740px;top:270px;opacity:0.4">
+          <div class="bp-card-ref">pg-06 · /checkout</div>
+          <div class="bp-thumb"></div>
+          <div class="bp-card-footer"><span class="bp-card-name">Checkout</span><div style="font-size:0.65rem;color:var(--ink-soft)">waiting</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="side-panel open">
+      <div class="panel-head">
+        <div class="panel-ref">pg-03 · /products</div>
+        <div class="panel-title">Products <span style="font-size:0.7rem;color:var(--accent);animation:bpulse 1s infinite;display:inline-block;font-family:'DM Mono',monospace">● running</span></div>
+        <button class="panel-close" onclick="this.closest('.side-panel').classList.remove('open')">✕</button>
+      </div>
+      <div class="panel-body">
+        <div class="panel-section">
+          <div class="psec-title">Latest action</div>
+          <div style="background:var(--canvas);border-radius:4px;padding:10px 12px;font-family:'DM Mono',monospace;font-size:0.75rem;color:var(--ink-soft)">click → <span style="color:var(--accent)">[data-testid="product-card-0"]</span><br><span style="color:var(--ink)">Sauce Labs Backpack</span></div>
+        </div>
+        <div class="panel-section">
+          <div class="psec-title">Checks</div>
+          <div class="check-item pass-item"><div class="check-icon" style="color:var(--pass)">✓</div><div><div class="check-name">Page loaded</div></div></div>
+          <div class="check-item pass-item"><div class="check-icon" style="color:var(--pass)">✓</div><div><div class="check-name">Accessibility</div></div></div>
+          <div class="check-item pending-item"><div class="check-icon" style="color:var(--ink-soft)">…</div><div><div class="check-name">Mobile layout (375px)</div></div></div>
+          <div class="check-item pending-item"><div class="check-icon" style="color:var(--ink-soft)">…</div><div><div class="check-name">Tap targets</div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 4: REPORT ══════════════════════════════════════════ -->
+<div class="screen" id="s3">
+  <div class="report-wrap">
+    <div class="verdict-band">
+      <div class="verdict-status">
+        <div class="verdict-status-label">Status</div>
+        <div class="verdict-status-word">NOT<br>READY</div>
+      </div>
+      <div class="verdict-copy">
+        <h2>3 issues to fix before release</h2>
+        <p>shop.example.com has 2 serious accessibility problems and 1 security issue. Fix these before users and search engines see it.</p>
+      </div>
+    </div>
+
+    <div class="report-section">
+      <div class="rsec-title">Site map — by result</div>
+      <div class="rmap">
+        <svg style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none" xmlns="http://www.w3.org/2000/svg">
+          <path fill="none" stroke="rgba(167,139,250,0.4)" stroke-width="1.5" d="M 168 125 C 240 100 260 100 285 100"/>
+          <path fill="none" stroke="rgba(96,165,250,0.4)" stroke-width="1.5" d="M 168 125 C 230 140 260 155 285 155"/>
+          <path fill="none" stroke="rgba(52,211,153,0.4)" stroke-width="1.5" d="M 460 120 C 510 140 530 155 545 155"/>
+          <path fill="none" stroke="rgba(52,211,153,0.4)" stroke-width="1.5" d="M 545 155 C 590 150 620 135 640 130"/>
+        </svg>
+        <div class="rmap-card pass" style="left:60px;top:100px;width:110px">
+          <div class="rmap-card-path">/</div>
+          <div class="rmap-card-name">Home</div>
+          <div class="rmap-card-status">✓ pass</div>
+        </div>
+        <div class="rmap-card warn" style="left:280px;top:72px;width:110px">
+          <div class="rmap-card-path">/login</div>
+          <div class="rmap-card-name">Sign in</div>
+          <div class="rmap-card-status">⚠ 1 issue</div>
+        </div>
+        <div class="rmap-card fail" style="left:280px;top:140px;width:110px">
+          <div class="rmap-card-path">/products</div>
+          <div class="rmap-card-name">Products</div>
+          <div class="rmap-card-status">✕ 2 issues</div>
+        </div>
+        <div class="rmap-card pass" style="left:456px;top:100px;width:120px">
+          <div class="rmap-card-path">/products/:id</div>
+          <div class="rmap-card-name">Product detail</div>
+          <div class="rmap-card-status">✓ pass</div>
+        </div>
+        <div class="rmap-card pass" style="left:540px;top:140px;width:80px">
+          <div class="rmap-card-path">/cart</div>
+          <div class="rmap-card-name">Cart</div>
+          <div class="rmap-card-status">✓ pass</div>
+        </div>
+        <div class="rmap-card pass" style="left:635px;top:100px;width:100px">
+          <div class="rmap-card-path">/checkout</div>
+          <div class="rmap-card-name">Checkout</div>
+          <div class="rmap-card-status">✓ pass</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="report-section">
+      <div class="rsec-title">Issues to fix</div>
+      <div class="finding-list">
+        <div class="f-card fail-card">
+          <div class="f-icon">🎯</div>
+          <div class="f-body">
+            <div class="f-title">4 buttons are too small to tap on a phone</div>
+            <div class="f-detail">The "Add to cart" button and 3 filter controls are under 24 px on a 375 px screen.</div>
+            <div class="f-page">/products · 375px · <a href="#">evidence</a></div>
+          </div>
+        </div>
+        <div class="f-card fail-card">
+          <div class="f-icon">🎨</div>
+          <div class="f-body">
+            <div class="f-title">Price text doesn't have enough contrast</div>
+            <div class="f-detail">Grey (#767676) on white is below WCAG AA minimum (4.5:1). Users with low vision will struggle.</div>
+            <div class="f-page">/products · <a href="#">evidence</a></div>
+          </div>
+        </div>
+        <div class="f-card warn-card">
+          <div class="f-icon">🔒</div>
+          <div class="f-body">
+            <div class="f-title">Sign-in form sends passwords in the page address</div>
+            <div class="f-detail">The form uses GET. The password ends up in browser history and server logs. Switch to POST.</div>
+            <div class="f-page">/login · <a href="#">evidence</a></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function showScreen(n) {
+  document.querySelectorAll('.screen').forEach((s,i)=>s.classList.toggle('active',i===n));
+  document.querySelectorAll('.screen-tab').forEach((t,i)=>t.classList.toggle('active',i===n));
+  drawConnectors();
+}
+function toggleOwner(row) { row.querySelector('.owner-check').classList.toggle('checked'); }
+function setTab(btn) {
+  btn.closest('.journey-tabs').querySelectorAll('.journey-tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+const panels = {
+  home:{ref:'pg-01 · /',title:'Home',tags:'<span class="bp-badge J1">Sign in</span><span class="bp-badge J2">Browse</span>',body:`<div class="panel-section"><div class="psec-title">Steps</div><ol class="step-list"><li class="step-item"><div class="step-text">Open the home page</div></li><li class="step-item"><div class="step-text">Check all navigation links work</div></li><li class="step-item"><div class="step-text">Click "Shop now" → Products</div></li></ol></div><div class="panel-section"><div class="psec-title">Checks</div><div class="check-item pending-item"><div class="check-icon">·</div><div><div class="check-name">Accessibility (WCAG 2.2 AA)</div></div></div><div class="check-item pending-item"><div class="check-icon">·</div><div><div class="check-name">Touch targets at 375px</div></div></div></div>`},
+  login:{ref:'pg-02 · /login',title:'Sign in',tags:'<span class="bp-badge J1">Sign in</span>',body:`<div class="panel-section"><div class="psec-title">Steps</div><ol class="step-list"><li class="step-item"><div class="step-text">Open the sign-in page</div></li><li class="step-item"><div class="step-text">Enter username and password</div></li><li class="step-item"><div class="step-text">Click "Sign in" — should reach Products</div></li><li class="step-item"><div class="step-text">Try wrong password — an error should appear</div></li></ol></div><div class="panel-section"><div class="psec-title">AI question</div><div class="q-item"><div class="q-text">After a wrong password, what should happen?</div><div class="q-choices"><button class="q-choice picked" onclick="this.classList.toggle('picked')">Error appears next to the form</button><button class="q-choice" onclick="this.classList.toggle('picked')">Page reloads with a banner</button></div></div></div>`},
+  products:{ref:'pg-03 · /products',title:'Products',tags:'<span class="bp-badge J1">Sign in</span><span class="bp-badge J2">Browse</span>',body:`<div class="panel-section"><div class="psec-title">Steps</div><ol class="step-list"><li class="step-item"><div class="step-text">Open the products list</div></li><li class="step-item"><div class="step-text">Use the sort dropdown</div></li><li class="step-item"><div class="step-text">Click the first product card</div></li></ol></div>`},
+  product:{ref:'pg-04 · /products/:id',title:'Product detail',tags:'<span class="bp-badge J2">Browse</span><span class="bp-badge J3">Checkout</span>',body:'<div class="panel-section"><div class="psec-title">Steps</div><ol class="step-list"><li class="step-item"><div class="step-text">View the product page</div></li><li class="step-item"><div class="step-text">Click "Add to cart"</div></li></ol></div>'},
+  cart:{ref:'pg-05 · /cart',title:'Cart',tags:'<span class="bp-badge J3">Checkout</span>',body:'<div class="panel-section"><div class="psec-title">Steps</div><ol class="step-list"><li class="step-item"><div class="step-text">Review cart contents</div></li><li class="step-item"><div class="step-text">Click "Proceed to checkout"</div></li></ol></div>'},
+  checkout:{ref:'pg-06 · /checkout',title:'Checkout',tags:'<span class="bp-badge J3">Checkout</span>',body:'<div class="panel-section"><div class="psec-title">Steps</div><ol class="step-list"><li class="step-item"><div class="step-text">Fill in delivery details</div></li><li class="step-item"><div class="step-text">Click Finish — order should confirm</div></li></ol></div>'},
+  about:{ref:'pg-07 · /about',title:'About',tags:'<span class="bp-badge other">Other page</span>',body:'<div class="panel-section"><div class="psec-title">Checks only</div><div class="check-item pending-item"><div class="check-icon">·</div><div><div class="check-name">Accessibility</div></div></div><div class="check-item pending-item"><div class="check-icon">·</div><div><div class="check-name">Page title and description</div></div></div></div>'},
+  blog:{ref:'12 pages · 1 layout',title:'Blog',tags:'<span class="bp-badge other">12 pages grouped</span>',body:'<div class="panel-section"><div class="psec-title">Checked as one layout</div><p style="font-size:0.83rem;color:var(--ink-soft);line-height:1.6">All 12 blog posts share the same template. One is checked fully; the others are spot-checked for broken links.</p></div>'},
+};
+
+function openPanel(id) {
+  const p=panels[id]; if(!p) return;
+  document.getElementById('panelRef').textContent=p.ref;
+  document.getElementById('panelTitle').textContent=p.title;
+  document.getElementById('panelTags').innerHTML=p.tags;
+  document.getElementById('panelBody').innerHTML=p.body;
+  document.getElementById('sidePanel').classList.add('open');
+  document.querySelectorAll('.bp-card,.bp-group').forEach(c=>c.classList.remove('selected'));
+  const card=document.getElementById('card-'+id);
+  if(card) card.classList.add('selected');
+}
+function closePanel() {
+  document.getElementById('sidePanel').classList.remove('open');
+  document.querySelectorAll('.bp-card,.bp-group').forEach(c=>c.classList.remove('selected'));
+}
+
+function cardCenter(id) {
+  const canvas=document.getElementById('canvas');
+  const card=document.getElementById('card-'+id);
+  if(!card||!canvas) return null;
+  const cr=card.getBoundingClientRect(), ca=canvas.getBoundingClientRect();
+  return {x:cr.left-ca.left+cr.width/2, y:cr.top-ca.top+cr.height/2};
+}
+function drawPath(pid, a, b) {
+  const path=document.getElementById(pid);
+  if(!path) return;
+  const fa=cardCenter(a), fb=cardCenter(b);
+  if(!fa||!fb) return;
+  const dx=(fb.x-fa.x)*0.5;
+  path.setAttribute('d',`M ${fa.x} ${fa.y} C ${fa.x+dx} ${fa.y} ${fb.x-dx} ${fb.y} ${fb.x} ${fb.y}`);
+}
+function drawConnectors() {
+  setTimeout(()=>{
+    drawPath('c-home-login','home','login');
+    drawPath('c-login-products','login','products');
+    drawPath('c-home-products','home','products');
+    drawPath('c-products-product','products','product');
+    drawPath('c-product-cart','product','cart');
+    drawPath('c-cart-checkout','cart','checkout');
+    drawPath('c-home-about','home','about');
+  },50);
+}
+window.addEventListener('load',drawConnectors);
+window.addEventListener('resize',drawConnectors);
+</script>
+</body>
+</html>

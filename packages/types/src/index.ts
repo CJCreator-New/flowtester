@@ -9,7 +9,8 @@ export type CheckerType =
   | 'spec-conformance'
   | 'design-standards'
   | 'ux-quality'
-  | 'permission-matrix';
+  | 'permission-matrix'
+  | 'security';
 
 export type TriageStatus = 'Pending' | 'Confirmed' | 'Intended' | 'False Positive' | 'Resolved';
 
@@ -27,9 +28,31 @@ export interface TestCaseStep {
   selector?: string; // e.g. "[data-testid=new-invoice-btn]"
   value?: string;
   name: string;
+  /**
+   * A step that may not be possible, e.g. a button that only shows on wide screens. If it can't
+   * be done it is recorded as skipped, not as a failure, and the next steps still run.
+   */
+  optional?: boolean;
 }
 
+/**
+ * Where an expectation or rule came from. Only 'observed' and 'user' ones can fail a site; an
+ * 'ai-guess' that doesn't match is reported as "Could not verify" until someone confirms it.
+ * Absent means 'user' (hand-written spec files).
+ */
+export type RuleOrigin = 'observed' | 'ai-guess' | 'user';
+
 export interface TestCaseExpectations {
+  origin?: RuleOrigin;
+  /**
+   * Behaviour check for a guessed validation rule: after the steps, an error message or an
+   * invalid-field marker should appear. The exact wording isn't checked.
+   */
+  validationError?: {
+    field: string;
+    selector?: string;
+    description?: string;
+  };
   url?: {
     pattern: string;
     description?: string;
@@ -59,6 +82,7 @@ export interface ValidationRule {
   max?: number;
   pattern?: string;
   expectedError: string;
+  origin?: RuleOrigin;
 }
 
 export interface TestCase {
@@ -87,6 +111,8 @@ export interface SpecFile {
 export interface ConsoleEntry {
   type: 'error' | 'warning' | 'log' | 'info';
   text: string;
+  /** Where the message came from: the script, or the file that failed to load. */
+  url?: string;
   timestamp: number;
 }
 
@@ -155,6 +181,15 @@ export interface Finding {
   triageStatus?: TriageStatus;
   /** True when this finding originated from a request/resource on a different origin than the page under test (e.g. third-party analytics, fonts, CDNs) rather than a first-party defect. */
   thirdParty?: boolean;
+  /**
+   * An AI guess the site didn't match. Shown as "Could not verify" (never as a defect) until
+   * someone confirms or rejects the rule behind it.
+   */
+  needsConfirmation?: boolean;
+  /** How many times the same problem was seen in this run, when more than once. */
+  occurrences?: number;
+  /** Where else the same problem was seen: pages, widths, roles and test points. */
+  seenAt?: { pages: string[]; breakpoints: Breakpoint[]; roles: string[]; testCaseIds: string[] };
 }
 
 export interface PermissionRule {
@@ -197,6 +232,8 @@ export interface PreFlightResult {
   loginReachable?: boolean;
   roleAuthResults: Record<string, boolean>;
   roleStorageStates?: Record<string, string>;
+  /** The page each role landed on after signing in; exploring as that role starts there. */
+  roleLandingPaths?: Record<string, string>;
   error?: string;
 }
 
@@ -211,6 +248,8 @@ export interface TestPointResult {
   error?: string;
   /** Session recording, kept only for failed test points. */
   videoPath?: string;
+  /** What the site was seen doing, e.g. the error message it showed. Becomes an 'observed' rule. */
+  observations?: string[];
 }
 
 export interface RunCoverage {
@@ -268,6 +307,20 @@ export interface ReleaseReport {
    * submissions, no data changes), so it must not be read as full product coverage.
    */
   scanMode?: 'full' | 'safe-public';
+  /** Plain sentences about what this run could and couldn't cover, e.g. pages behind a sign-in. */
+  notes?: string[];
+  /** Pages a website scan visited, in order, grouped by layout (pages built from one template share a group). */
+  pages?: VisitedPage[];
+  /** The AI models that planned the run (text) and would review screenshots (vision). */
+  aiModels?: { text?: string; vision?: string };
+}
+
+export interface VisitedPage {
+  urlPath: string;
+  title: string;
+  /** Pages built from the same template share a group, e.g. "layout-2" for every product page. */
+  layoutGroup: string;
+  screenshotPath?: string;
 }
 
 // --- Phase 2: AI Discovery & Confirmation Types ---
@@ -302,7 +355,30 @@ export interface AmbiguityQuestion {
   question: string;
   options: string[]; // e.g. ["Allow action for tests", "Skip permanently", "Use safe mock input"]
   selectedAnswer?: string;
-  category: 'sensitive_action' | 'untested_form' | 'missing_permission' | 'unlinked_page';
+  category: 'sensitive_action' | 'untested_form' | 'missing_permission' | 'unlinked_page' | 'unverified_step';
+}
+
+/** One interactive element the crawler saw on a page. Plans may only target elements listed here. */
+export interface ElementInventoryItem {
+  /** ARIA role, explicit or implied by the tag: button, link, textbox, combobox, checkbox, tab, … */
+  role: string;
+  /** What a person or a screen reader would call it: its label, aria-label, visible text or placeholder. */
+  name: string;
+  /** Selector the runner can use: data-testid, then id, then name attribute, then role and name. */
+  selector: string;
+  tagName: string;
+  testId?: string;
+  id?: string;
+  /** The HTML name attribute, for form controls. */
+  nameAttribute?: string;
+  /** For inputs: text, email, number, password, submit, … */
+  inputType?: string;
+  /** For links: the raw href attribute; absent or "#" when a script does the navigation. */
+  href?: string;
+  /** True when the element sits inside a form (a button there may submit it). */
+  insideForm?: boolean;
+  visible: boolean;
+  enabled: boolean;
 }
 
 export interface PageInventoryItem {
@@ -311,6 +387,12 @@ export interface PageInventoryItem {
   interactiveElementsCount: number;
   formsCount: number;
   outOfScope?: boolean;
+  /** The interactive elements found on the page (absent in drafts written before this was recorded). */
+  elements?: ElementInventoryItem[];
+  /** The page has a password field: a sign-in form. */
+  hasSignInForm?: boolean;
+  /** Who reached this page while exploring: 'visitor' (signed out) and/or role names. */
+  reachedBy?: string[];
 }
 
 export interface DiscoveredFlow {
@@ -324,6 +406,11 @@ export interface DiscoveredFlow {
   candidateExpectations?: TestCaseExpectations;
   candidateValidationRules?: ValidationRule[];
   outOfScope?: boolean;
+  /**
+   * Why this flow can't run as planned, e.g. a step aimed at an element the crawler never found.
+   * A flow needing help is not run until someone fixes it in the plan review.
+   */
+  needsHelp?: string[];
 }
 
 export interface DiscoveryDraft {
@@ -338,7 +425,23 @@ export interface DiscoveryDraft {
   rawContextSummary?: string;
   /** True when AI-driven flow synthesis failed and flows were generated by the generic template fallback instead. */
   usedFallbackSynthesis?: boolean;
+  /** Who explored the site, and what couldn't be reached. */
+  exploration?: {
+    /** Roles whose sign-in worked and that explored the site signed in. */
+    signedInAs: string[];
+    /** Roles whose sign-in didn't work. */
+    signInFailed: string[];
+    /** Pages with a sign-in form. */
+    signInPages: string[];
+    /** Pages that asked for a sign-in nobody could get past. */
+    notReached: string[];
+    /** Plain sentences for the report, e.g. "Pages behind the sign-in were not reached." */
+    notes: string[];
+  };
+  /** Site category: 'shop' | 'SaaS' | 'content' | 'booking' | 'app' | 'other' */
+  siteType?: 'shop' | 'SaaS' | 'content' | 'booking' | 'app' | 'other';
 }
+
 
 // --- Phase 3: Hub, Consolidation, Design & UX Types ---
 
@@ -544,4 +647,82 @@ export interface CompetitiveBenchmark {
   createdAt: string;
 }
 
+// --- Phase 1: Plan review types (Tasks 1.2 & 1.3) ---
+
+/**
+ * The four states a run moves through when plan review is enabled.
+ * - scanning        : discovery + page sweep in progress
+ * - awaiting-review : discovery done; plan is on disk; runner is waiting for approval
+ * - testing         : plan approved; FlowTestOrchestrator is running
+ * - done            : run finished (pass or fail)
+ * - failed          : unrecoverable error from any state
+ */
+export type RunnerPhase = 'idle' | 'scanning' | 'awaiting-review' | 'testing' | 'done' | 'failed';
+
+export interface PlanCheck {
+  sentence: string;
+  origin: RuleOrigin;
+}
+
+export interface PlanJourney {
+  id: string;
+  name: string;
+  role: string;
+  reason?: string;
+  startPage: string;
+  steps: string[];
+  checks: PlanCheck[];
+  needsHelp?: string[];
+}
+
+export interface PlanSiteWideCheck {
+  name: string;
+  description: string;
+}
+
+export interface PlanPageItem {
+  urlPath: string;
+  title: string;
+  layoutGroup?: string;
+  screenshotPath?: string;
+}
+
+export interface PlanPageGroup {
+  section: string;
+  layoutGroup: string;
+  pages: PlanPageItem[];
+}
+
+/**
+ * The plan stored on disk after discovery, served at GET /api/runner/plan.
+ * This is what the wizard shows on the map screen before testing starts.
+ */
+export interface ReviewPlan {
+  /** Matches the runId from the POST /api/runner/run response. */
+  runId: string;
+  targetUrl: string;
+  siteType?: string;
+  /** ISO-8601 timestamp when discovery finished. */
+  discoveredAt: string;
+  pages: PageInventoryItem[];
+  flows: DiscoveredFlow[];
+  /**
+   * Questions the AI couldn't answer from the page alone — shown on the plan map
+   * so the user can answer them before testing starts.
+   */
+  questions: AmbiguityQuestion[];
+  /**
+   * Test cases the planner derived from the flows; can be edited via PATCH before approving.
+   * Absent until the user has approved once (then kept for re-runs).
+   */
+  testCases?: TestCase[];
+  /** True if the generic template fallback was used because AI discovery failed. */
+  usedFallbackDiscovery?: boolean;
+  /** Journeys translated to plain sentences with origins. */
+  journeys?: PlanJourney[];
+  /** Fixed site-wide checks that apply across all pages. */
+  siteWideChecks?: PlanSiteWideCheck[];
+  /** Scanned pages grouped by section and layout. */
+  pageGroups?: PlanPageGroup[];
+}
 

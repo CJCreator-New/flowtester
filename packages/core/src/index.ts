@@ -14,6 +14,7 @@ export * from './discovery/deterministic-spider.js';
 export * from './discovery/context-parser.js';
 export * from './discovery/discovery-agent.js';
 export * from './discovery/test-planner.js';
+export * from './discovery/site-type.js';
 export * from './outbox-queue.js';
 export * from './hub-client.js';
 export * from './hub-push.js';
@@ -29,3 +30,9 @@ export * from './competitive/benchmarking-engine.js';
 export * from './competitive/ux-gap-synthesizer.js';
 
 
+export * from './discovery/element-inventory.js';
+export * from './discovery/plan-validator.js';
+export * from './discovery/page-sweep.js';
+export * from './redact.js';
+export * from './credentials.js';
+export * from './finding-groups.js';

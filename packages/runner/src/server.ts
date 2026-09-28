@@ -1,11 +1,24 @@
 import http from 'http';
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { ProductProfile, ReleaseReport, RoleCredential, TestCase, AIProviderType } from '@qa/types';
+import type {
+  ProductProfile,
+  ReleaseReport,
+  RoleCredential,
+  TestCase,
+  AIProviderType,
+  RunnerPhase,
+  ReviewPlan,
+  Breakpoint,
+  AmbiguityQuestion,
+  DiscoveredFlow,
+  DiscoveryDraft,
+} from '@qa/types';
 import {
   FlowTestOrchestrator,
   DiscoveryAgent,
   TestPlanner,
+  buildPageSweep,
   createAIProvider,
   pushRunToHub,
   runSafeWebsiteScan,
@@ -13,7 +26,10 @@ import {
   OpenRouterClient,
   OpenRouterAuthError,
   pickRecommendedModel,
+  pickVisionModel,
+  keepOrPickModels,
   PreFlightChecker,
+  PlanValidator,
   type AIProvider,
   type OrchestratorEvent,
 } from '@qa/core';
@@ -77,6 +93,49 @@ export interface TriggerRunBody {
    * test execution: no sign-in, no form submissions, no mutating requests.
    */
   mode?: 'product' | 'safe-public';
+  /**
+   * When true (default when omitted), skips pausing for plan review and tests immediately.
+   * When false, pauses in 'awaiting-review' after discovery and writes the plan to disk.
+   */
+  skipReview?: boolean;
+}
+
+interface StoredPlanRecord {
+  plan: ReviewPlan;
+  context: {
+    targetUrl: string;
+    productId: string;
+    runId: string;
+    profile?: ProductProfile;
+    reportNotes?: string[];
+    aiModels?: { text?: string; vision?: string };
+    breakpoints?: Breakpoint[];
+    headless?: boolean;
+    hubUrl?: string;
+    hubToken?: string;
+    releaseTarget?: string;
+    draft: DiscoveryDraft;
+  };
+}
+
+function applySafeAnswers(questions: AmbiguityQuestion[]): void {
+  for (const q of questions) {
+    if (!q.selectedAnswer) {
+      const skipOpt = q.options.find((opt) => /skip/i.test(opt));
+      if (skipOpt) {
+        q.selectedAnswer = skipOpt;
+        continue;
+      }
+      const safeOpt = q.options.find((opt) => /mock|safe|generic/i.test(opt));
+      if (safeOpt) {
+        q.selectedAnswer = safeOpt;
+        continue;
+      }
+      if (q.options.length > 0) {
+        q.selectedAnswer = q.options[0];
+      }
+    }
+  }
 }
 
 /**
@@ -91,6 +150,8 @@ export class RunnerServer {
   private port: number;
   private host: string;
   private outputDir: string;
+  private dataDir: string;
+  private planFile: string;
   private streamClients = new Set<http.ServerResponse>();
 
   private localhostAlias?: string;
@@ -99,19 +160,27 @@ export class RunnerServer {
   private makeAIProvider: (provider: AIProviderType, apiKey: string, model?: string) => AIProvider;
 
   private isRunning = false;
+  private phase: RunnerPhase = 'idle';
   private lastReport: ReleaseReport | null = null;
   private lastRunError: string | null = null;
+  private currentPlanRecord: StoredPlanRecord | null = null;
+  /** The chosen free models (not secret), kept beside the key so every browser gets the same setup. */
+  private aiModelsFile: string;
 
   constructor(options: RunnerServerOptions = {}) {
     this.port = options.port || 3001;
     this.host = options.host || 'localhost';
     this.outputDir = path.resolve(options.outputDir || path.join(process.cwd(), '.qa-runner-report'));
     this.localhostAlias = options.localhostAlias;
-    this.keyResolver = options.keyResolver || new KeyResolver(path.resolve(options.dataDir || process.cwd()));
+    this.dataDir = path.resolve(options.dataDir || process.cwd());
+    this.planFile = path.join(this.dataDir, '.qa-plan.json');
+    this.aiModelsFile = path.join(this.dataDir, '.qa-ai-models.json');
+    this.keyResolver = options.keyResolver || new KeyResolver(this.dataDir);
     this.openRouter = options.openRouter || new OpenRouterClient();
     this.makeAIProvider =
       options.createAIProvider || ((provider, apiKey, model) => createAIProvider(provider, apiKey, undefined, model));
   }
+
 
   public broadcastRunnerEvent(event: OrchestratorEvent | Record<string, unknown>): void {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
@@ -131,6 +200,7 @@ export class RunnerServer {
   }
 
   public async start(): Promise<string> {
+    await this.ensurePlanLoaded();
     return new Promise((resolve, reject) => {
       this.server = http.createServer(async (req, res) => {
         try {
@@ -142,7 +212,7 @@ export class RunnerServer {
           if (origin && isLoopbackOrigin(origin)) {
             res.setHeader('Access-Control-Allow-Origin', origin);
             res.setHeader('Vary', 'Origin');
-            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
             res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
           } else if (origin && req.method !== 'GET') {
             res.writeHead(403, { 'Content-Type': 'application/json' });
@@ -191,14 +261,35 @@ export class RunnerServer {
 
           // GET /api/runner/status
           if (pathname === '/api/runner/status' && req.method === 'GET') {
+            await this.ensurePlanLoaded();
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(
               JSON.stringify({
                 isRunning: this.isRunning,
                 hasReport: !!this.lastReport,
                 lastRunError: this.lastRunError,
+                phase: this.phase,
+                hasPlan: !!this.currentPlanRecord,
               })
             );
+            return;
+          }
+
+          // GET /api/runner/plan
+          if (pathname === '/api/runner/plan' && req.method === 'GET') {
+            await this.handleGetPlan(req, res);
+            return;
+          }
+
+          // PATCH /api/runner/plan
+          if (pathname === '/api/runner/plan' && req.method === 'PATCH') {
+            await this.handlePatchPlan(req, res);
+            return;
+          }
+
+          // POST /api/runner/plan/approve
+          if (pathname === '/api/runner/plan/approve' && req.method === 'POST') {
+            await this.handleApprovePlan(req, res);
             return;
           }
 
@@ -214,6 +305,7 @@ export class RunnerServer {
             return;
           }
 
+
           if (pathname.startsWith('/api/ai/openrouter/')) {
             await this.handleOpenRouter(pathname.replace('/api/ai/openrouter/', ''), req, res);
             return;
@@ -224,7 +316,9 @@ export class RunnerServer {
           if (pathname.startsWith('/api/evidence/') && req.method === 'GET') {
             const relPath = decodeURIComponent(pathname.replace('/api/evidence/', ''));
             const targetFile = path.resolve(this.outputDir, relPath);
-            if (!isInside(this.outputDir, targetFile)) {
+            // Saved sign-in sessions (auth/<role>.json) hold live session cookies: never served.
+            const isSavedSession = path.relative(this.outputDir, targetFile).split(path.sep)[0] === 'auth';
+            if (!isInside(this.outputDir, targetFile) || isSavedSession) {
               res.writeHead(403, { 'Content-Type': 'text/plain' });
               res.end('Forbidden');
               return;
@@ -360,6 +454,22 @@ export class RunnerServer {
     return resolved?.provider === 'openrouter' ? resolved.apiKey : undefined;
   }
 
+  private async readAiModels(): Promise<{ text?: string | null; vision?: string | null }> {
+    try {
+      return JSON.parse(await fs.readFile(this.aiModelsFile, 'utf8'));
+    } catch {
+      return {};
+    }
+  }
+
+  /** Keeps the chosen free models while they are still free, replacing any that has gone. */
+  private async refreshAiModels(apiKey: string): Promise<{ text: string | null; vision: string | null }> {
+    const models = keepOrPickModels(await this.openRouter.listFreeModels(apiKey), await this.readAiModels());
+    await fs.mkdir(path.dirname(this.aiModelsFile), { recursive: true });
+    await fs.writeFile(this.aiModelsFile, JSON.stringify({ ...models, chosenAt: new Date().toISOString() }, null, 2), 'utf8');
+    return models;
+  }
+
   private async handleOpenRouter(route: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     // POST validate: check a key without keeping it anywhere.
     if (route === 'validate' && req.method === 'POST') {
@@ -373,9 +483,12 @@ export class RunnerServer {
       return;
     }
 
-    // GET key: whether a key is saved on this machine (the key itself is never sent back).
+    // GET key: whether a key is saved on this machine (the key itself is never sent back), and the
+    // free models chosen for it, so any browser can skip the setup screen.
     if (route === 'key' && req.method === 'GET') {
-      this.sendJson(res, 200, { configured: !!(await this.storedOpenRouterKey()) });
+      const configured = !!(await this.storedOpenRouterKey());
+      const models = configured ? await this.readAiModels() : {};
+      this.sendJson(res, 200, { configured, model: models.text ?? null, visionModel: models.vision ?? null });
       return;
     }
 
@@ -393,7 +506,9 @@ export class RunnerServer {
         return;
       }
       await this.keyResolver.saveByokKey('openrouter', apiKey!.trim());
-      this.sendJson(res, 200, { saved: true });
+      // Choose the free models now; a null model means none is free right now.
+      const models = await this.refreshAiModels(apiKey!.trim()).catch(() => ({ text: null, vision: null }));
+      this.sendJson(res, 200, { saved: true, model: models.text, visionModel: models.vision });
       return;
     }
 
@@ -403,7 +518,11 @@ export class RunnerServer {
       const apiKey = header?.startsWith('Bearer ') ? header.slice(7) : await this.storedOpenRouterKey();
       try {
         const models = await this.openRouter.listFreeModels(apiKey);
-        this.sendJson(res, 200, { models, recommendedModel: pickRecommendedModel(models) });
+        this.sendJson(res, 200, {
+          models,
+          recommendedModel: pickRecommendedModel(models),
+          recommendedVisionModel: pickVisionModel(models),
+        });
       } catch (err) {
         if (err instanceof OpenRouterAuthError) {
           this.sendJson(res, 401, { error: err.message });
@@ -418,7 +537,7 @@ export class RunnerServer {
   }
 
   private async handleTriggerRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (this.isRunning) {
+    if (this.phase === 'scanning' || this.phase === 'testing') {
       res.writeHead(409, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'A run is already in progress' }));
       return;
@@ -439,6 +558,8 @@ export class RunnerServer {
       return;
     }
 
+    await this.clearPlan();
+
     const productId = body.productId || 'default-product';
     // Generated here (not by the orchestrator) so the id we hand back in the 202 response
     // is the SAME id the orchestrator will use for RUN_STARTED/RUN_COMPLETED — otherwise a
@@ -446,6 +567,7 @@ export class RunnerServer {
     const runId = `run-${Date.now()}`;
 
     this.isRunning = true;
+    this.phase = 'scanning';
     this.lastRunError = null;
 
     res.writeHead(202, { 'Content-Type': 'application/json' });
@@ -456,6 +578,7 @@ export class RunnerServer {
     this.executeRun(body, productId, runId).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastRunError = msg;
+      this.phase = 'failed';
       this.isRunning = false;
       this.broadcastRunnerEvent({ type: 'RUN_FAILED', runId, error: msg, timestamp: Date.now() });
     });
@@ -467,6 +590,7 @@ export class RunnerServer {
     if (body.mode === 'safe-public') {
       // Read-only path: never touches DiscoveryAgent or FlowTestOrchestrator.
       try {
+        this.phase = 'scanning';
         this.lastReport = await runSafeWebsiteScan({
           targetUrl,
           productId: body.productId,
@@ -475,6 +599,10 @@ export class RunnerServer {
           headless: body.headless ?? true,
           onEvent: (event) => this.forwardRunEvent(event),
         });
+        this.phase = 'done';
+      } catch (err) {
+        this.phase = 'failed';
+        throw err;
       } finally {
         this.isRunning = false;
       }
@@ -487,6 +615,9 @@ export class RunnerServer {
           ? { name: productId, productId, roles: body.roles }
           : undefined;
       let specTestCases: TestCase[];
+      let reportNotes: string[] | undefined;
+      let aiModels: { text?: string; vision?: string } | undefined;
+      const breakpoints: Breakpoint[] = (body.breakpoints as Breakpoint[]) || ['375px', '768px', '1440px'];
 
       if (body.specTestCases && body.specTestCases.length > 0) {
         // Caller supplied an explicit spec — takes priority over AI discovery.
@@ -498,7 +629,18 @@ export class RunnerServer {
           apiKey = await this.storedOpenRouterKey();
           if (!apiKey) throw new Error('No OpenRouter key is saved. Add one before starting an AI run.');
         }
-        const aiProvider = this.makeAIProvider(providerType, apiKey || 'mock-key', body.aiModel);
+        // One fixed free model per role (text, vision) chosen by the runner, so every run of a
+        // site is planned by the same model and the report can say which.
+        let model = body.aiModel;
+        let visionModel: string | null | undefined;
+        if (providerType === 'openrouter') {
+          const chosen = await this.refreshAiModels(apiKey!).catch(async () => this.readAiModels());
+          model ??= chosen.text ?? undefined;
+          visionModel = chosen.vision;
+          if (!model) throw new Error('No free AI models are available right now — please try again later.');
+        }
+        aiModels = model ? { text: model, vision: visionModel ?? undefined } : undefined;
+        const aiProvider = this.makeAIProvider(providerType, apiKey || 'mock-key', model);
 
         let contextFilePath: string | undefined;
         if (body.productContext?.trim()) {
@@ -507,6 +649,7 @@ export class RunnerServer {
           await fs.writeFile(contextFilePath, body.productContext, 'utf8');
         }
 
+        this.phase = 'scanning';
         this.broadcastRunnerEvent({ type: 'DISCOVERY_STARTED', runId, timestamp: Date.now() });
         const agent = new DiscoveryAgent();
         const draft = await agent.discover({
@@ -518,57 +661,294 @@ export class RunnerServer {
           aiProvider,
         });
         this.broadcastRunnerEvent({ type: 'DISCOVERY_COMPLETED', runId, flowsFound: draft.flows.length, timestamp: Date.now() });
+        reportNotes = draft.exploration?.notes;
+
+        if (body.skipReview === false) {
+          // Pause for review: formulate plan, write to disk, broadcast PLAN_READY, and wait.
+          const planner = new TestPlanner();
+          const plannedCases = [...planner.plan(draft).testCases, ...buildPageSweep(draft)];
+          const plan: ReviewPlan = {
+            runId,
+            targetUrl: body.targetUrl,
+            discoveredAt: new Date().toISOString(),
+            siteType: draft.siteType,
+            pages: draft.pages,
+            flows: draft.flows,
+            questions: draft.ambiguityQuestions,
+            testCases: plannedCases.length ? plannedCases : [this.defaultTestCase()],
+            usedFallbackDiscovery: draft.usedFallbackSynthesis,
+          };
+          const record: StoredPlanRecord = {
+            plan,
+            context: {
+              targetUrl,
+              productId,
+              runId,
+              profile,
+              reportNotes,
+              aiModels,
+              breakpoints,
+              headless: body.headless ?? true,
+              hubUrl: body.hubUrl,
+              hubToken: body.hubToken,
+              releaseTarget: body.releaseTarget,
+              draft,
+            },
+          };
+          await this.savePlan(record);
+          this.phase = 'awaiting-review';
+          this.broadcastRunnerEvent({
+            type: 'PLAN_READY',
+            runId,
+            pageCount: draft.pages.length,
+            flowCount: draft.flows.length,
+            questionCount: draft.ambiguityQuestions.length,
+            timestamp: Date.now(),
+          });
+          return;
+        }
+
+        // skipReview is true or omitted: unanswered questions get their safe answer.
+        applySafeAnswers(draft.ambiguityQuestions);
         const planner = new TestPlanner();
-        specTestCases = planner.plan(draft).testCases;
+        specTestCases = [...planner.plan(draft).testCases, ...buildPageSweep(draft)];
         if (specTestCases.length === 0) {
-          // Nothing discovered/plannable — fall back to a trivial sanity check rather
-          // than running zero test cases (which would look like a silent success).
           specTestCases = [this.defaultTestCase()];
         }
       } else {
         specTestCases = [this.defaultTestCase()];
       }
 
-      const breakpoints = (body.breakpoints as any) || ['1440px'];
-      const orchestrator = new FlowTestOrchestrator();
-      const report = await orchestrator.run({
-        targetUrl,
-        productId,
-        specTestCases,
-        profile,
-        headless: body.headless ?? true,
-        outputDir: this.outputDir,
-        breakpoints,
-        repoRoot: process.cwd(),
-        runId,
-        onEvent: (event) => this.forwardRunEvent(event),
-      });
-
-      this.lastReport = report;
-      this.isRunning = false;
-
-      if (body.hubUrl) {
-        try {
-          const pushResult = await pushRunToHub(report, {
+      await this.executeTesting(
+        {
+          plan: {
+            runId,
+            targetUrl: body.targetUrl,
+            discoveredAt: new Date().toISOString(),
+            pages: [],
+            flows: [],
+            questions: [],
+          },
+          context: {
+            targetUrl,
+            productId,
+            runId,
+            profile,
+            reportNotes,
+            aiModels,
+            breakpoints,
+            headless: body.headless ?? true,
             hubUrl: body.hubUrl,
             hubToken: body.hubToken,
-            outputDir: this.outputDir,
-            releaseTarget: body.releaseTarget || 'latest',
-          });
-          this.broadcastRunnerEvent({ type: 'HUB_PUSH_RESULT', ...pushResult, timestamp: Date.now() });
-        } catch (hubErr) {
-          this.broadcastRunnerEvent({
-            type: 'HUB_PUSH_RESULT',
-            synced: false,
-            error: hubErr instanceof Error ? hubErr.message : String(hubErr),
-            timestamp: Date.now(),
-          });
-        }
-      }
+            releaseTarget: body.releaseTarget,
+            draft: {} as any,
+          },
+        },
+        specTestCases
+      );
     } catch (err) {
+      this.phase = 'failed';
       this.isRunning = false;
       throw err;
     }
+  }
+
+  private async executeTesting(record: StoredPlanRecord, specTestCases: TestCase[]): Promise<void> {
+    const { context } = record;
+    this.phase = 'testing';
+    this.isRunning = true;
+    this.broadcastRunnerEvent({
+      type: 'TESTING_STARTED',
+      runId: context.runId,
+      testCaseCount: specTestCases.length,
+      timestamp: Date.now(),
+    });
+
+    const orchestrator = new FlowTestOrchestrator();
+    const report = await orchestrator.run({
+      targetUrl: context.targetUrl,
+      productId: context.productId,
+      specTestCases,
+      profile: context.profile,
+      headless: context.headless ?? true,
+      outputDir: this.outputDir,
+      breakpoints: context.breakpoints || ['375px', '768px', '1440px'],
+      repoRoot: process.cwd(),
+      runId: context.runId,
+      reportNotes: context.reportNotes,
+      aiModels: context.aiModels,
+      onEvent: (event) => this.forwardRunEvent(event),
+    });
+
+    this.lastReport = report;
+    this.phase = 'done';
+    this.isRunning = false;
+
+    if (context.hubUrl) {
+      try {
+        const pushResult = await pushRunToHub(report, {
+          hubUrl: context.hubUrl,
+          hubToken: context.hubToken,
+          outputDir: this.outputDir,
+          releaseTarget: context.releaseTarget || 'latest',
+        });
+        this.broadcastRunnerEvent({ type: 'HUB_PUSH_RESULT', ...pushResult, timestamp: Date.now() });
+      } catch (hubErr) {
+        this.broadcastRunnerEvent({
+          type: 'HUB_PUSH_RESULT',
+          synced: false,
+          error: hubErr instanceof Error ? hubErr.message : String(hubErr),
+          timestamp: Date.now(),
+        });
+      }
+    }
+  }
+
+  private async ensurePlanLoaded(): Promise<StoredPlanRecord | null> {
+    if (this.currentPlanRecord) return this.currentPlanRecord;
+    try {
+      const raw = await fs.readFile(this.planFile, 'utf8');
+      const record = JSON.parse(raw) as StoredPlanRecord;
+      if (record?.plan && record?.context) {
+        this.currentPlanRecord = record;
+        if (this.phase === 'idle') {
+          this.phase = 'awaiting-review';
+          this.isRunning = true;
+        }
+        return this.currentPlanRecord;
+      }
+    } catch {
+      // file missing or invalid
+    }
+    return null;
+  }
+
+  private async savePlan(record: StoredPlanRecord): Promise<void> {
+    this.currentPlanRecord = record;
+    await fs.mkdir(this.dataDir, { recursive: true });
+    await fs.writeFile(this.planFile, JSON.stringify(record, null, 2), 'utf8');
+  }
+
+  private async clearPlan(): Promise<void> {
+    this.currentPlanRecord = null;
+    await fs.rm(this.planFile, { force: true }).catch(() => {});
+  }
+
+  private async handleGetPlan(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const record = await this.ensurePlanLoaded();
+    if (!record || (this.phase !== 'awaiting-review' && this.phase !== 'scanning')) {
+      this.sendJson(res, 404, { error: 'No plan awaiting review' });
+      return;
+    }
+    this.sendJson(res, 200, record.plan);
+  }
+
+  private async handlePatchPlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const record = await this.ensurePlanLoaded();
+    if (!record || this.phase !== 'awaiting-review') {
+      this.sendJson(res, 404, { error: 'No plan awaiting review' });
+      return;
+    }
+
+    interface PatchPlanBody {
+      flows?: DiscoveredFlow[];
+      questions?: Array<{ id: string; selectedAnswer: string }>;
+      answers?: Record<string, string>;
+      testCases?: TestCase[];
+    }
+
+    let body: PatchPlanBody;
+    try {
+      body = await this.readJsonBody<PatchPlanBody>(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+
+    if (body.questions && Array.isArray(body.questions)) {
+      for (const patchQ of body.questions) {
+        const target = record.plan.questions.find((q) => q.id === patchQ.id);
+        if (target) target.selectedAnswer = patchQ.selectedAnswer;
+        const draftTarget = record.context.draft?.ambiguityQuestions?.find((q) => q.id === patchQ.id);
+        if (draftTarget) draftTarget.selectedAnswer = patchQ.selectedAnswer;
+      }
+    }
+
+    if (body.answers && typeof body.answers === 'object') {
+      for (const [id, answer] of Object.entries(body.answers)) {
+        const target = record.plan.questions.find((q) => q.id === id);
+        if (target) target.selectedAnswer = answer;
+        const draftTarget = record.context.draft?.ambiguityQuestions?.find((q) => q.id === id);
+        if (draftTarget) draftTarget.selectedAnswer = answer;
+      }
+    }
+
+    if (body.flows && Array.isArray(body.flows)) {
+      const validator = new PlanValidator(record.plan.pages);
+      validator.markFlowsNeedingHelp(body.flows);
+      record.plan.flows = body.flows;
+      if (record.context.draft) record.context.draft.flows = body.flows;
+    }
+
+    if (body.testCases && Array.isArray(body.testCases)) {
+      record.plan.testCases = body.testCases;
+    } else if (record.context.draft) {
+      const planner = new TestPlanner();
+      const planned = planner.plan(record.context.draft);
+      record.plan.testCases = [...planned.testCases, ...buildPageSweep(record.context.draft)];
+    }
+
+    await this.savePlan(record);
+    this.sendJson(res, 200, record.plan);
+  }
+
+  private async handleApprovePlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const record = await this.ensurePlanLoaded();
+    if (!record || this.phase !== 'awaiting-review') {
+      this.sendJson(res, 404, { error: 'No plan awaiting review' });
+      return;
+    }
+
+    try {
+      const body: { breakpoints?: string[] } = await this.readJsonBody<{ breakpoints?: string[] }>(req).catch(
+        () => ({})
+      );
+      if (body?.breakpoints) {
+        record.context.breakpoints = body.breakpoints as Breakpoint[];
+      }
+    } catch {
+      // ignore
+    }
+
+
+    applySafeAnswers(record.plan.questions);
+    if (record.context.draft?.ambiguityQuestions) {
+      applySafeAnswers(record.context.draft.ambiguityQuestions);
+    }
+
+    let specTestCases: TestCase[];
+    if (record.plan.testCases && record.plan.testCases.length > 0) {
+      specTestCases = record.plan.testCases;
+    } else if (record.context.draft) {
+      const planner = new TestPlanner();
+      specTestCases = [...planner.plan(record.context.draft).testCases, ...buildPageSweep(record.context.draft)];
+      if (specTestCases.length === 0) {
+        specTestCases = [this.defaultTestCase()];
+      }
+      record.plan.testCases = specTestCases;
+    } else {
+      specTestCases = [this.defaultTestCase()];
+    }
+
+    this.sendJson(res, 200, { status: 'approved', runId: record.plan.runId });
+
+    this.executeTesting(record, specTestCases).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.lastRunError = msg;
+      this.phase = 'failed';
+      this.isRunning = false;
+      this.broadcastRunnerEvent({ type: 'RUN_FAILED', runId: record.plan.runId, error: msg, timestamp: Date.now() });
+    });
   }
 
   private defaultTestCase(): TestCase {
@@ -583,3 +963,4 @@ export class RunnerServer {
     };
   }
 }
+

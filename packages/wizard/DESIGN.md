@@ -4,6 +4,27 @@ The wizard is for people who don't test software for a living: product managers,
 marketers. `packages/web` (QA Flow Studio) is a dark, dense dashboard for engineers; this is its
 opposite on purpose, so nobody mistakes one for the other.
 
+## Phase 1 direction: Blueprint (Direction B)
+
+Chosen 2026-09-28 from three interactive prototypes (`packages/wizard/prototypes/`).
+
+**Aesthetic:** Industrial / Utilitarian, dark. Deep navy canvas with white page cards — the map
+looks like a technical drawing of the site's structure. Journey paths are coloured lines (violet,
+blue, green) like an architect's mark-up. Monospaced reference labels (pg-01, pg-02…) keep the
+reading systematic. Findings appear as red/amber left-border annotations on the cards.
+
+**Why it was chosen over A (Cartographer) and C (Signal Board):**
+- Direction A (light, paper-and-ink, same palette as the current wizard) was calm but felt like
+  an extension of the setup form rather than a new kind of screen.
+- Direction C (coloured status tiles, light background) was status-forward but the saturated tiles
+  competed too hard for attention before any testing had run.
+- Direction B reads as "tool" not "form". The dark canvas makes the map the clear hero, path lines
+  are easy to follow at a glance, and the annotation style matches how findings are already
+  described in plain language.
+
+**What stays the same:** Atkinson Hyperlegible Next for body text. The same pass/warn/fail colour
+meanings. The stamp animation on the report. Writing rules (plain verbs, no jargon).
+
 ## Concept: a check-up slip
 
 The journey is a real sequence, so it's shown as one: a slip on the left lists the steps and fills
