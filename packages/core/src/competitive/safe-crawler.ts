@@ -92,7 +92,7 @@ function pathShape(pathname: string): string {
  * A fingerprint of the page's structure, ignoring text and class names, with repeated siblings
  * collapsed, so pages built from one template (every product page) share it.
  */
-async function readLayoutFingerprint(page: Page): Promise<string> {
+export async function readLayoutFingerprint(page: Page): Promise<string> {
   const outline = await page
     .evaluate(() => {
       const IGNORED = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'LINK', 'META']);

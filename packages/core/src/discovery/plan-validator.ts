@@ -154,12 +154,16 @@ export class PlanValidator {
     return flows.flatMap((flow) => this.checkFlow(flow));
   }
 
-  /** Marks every flow with an issue as needing help, so it isn't run until someone fixes it. */
+  /**
+   * Marks every flow with an issue as needing help, so it isn't run until someone fixes it, and
+   * clears the mark from a flow that has been fixed.
+   */
   markFlowsNeedingHelp(flows: DiscoveredFlow[]): PlanIssue[] {
     const issues = this.check(flows);
     for (const flow of flows) {
       const own = issues.filter((i) => i.flowId === flow.id).map((i) => i.message);
       if (own.length > 0) flow.needsHelp = own;
+      else delete flow.needsHelp;
     }
     return issues;
   }

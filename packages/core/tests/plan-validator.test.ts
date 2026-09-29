@@ -101,6 +101,26 @@ describe('PlanValidator', () => {
     expect(issues[0].message).toContain('not a field');
   });
 
+  it('clears the "needs your help" mark once a flow has been fixed', () => {
+    const fixed: DiscoveredFlow = {
+      ...flow([{ action: 'click', selector: '[data-testid="save-btn"]', name: 'Save' }]),
+      needsHelp: ['Step "Save" targets [data-testid="gone-btn"], but no such element exists on /invoices/new.'],
+    };
+    const broken = flow([{ action: 'click', selector: '[data-testid="gone-btn"]', name: 'Save' }]);
+    broken.id = 'FLOW-BROKEN';
+
+    validator.markFlowsNeedingHelp([fixed, broken]);
+    expect(fixed.needsHelp).toBeUndefined();
+    expect(broken.needsHelp?.[0]).toContain('gone-btn');
+  });
+
+  it('accepts the form selectors the crawler recorded, which the element list may not name', () => {
+    const submit = flow([{ action: 'click', selector: 'button[type="submit"]', name: 'Submit' }]);
+    expect(validator.checkFlow(submit)).toHaveLength(1);
+    const withForms = new PlanValidator(pages, [{ urlPath: '/invoices/new', inputs: [], submitButtonSelector: 'button[type="submit"]' }]);
+    expect(withForms.checkFlow(submit)).toEqual([]);
+  });
+
   it('checks nothing for drafts recorded before elements were kept', () => {
     const legacy = new PlanValidator([{ urlPath: '/', title: '', interactiveElementsCount: 3, formsCount: 0 }]);
     expect(legacy.canCheck).toBe(false);
@@ -174,6 +194,8 @@ describe('Discovery grounds the AI plan in the real page', () => {
     expect(ai.prompts[1]).toContain('dashboard-element-1');
     expect(draft.flows[0].steps[0].selector).toBe('[data-testid="trigger-error-btn"]');
     expect(draft.flows[0].needsHelp).toBeUndefined();
+    // Kept with the draft, so edits made in the plan review are checked against them too.
+    expect(draft.forms?.find((f) => f.urlPath === '/invoices/new')?.inputs.length).toBeGreaterThan(0);
   }, 60000);
 
   it('never runs a step that is still invented after the repair, and asks about it instead', async () => {

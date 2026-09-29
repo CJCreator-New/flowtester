@@ -8,9 +8,10 @@ const MAX_CONTROLS_PER_PAGE = 6;
 const SWEEP_ROLES = new Set(['button', 'tab', 'switch', 'checkbox']);
 
 /**
- * After the journeys, every page that was found gets its own visit: open it, try each safe button
- * or tab on it (never a form submit, a delete, a payment or a sign-out), and let every check run.
- * This finds problems no planned journey passes through, such as a button that breaks the page.
+ * After the journeys, every page that was found gets a visit from everyone who reached it (signed
+ * out, and each role): open it, try each safe button or tab on it (never a form submit, a delete, a
+ * payment or a sign-out), and let every check run. This finds problems no planned journey passes
+ * through, such as a button that breaks the page, or one that only breaks for one role.
  */
 export function buildPageSweep(
   draft: DiscoveryDraft,
@@ -18,8 +19,9 @@ export function buildPageSweep(
 ): TestCase[] {
   const safety = new SafetyFilter(options.forbiddenActions || []);
   const pages = draft.pages.filter((p) => !p.outOfScope).slice(0, options.maxPages ?? DEFAULT_SWEEP_PAGES);
+  const testCases: TestCase[] = [];
 
-  return pages.map((page, index) => {
+  for (const page of pages) {
     const tried = new Set<string>();
     const controls = (page.elements || []).filter((el) => {
       const key = el.name.toLowerCase();
@@ -35,20 +37,20 @@ export function buildPageSweep(
       steps.push({ action: 'click', selector: el.selector, name: `Try “${el.name}”`, optional: true });
     }
 
-    // Visit as someone who could reach the page: signed out when possible.
-    const reachedBy = page.reachedBy || ['visitor'];
-    const role = reachedBy.includes('visitor') ? 'visitor' : reachedBy[0];
-
-    return {
-      id: `SWEEP-${String(index + 1).padStart(3, '0')}`,
-      flowId: 'page-sweep',
-      name: `Visit ${page.urlPath}`,
-      role,
-      startPage: page.urlPath,
-      steps,
-      expectations: {},
-    };
-  });
+    const reachedBy = page.reachedBy?.length ? page.reachedBy : ['visitor'];
+    for (const role of reachedBy) {
+      testCases.push({
+        id: `SWEEP-${String(testCases.length + 1).padStart(3, '0')}`,
+        flowId: 'page-sweep',
+        name: role === 'visitor' ? `Visit ${page.urlPath}` : `Visit ${page.urlPath} as ${role}`,
+        role,
+        startPage: page.urlPath,
+        steps: steps.map((s) => ({ ...s })),
+        expectations: {},
+      });
+    }
+  }
+  return testCases;
 }
 
 function isSafeToTry(el: ElementInventoryItem, safety: SafetyFilter): boolean {

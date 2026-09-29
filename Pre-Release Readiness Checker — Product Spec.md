@@ -4,7 +4,7 @@ Sep 26, 2026 · @MG Health Tech Design
 
 ## Overview
 
-We will build an internal tool that takes a URL (a local build, directly or through a tunnel) and returns a release readiness report before anything ships. An AI agent automatically discovers flows and extracts all requirements from the URL and product context, generates test cases and expected outcomes, and runs deterministic tests against those AI-generated requirements. One generic engine serves all three of our products in parallel, and QA owns and operates it. The tool is always built with Claude; running it with AI is required, not optional.
+We will build an internal tool that takes a URL (a local build, directly or through a tunnel) and returns a release readiness report before anything ships. The tool provides a URL-first entry point: a user enters a URL to immediately initiate exploration and testing. Running with an AI key is optional: without an AI key, deterministic rules, spidering heuristics, and standard test templates automatically plan journeys and run all checkers; when an AI key is configured (via OpenRouter or standard providers), intelligent flow discovery, ambiguity resolution, and visual/copy reviews are enhanced. One generic engine serves all products in parallel, and QA owns and operates it.
 
 Today, pre-release review depends on manual QA passes and ad-hoc design reviews. That process misses logic bugs in less-travelled flows, lets UI drift from the design system go unnoticed, and rarely checks every requirement in the spec. The tool makes one thorough, repeatable review part of every release.
 
@@ -47,27 +47,26 @@ A secondary use case is competitive and reference analysis: running the tool in 
 
 ## Inputs and run workflow
 
-QA adds a URL and optional product context, and the AI agent discovers and documents everything: flows, requirements, test cases and expected outcomes. QA reviews and confirms the AI's discovery before testing starts.
+The primary entry point is URL-first: entering a URL (and owner confirmation for active mutation) immediately initiates discovery. The tool discovers and documents flows, forms, and pages. QA reviews the architectural site map and plan before testing starts, or clicks "Skip review, just test it" for rapid automated evaluation.
 
 **Inputs per run**
 
 | Input | Required | Purpose |
 | --- | --- | --- |
-| Tunnel or staging URL | Yes | The build under test, usually a local build exposed through a tunnel |
-| Product context (optional) | Recommended | PRD, user stories, design goals or business rules to guide AI discovery |
-| Test accounts for every role | Yes, provided by QA | Test every flow and element as each role |
-| Figma token export and frames | Recommended | Design tokens and reference screens for design checks |
-| Forbidden actions | Optional | Actions the AI agent must never take, beyond the defaults |
+| Target URL | Yes | The URL or local build under test |
+| Owner verification | Yes (for active data changes) | Confirms authorization; public/unowned sites run safely in read-only mode |
+| Product context (optional) | Optional | PRD, user stories, or business rules to guide discovery |
+| Test accounts for roles | Optional | Test flows and permissions behind authentication |
+| Figma token export | Optional | Design tokens and reference baselines for design checks |
 
 **Run phases**
 
-1. **Setup.** QA enters the URL and product context (if any). The tool checks the URL is reachable.
-2. **Discover.** The AI agent signs in as each role, follows flows, documents pages, forms and elements, and infers business rules.
-3. **Confirm.** The AI generates a flow document and a test case matrix. QA reviews, confirms or edits them, marks any items out of scope.
-4. **Plan.** The tool turns confirmed flows and test cases into executable test scenarios per role and breakpoint.
-5. **Execute.** Deterministic test runner executes every scenario while recording screenshots, DOM snapshots, console logs and network traffic.
-6. **Evaluate.** Checkers compare the recorded evidence against the confirmed flows, test cases, design tokens and rules.
-7. **Report.** Findings are deduplicated, ranked by severity and published with coverage and flow documentation as a release readiness report, written to the project folder and uploaded to the hub.
+1. **URL-First Front Door.** Enter a single URL. Preflight checks ensure the target is reachable.
+2. **Discover.** The spider navigates pages, maps layout groups, inspects forms, and synthesizes 3–5 core journeys.
+3. **Plan Review.** The interactive Blueprint site map displays journeys, questions, and tests. Users can adjust journeys, answer ambiguity questions, or describe tests in plain English.
+4. **Approve & Test.** The runner executes tests across breakpoints (375px, 768px, 1440px), capturing screenshots, DOM, logs, and Web Vitals.
+5. **Evaluate.** Checkers evaluate Works, Accessible, Fast and mobile, Findable, Secure, and Looks and reads well.
+6. **Report.** A–F aspect grades, ranked improvement recommendations, and a self-contained offline HTML report are published.
 
 ## AI discovery and QA confirmation
 
@@ -257,18 +256,21 @@ The system has seven components: an AI agent for discovery and planning, determi
 
 Developers install one package. It contacts a vision-capable LLM API to discover flows and plan tests, runs everything locally on the developer's machine, and uploads findings to the hub. Each run uses a fresh browser profile with no access to production systems. No test case is written manually.
 
-**Built with** Claude. The team builds the tool with Claude Code, which is included with the team's existing Claude Pro plans. The finished tool requires an API key for discovering flows and generating test cases; usage is billed to the team's Claude API account.
+**Built with** Claude. The team builds the tool with Claude Code, which is included with the team's existing Claude Pro plans. The finished tool supports Bring Your Own Key (BYOK) for OpenRouter and AI providers. Running with an AI key is optional: when no key is configured, deterministic spidering, fixed heuristic planning, and rule-based checkers run completely offline.
 
-## The four checkers
+## Core checkers
 
-Each checker answers one question by comparing the test runner's evidence against the AI-generated test expectations and fixed rules.
+Each checker answers one question by comparing the test runner's evidence against test expectations and fixed rules.
 
 | Checker | Question it answers | How it checks | Needs from QA |
 | --- | --- | --- | --- |
-| Bug detection | Does it work? | Console errors, uncaught exceptions, failed requests (4xx/5xx), broken links, elements that do nothing when clicked, pages that fail to load, slow loads over a threshold | Nothing beyond test accounts |
-| Spec conformance | Did we build what we said? | Runs each spec test case and compares URL, visible text, element state and API responses with the expected values; generates boundary and invalid-input tests from rules | The YAML spec and setup answers |
-| Design and UI standards | Does it match the design? | Computed styles compared with Figma design tokens (color, type, spacing, radius); screenshot diffs against exported Figma frames or an approved baseline, per breakpoint | Token export and approved frames or baseline |
-| UX quality | Is it good to use? | axe-core for WCAG 2.1 AA, plus rule-based UX checks (below) | Optional house rules |
+| Bug detection | Does it work? | Console errors, uncaught exceptions, failed requests (4xx/5xx), broken links, elements that do nothing when clicked, pages that fail to load | Nothing beyond test accounts |
+| Spec conformance | Did we build what we said? | Runs each spec test case and compares URL, visible text, element state and API responses with the expected values | The YAML spec and setup answers |
+| Design and UI standards | Does it match the design? | Computed styles compared with Figma design tokens; visual diffs against approved baselines | Token export and approved baseline |
+| UX quality | Is it accessible and easy to use? | axe-core for WCAG 2.2 AA, tap target size (>= 44px), color contrast, and dead ends | Optional house rules |
+| Performance | Is it fast and mobile-ready? | Web Vitals (LCP, CLS, INP) in test browser, mobile horizontal overflow at 375px, overlapping interactive elements | None |
+| Security | Are connections and headers secure? | Passive review of HTTPS, security headers (CSP, HSTS, X-Content-Type-Options), cookie flags (Secure, HttpOnly), mixed content, and passwords in URLs | None |
+| SEO & link health | Can search engines and users find pages? | Page title, meta description, H1 and heading order, canonical URL, lang attribute, and broken internal links | None |
 
 **Rule-based UX checks**
 

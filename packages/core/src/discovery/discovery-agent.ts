@@ -16,6 +16,11 @@ import { PlanValidator } from './plan-validator.js';
 import { Redactor } from '../redact.js';
 import { CREDENTIAL_PLACEHOLDERS, replaceCredentialsWithPlaceholders } from '../credentials.js';
 import { detectSiteType, generateFallbackJourneys, type SiteType } from './site-type.js';
+import { formQuestion, stepQuestion } from './questions.js';
+import type { CrawlOptions } from './deterministic-spider.js';
+import { RobotsPolicy } from '../competitive/robots.js';
+import { isPrivateHost } from '../competitive/safe-crawler.js';
+import { blockChanges, markJourneysNeedingTestCopy } from '../live-site.js';
 import type { AIProvider } from '../ai/ai-provider.js';
 
 
@@ -25,8 +30,20 @@ export interface DiscoveryOptions {
   profile?: ProductProfile;
   contextFilePath?: string;
   outputDir?: string;
-  aiProvider: AIProvider;
+  /** Plans the journeys. Without one (no AI key), fixed rules pick them instead. */
+  aiProvider?: AIProvider;
+  /**
+   * The site isn't a test copy: nothing that could change data is sent while exploring. Signing in
+   * with the roles' own details is still allowed.
+   */
+  readOnly?: boolean;
+  /** Pages to explore per crawl. Default 25. */
+  maxPages?: number;
 }
+
+/** Waits between page loads on sites we don't own. */
+const PUBLIC_SITE_PAGE_DELAY_MS = 2000;
+const CRAWLER_TOKEN = 'QA-Benchmarking-Bot';
 
 /**
  * Combines the signed-out crawl with each role's crawl. A page keeps the elements seen by the
@@ -51,12 +68,14 @@ export function mergeCrawls(crawls: Array<{ who: string; result: SpiderResult }>
 
   const reached = new Set(pages.keys());
   const walls = new Set(crawls.flatMap((c) => c.result.signInWalls).filter((p) => !reached.has(p)));
+  const skippedByRobots = [...new Set(crawls.flatMap((c) => c.result.skippedByRobots || []))];
   return {
     pages: [...pages.values()],
     forms: [...forms.values()],
     sensitiveActions: [...sensitive.values()],
     ambiguityQuestions: [...questions.values()].map((q, i) => ({ ...q, id: `Q-${String(i + 1).padStart(3, '0')}` })),
     signInWalls: [...walls],
+    skippedByRobots: skippedByRobots.length > 0 ? skippedByRobots : undefined,
   };
 }
 
@@ -78,6 +97,12 @@ function describeExploration(
   for (const role of signInFailed) {
     notes.push(`Signing in as "${role}" didn't work, so nothing was explored as that role. Check its username, password and sign-in page.`);
   }
+  const robotsSkipped = merged.skippedByRobots || [];
+  if (robotsSkipped.length > 0) {
+    notes.push(
+      `Skipped ${robotsSkipped.length} ${robotsSkipped.length === 1 ? 'page' : 'pages'} the site's robots.txt asks crawlers to leave alone: ${robotsSkipped.slice(0, 5).join(', ')}${robotsSkipped.length > 5 ? ', …' : ''}.`
+    );
+  }
   return { signedInAs, signInFailed, signInPages, notReached: merged.signInWalls, notes };
 }
 
@@ -93,9 +118,10 @@ export class DiscoveryAgent {
     const parsedContext = await this.contextParser.parseFile(options.contextFilePath);
 
     // 2. Explore: signed out first, then once per role that can sign in, starting where it landed.
-    const spider = new DeterministicSpider(options.profile?.forbiddenActions || []);
+    const spider = new DeterministicSpider(options.profile?.forbiddenActions || [], options.maxPages ?? 25);
     const roles = options.profile?.roles || [];
     const redactor = new Redactor(roles);
+    // Signing in with the roles' own details is allowed on any site; it happens here, before the guard.
     const preflight =
       roles.length > 0
         ? await new PreFlightChecker().runPreFlight(options.targetUrl, options.profile, undefined, {
@@ -104,10 +130,27 @@ export class DiscoveryAgent {
           })
         : undefined;
 
+    // A site we don't own: honour its robots.txt and pause between pages. A live site: send nothing.
+    const targetOrigin = new URL(options.targetUrl);
+    const ownMachine = isPrivateHost(targetOrigin.hostname);
+    const crawlOptions: CrawlOptions = {
+      robots: ownMachine ? undefined : await RobotsPolicy.fetch(targetOrigin.origin, CRAWLER_TOKEN),
+      pageDelayMs: ownMachine ? 0 : PUBLIC_SITE_PAGE_DELAY_MS,
+      screenshotDir: path.join(outputDir, 'plan-pages'),
+    };
+    const newContext = async (storageState?: string) => {
+      const context = await this.browserManager.createContext({ baseUrl: options.targetUrl, storageState });
+      if (options.readOnly) await blockChanges(context);
+      return context;
+    };
+
     console.log(`[DiscoveryAgent] Crawling routes and interactive forms on ${options.targetUrl}...`);
     const crawls: Array<{ who: string; result: SpiderResult }> = [];
-    const visitorContext = await this.browserManager.createContext({ baseUrl: options.targetUrl });
-    crawls.push({ who: 'visitor', result: await spider.crawl(visitorContext, options.targetUrl) });
+    const visitorContext = await newContext();
+    crawls.push({
+      who: 'visitor',
+      result: await spider.crawl(visitorContext, options.targetUrl, { ...crawlOptions, screenshotPrefix: 'visitor' }),
+    });
     await visitorContext.close();
 
     const signInFailed: string[] = [];
@@ -119,10 +162,14 @@ export class DiscoveryAgent {
       }
       const landing = preflight?.roleLandingPaths?.[role.role];
       console.log(`[DiscoveryAgent] Exploring signed in as "${role.role}"${landing ? ` from ${redactor.text(landing)}` : ''}...`);
-      const roleContext = await this.browserManager.createContext({ baseUrl: options.targetUrl, storageState });
+      const roleContext = await newContext(storageState);
       crawls.push({
         who: role.role,
-        result: await spider.crawl(roleContext, options.targetUrl, { startPaths: landing ? [landing] : [] }),
+        result: await spider.crawl(roleContext, options.targetUrl, {
+          ...crawlOptions,
+          startPaths: landing ? [landing] : [],
+          screenshotPrefix: `role-${crawls.length}`,
+        }),
       });
       await roleContext.close();
     }
@@ -140,18 +187,9 @@ export class DiscoveryAgent {
     let qCounter = ambiguityQuestions.length + 1;
 
     for (const form of spiderResult.forms) {
-      ambiguityQuestions.push({
-        id: `Q-FORM-${qCounter++}`,
-        targetElement: form.submitButtonSelector || 'form',
-        urlPath: form.urlPath,
-        question: `Found form on "${form.urlPath}" submitting to "${form.action}" with fields [${form.inputs.map((i) => i.label).join(', ')}]. What should happen on submit?`,
-        options: [
-          'Expect navigation to confirmation / detail page',
-          'Expect inline success banner',
-          'Exclude form from testing (out of scope)',
-        ],
-        category: 'untested_form',
-      });
+      // A sign-in form is how roles get in, not something the plan asks about.
+      if (form.inputs.some((i) => i.type === 'password')) continue;
+      ambiguityQuestions.push(formQuestion(form, qCounter++));
     }
 
     // 4. Synthesize flows using AI Provider. The AI sees every page's real elements and may only
@@ -285,8 +323,13 @@ Respond with ONLY the JSON object.
 
     let synthesizedFlows: DiscoveredFlow[] = [];
     let usedFallbackSynthesis = false;
-    try {
-      const responseText = await options.aiProvider.generateText(
+    const ai = options.aiProvider;
+    if (!ai) {
+      usedFallbackSynthesis = true;
+      synthesizedFlows = generateFallbackJourneys(siteType, spiderResult, options.profile?.roles || []);
+      exploration.notes.push('No AI key is set up, so the journeys were chosen by fixed rules. The AI review sections were skipped.');
+    } else try {
+      const responseText = await ai.generateText(
         [
           {
             role: 'system',
@@ -312,7 +355,7 @@ Respond with ONLY the JSON object.
         // Give the model one chance to repair its own output, telling it exactly what was wrong,
         // before giving up on AI synthesis or backfilling a placeholder.
         console.warn(`[DiscoveryAgent] AI response needs repair (${problems[0]}); retrying with a repair prompt...`);
-        const repairText = await options.aiProvider.generateText(
+        const repairText = await ai.generateText(
           [
             {
               role: 'system',
@@ -347,7 +390,9 @@ Respond with ONLY the JSON object.
       console.warn(`[DiscoveryAgent] AI flow synthesis fallback triggered: ${aiErr instanceof Error ? aiErr.message : aiErr}`);
       usedFallbackSynthesis = true;
       synthesizedFlows = generateFallbackJourneys(siteType, spiderResult, options.profile?.roles || []);
+      exploration.notes.push('The AI couldn’t plan this site, so the journeys were chosen by fixed rules.');
     }
+    for (const flow of synthesizedFlows) flow.source ??= 'ai';
 
     // What the AI expects is a guess unless the user's own notes say it, and a guess can never fail
     // a site on its own: it's reported as "Could not verify" until someone confirms it.
@@ -379,13 +424,7 @@ Respond with ONLY the JSON object.
     for (const flow of synthesizedFlows) {
       if (!flow.needsHelp?.length) continue;
       console.warn(`[DiscoveryAgent] Flow "${flow.id}" can't run as planned: ${flow.needsHelp[0]}`);
-      ambiguityQuestions.push({
-        id: `Q-STEP-${stepQuestionCounter++}`,
-        urlPath: flow.startPage,
-        question: `The planned journey "${flow.name}" can't run as written: ${flow.needsHelp.join(' ')} How should it be done?`,
-        options: ['Describe the steps in your own words', 'Skip this journey'],
-        category: 'unverified_step',
-      });
+      ambiguityQuestions.push(stepQuestion(flow, stepQuestionCounter++));
     }
 
     const draft: DiscoveryDraft = {
@@ -395,13 +434,22 @@ Respond with ONLY the JSON object.
       timestamp: new Date().toISOString(),
       siteType,
       pages: spiderResult.pages,
+      forms: spiderResult.forms.map((f) => ({
+        urlPath: f.urlPath,
+        inputs: f.inputs.map((i) => ({ selector: i.selector })),
+        submitButtonSelector: f.submitButtonSelector,
+        method: f.method,
+      })),
       flows: synthesizedFlows,
       sensitiveActions: spiderResult.sensitiveActions,
       ambiguityQuestions,
       rawContextSummary: parsedContext.summary,
       usedFallbackSynthesis,
       exploration,
+      readOnly: options.readOnly || undefined,
     };
+    // Journeys that send a form are marked on every site; on a live one they're kept but not run.
+    markJourneysNeedingTestCopy(draft);
 
 
     // A plan never holds credentials: sign-in details become placeholders the runner fills in,

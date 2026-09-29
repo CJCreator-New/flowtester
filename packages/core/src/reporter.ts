@@ -80,6 +80,14 @@ export class ReportGenerator {
     }
     lines.push(``);
 
+    if (report.scanMode === 'read-only') {
+      lines.push(`> [!NOTE]`);
+      lines.push(
+        `> **Read-only run.** This isn't a test copy of the site, so nothing that could change data was sent. Tests that need to send a form are listed as skipped ("needs a test copy").`
+      );
+      lines.push(``);
+    }
+
     if (report.scanMode === 'safe-public') {
       lines.push(`> [!NOTE]`);
       lines.push(

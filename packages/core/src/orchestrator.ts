@@ -3,6 +3,7 @@ import type {
   TestCase,
   ProductProfile,
   ReleaseReport,
+  SiteMapSummary,
   TestPointResult,
   Finding,
   Breakpoint,
@@ -20,6 +21,7 @@ import { SuppressionsManager } from './suppressions.js';
 import { Redactor } from './redact.js';
 import { mergeDuplicateFindings } from './finding-groups.js';
 import { resolveCredentialPlaceholders } from './credentials.js';
+import { blockChanges, NEEDS_TEST_COPY } from './live-site.js';
 import {
   BugDetectionChecker,
   SpecConformanceChecker,
@@ -27,8 +29,14 @@ import {
   PermissionMatrixChecker,
   DesignStandardsChecker,
   SecurityChecker,
+  PerformanceChecker,
+  SeoChecker,
   type DesignTokens,
 } from '@qa/checkers';
+import { calculateSiteAspectGrades } from './scoring.js';
+import { generateRankedRecommendations } from './recommendations.js';
+import { SiteHistoryManager } from './site-history.js';
+import { generateSingleFileHtmlReport } from './html-report.js';
 import { promises as fs } from 'fs';
 
 export type OrchestratorEvent =
@@ -51,10 +59,29 @@ export type OrchestratorEvent =
       /** 0-based position among all test points in this run. */
       index: number;
       total: number;
+      /** The page the test point opens first. */
+      startPage?: string;
+      /** The journey it belongs to ('page-sweep' for a page visit). */
+      flowId?: string;
     }
   | { type: 'STEP_STARTED'; stepIndex: number; stepName: string; action: string; target?: string; testCaseId: string }
-  | { type: 'STEP_COMPLETED'; stepIndex: number; passed: boolean; durationMs: number; error?: string; screenshotUrl?: string }
-  | { type: 'FINDINGS_UPDATED'; totalFindings: number }
+  | {
+      type: 'STEP_COMPLETED';
+      stepIndex: number;
+      passed: boolean;
+      durationMs: number;
+      error?: string;
+      screenshotUrl?: string;
+      /** The page the browser is on after the step. */
+      urlPath?: string;
+      testCaseId?: string;
+    }
+  | {
+      type: 'FINDINGS_UPDATED';
+      totalFindings: number;
+      /** The issues this test point found, so a live view can pin them to their page. */
+      latest?: Array<{ id: string; title: string; severity: Finding['severity']; checker: Finding['checker']; urlPath: string; breakpoint: Breakpoint }>;
+    }
   | { type: 'RUN_COMPLETED'; runId: string; report: ReleaseReport }
   /**
    * Emitted after discovery completes in a run that pauses for review (i.e. skipReview was not
@@ -68,6 +95,37 @@ export type OrchestratorEvent =
    */
   | { type: 'TESTING_STARTED'; runId: string; testCaseCount: number; timestamp: number };
 
+
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+}
+
+/** The checks a test point runs, in plain words, and how each went. */
+function checksRun(
+  findings: Finding[],
+  ran: { spec: boolean; permissions: boolean; design: boolean }
+): NonNullable<TestPointResult['checks']> {
+  const outcome = (checker: Finding['checker']) => {
+    const own = findings.filter((f) => f.checker === checker);
+    if (own.some((f) => !f.needsConfirmation)) return 'failed' as const;
+    return own.length > 0 ? ('could-not-verify' as const) : ('passed' as const);
+  };
+  const checks: NonNullable<TestPointResult['checks']> = [
+    { checker: 'bug-detection', name: 'Works without errors', outcome: outcome('bug-detection') },
+    { checker: 'ux-quality', name: 'Accessible and easy to use', outcome: outcome('ux-quality') },
+    { checker: 'security', name: 'Secure connections and headers', outcome: outcome('security') },
+    { checker: 'performance', name: 'Fast and mobile-ready', outcome: outcome('performance') },
+    { checker: 'seo', name: 'Search and link health', outcome: outcome('seo') },
+  ];
+  if (ran.spec) checks.splice(1, 0, { checker: 'spec-conformance', name: 'Does what was expected', outcome: outcome('spec-conformance') });
+  if (ran.permissions) checks.push({ checker: 'permission-matrix', name: 'Only the right people can see it', outcome: outcome('permission-matrix') });
+  if (ran.design) checks.push({ checker: 'design-standards', name: 'Matches the design', outcome: outcome('design-standards') });
+  return checks;
+}
 
 export interface RunOptions {
   targetUrl: string;
@@ -91,6 +149,15 @@ export interface RunOptions {
   reportNotes?: string[];
   /** The AI models that planned this run, named in the report. */
   aiModels?: { text?: string; vision?: string };
+  /**
+   * The site isn't a test copy: every request that could change data is blocked, and a journey that
+   * tries to send data is reported as needing a test copy rather than as broken.
+   */
+  readOnly?: boolean;
+  /** Planned tests that won't run, and why, e.g. a journey that needs a test copy on a live site. */
+  notRun?: Array<{ id: string; flowId: string; name: string; role: string; reason: string }>;
+  /** The site as the plan saw it, kept in the report so it can be drawn as a map. */
+  siteMap?: SiteMapSummary;
 }
 
 export class FlowTestOrchestrator {
@@ -101,6 +168,8 @@ export class FlowTestOrchestrator {
   private uxChecker = new UXQualityChecker();
   private designChecker = new DesignStandardsChecker();
   private securityChecker = new SecurityChecker();
+  private performanceChecker = new PerformanceChecker();
+  private seoChecker = new SeoChecker();
 
   async run(options: RunOptions): Promise<ReleaseReport> {
     const startTime = Date.now();
@@ -200,6 +269,8 @@ export class FlowTestOrchestrator {
           breakpoint: bp,
           index: results.length,
           total: plannedTestPoints,
+          startPage: testCase.startPage,
+          flowId: testCase.flowId,
         });
         console.log(`[QA Orchestrator] Executing ${testCase.id} ("${testCase.flowId}") on ${bp} as ${testCase.role}...`);
         const pointStartTime = Date.now();
@@ -217,6 +288,8 @@ export class FlowTestOrchestrator {
           recordVideoDir: recordVideo ? testCaseEvidenceDir : undefined,
         });
 
+        // On a live site nothing that could change data leaves the browser.
+        const blockedChanges = options.readOnly ? await blockChanges(context) : [];
         const page = await context.newPage();
         evidenceCollector.attach(page);
 
@@ -313,6 +386,8 @@ export class FlowTestOrchestrator {
               screenshotUrl: stepEvidence.screenshotPath
                 ? `/api/evidence/${path.relative(outputDir, stepEvidence.screenshotPath).replace(/\\/g, '/')}`
                 : undefined,
+              urlPath: pathOf(page.url()),
+              testCaseId: testCase.id,
             });
 
             // If a step fails after retries, cascade remaining steps as Blocked
@@ -351,6 +426,14 @@ export class FlowTestOrchestrator {
 
           // Evaluate Checkers
           const stepEvidenceList = evidenceCollector.getStepEvidenceList();
+          // Requests our own guard stopped are the tool's doing, not the site's.
+          const blockedSet = new Set(blockedChanges);
+          if (blockedSet.size > 0) {
+            for (const s of stepEvidenceList) {
+              s.failedRequests = s.failedRequests.filter((r) => !blockedSet.has(`${r.method.toUpperCase()} ${r.url}`));
+              s.consoleErrors = s.consoleErrors.filter((c) => !c.text.includes('ERR_BLOCKED_BY_CLIENT'));
+            }
+          }
 
           // 1. Bug Detection
           const bugFindings = this.bugChecker.check(stepEvidenceList, {
@@ -394,8 +477,32 @@ export class FlowTestOrchestrator {
               role: testCase.role,
               breakpoint: bp,
               urlPath: new URL(page.url(), options.targetUrl).pathname,
+              baseUrl: options.targetUrl,
             })),
           ];
+
+          // 3c. Performance (Speed, Web Vitals, Mobile Overflow & Overlap)
+          const perfFindings = await this.performanceChecker.checkPage(
+            page,
+            {
+              testCaseId: testCase.id,
+              flowId: testCase.flowId,
+              role: testCase.role,
+              breakpoint: bp,
+              urlPath: new URL(page.url(), options.targetUrl).pathname,
+            },
+            stepEvidenceList
+          );
+
+          // 3d. SEO & Link Health
+          const seoFindings = await this.seoChecker.checkPage(page, {
+            testCaseId: testCase.id,
+            flowId: testCase.flowId,
+            role: testCase.role,
+            breakpoint: bp,
+            urlPath: new URL(page.url(), options.targetUrl).pathname,
+            baseUrl: options.targetUrl,
+          });
 
           // 4. Permission Matrix Check
           const permFindings: Finding[] = [];
@@ -455,10 +562,33 @@ export class FlowTestOrchestrator {
             }
           }
 
-          const pointFindings = [...bugFindings, ...specFindings, ...uxFindings, ...securityFindings, ...permFindings, ...designFindings];
+          // A journey that tried to send data to a live site couldn't be tested there: what it
+          // expected, and any step after the blocked send, say nothing about the site.
+          const targetHost = new URL(options.targetUrl).host;
+          const sentData =
+            testCase.flowId !== 'page-sweep' &&
+            blockedChanges.some((b) => {
+              try {
+                return new URL(b.slice(b.indexOf(' ') + 1)).host === targetHost;
+              } catch {
+                return false;
+              }
+            });
+          const keptFindings = [
+            ...bugFindings,
+            ...specFindings,
+            ...uxFindings,
+            ...securityFindings,
+            ...perfFindings,
+            ...seoFindings,
+            ...permFindings,
+            ...designFindings,
+          ].filter(
+            (f) => !sentData || (f.checker !== 'spec-conformance' && !f.id.startsWith('F-STEP-'))
+          );
 
           // Enrich findings with Source Code Locator and Repro Script
-          for (const f of pointFindings) {
+          for (const f of keptFindings) {
             if (f.where.dataTestId) {
               const srcLoc = await sourceLocator.findByTestId(f.where.dataTestId);
               if (srcLoc) {
@@ -466,16 +596,21 @@ export class FlowTestOrchestrator {
               }
             }
 
-            const reproPath = await reproGenerator.generate(f, testCase, options.targetUrl);
-            f.reproScriptPath = path.relative(process.cwd(), reproPath).replace(/\\/g, '/');
+            // Absolute here; the report makes it relative to the report folder, like every evidence path.
+            f.reproScriptPath = await reproGenerator.generate(f, testCase, options.targetUrl);
             allFindings.push(f);
           }
 
           // Unconfirmed AI guesses never fail a test point on their own.
-          const hasStepFailure = !testPointPassed;
-          const hasRealFinding = pointFindings.some((f) => !f.needsConfirmation);
-          const status: TestPointResult['status'] =
-            hasStepFailure || hasRealFinding ? 'Failed' : pointFindings.length > 0 ? 'Could not verify' : 'Passed';
+          const hasStepFailure = !testPointPassed && !sentData;
+          const hasRealFinding = keptFindings.some((f) => !f.needsConfirmation);
+          const status: TestPointResult['status'] = sentData
+            ? 'Skipped'
+            : hasStepFailure || hasRealFinding
+              ? 'Failed'
+              : keptFindings.length > 0
+                ? 'Could not verify'
+                : 'Passed';
 
           pointResult = {
             testCaseId: testCase.id,
@@ -483,10 +618,17 @@ export class FlowTestOrchestrator {
             role: testCase.role,
             status,
             durationMs: Date.now() - pointStartTime,
-            findings: pointFindings,
+            findings: keptFindings,
             stepEvidence: stepEvidenceList,
             error: stepError,
             observations: observations.length > 0 ? observations : undefined,
+            skipReason: sentData ? NEEDS_TEST_COPY : undefined,
+            breakpoint: bp,
+            checks: checksRun(keptFindings, {
+              spec: !sentData && Object.keys(testCase.expectations || {}).some((k) => k !== 'origin'),
+              permissions: !!permChecker,
+              design: !!designTokens || designFindings.length > 0,
+            }),
           };
         } catch (fatalErr: unknown) {
           testPointPassed = false;
@@ -519,6 +661,8 @@ export class FlowTestOrchestrator {
             findings: [couldNotRun],
             stepEvidence: evidenceCollector.getStepEvidenceList(),
             error: msg,
+            breakpoint: bp,
+            checks: [{ checker: 'bug-detection', name: 'Works without errors', outcome: 'failed' }],
           };
         } finally {
           // The video file is only finalized once its context closes.
@@ -535,11 +679,42 @@ export class FlowTestOrchestrator {
           }
         }
         results.push(pointResult!);
-        onEvent({ type: 'FINDINGS_UPDATED', totalFindings: allFindings.length });
+        onEvent({
+          type: 'FINDINGS_UPDATED',
+          totalFindings: allFindings.length,
+          latest: pointResult!.findings.map((f) => ({
+            id: f.id,
+            title: f.title,
+            severity: f.severity,
+            checker: f.checker,
+            urlPath: pathOf(new URL(f.where.urlPath, options.targetUrl).toString()),
+            breakpoint: f.where.breakpoint,
+          })),
+        });
       }
     }
 
     await this.browserManager.close();
+
+    // Planned tests that weren't run still appear, with the reason, so nothing silently disappears.
+    for (const skippedTest of options.notRun || []) {
+      results.push({
+        testCaseId: skippedTest.id,
+        flowId: skippedTest.flowId,
+        role: skippedTest.role,
+        status: 'Skipped',
+        durationMs: 0,
+        findings: [],
+        stepEvidence: [],
+        skipReason: skippedTest.reason,
+      });
+    }
+    const needingTestCopy = results.filter((r) => r.skipReason === NEEDS_TEST_COPY).length;
+    if (needingTestCopy > 0) {
+      notes.push(
+        `This is a live site, so nothing was sent. ${needingTestCopy} ${needingTestCopy === 1 ? 'test needs' : 'tests need'} a test copy of the site to run, because ${needingTestCopy === 1 ? 'it sends' : 'they send'} a form or ${needingTestCopy === 1 ? 'changes' : 'change'} data.`
+      );
+    }
 
     // Coverage Calculation
     const totalTestPoints = results.length;
@@ -572,18 +747,34 @@ export class FlowTestOrchestrator {
       const tc = testCasesToRun.find((t) => t.id === r.testCaseId);
       const reqId = tc?.requirementId || `REQ-${tc?.flowId || r.flowId}`;
       const lastStep = r.stepEvidence[r.stepEvidence.length - 1];
+      const name = tc?.name ?? options.notRun?.find((n) => n.id === r.testCaseId)?.name;
       traceability.push({
         requirementId: reqId,
         testCaseId: r.testCaseId,
         flowId: r.flowId,
-        name: tc?.name,
+        name,
         status: r.status,
         description:
+          r.skipReason ||
           tc?.expectations.text?.description ||
           tc?.expectations.url?.description ||
-          tc?.name,
+          name,
         evidencePath: lastStep?.screenshotPath,
       });
+    }
+
+    // Calculate A–F grades and prioritized recommendations
+    const grades = calculateSiteAspectGrades(uniqueFindings);
+    const recommendations = generateRankedRecommendations(uniqueFindings);
+
+    // Site history tracking
+    const historyManager = new SiteHistoryManager();
+    let historyDiff;
+    try {
+      const host = new URL(options.targetUrl).host;
+      historyDiff = await historyManager.recordRun(host, runId, grades, uniqueFindings, options.productId);
+    } catch {
+      // Ignore URL parsing or storage errors in test mode
     }
 
     const fullReport: ReleaseReport = {
@@ -595,16 +786,29 @@ export class FlowTestOrchestrator {
       coverage,
       results,
       findings: uniqueFindings,
+      grades,
+      recommendations,
+      history: historyDiff,
       traceability,
       suppressions: activeSuppressions,
       delta,
       notes: notes.length > 0 ? notes : undefined,
       aiModels: options.aiModels,
+      scanMode: options.readOnly ? 'read-only' : undefined,
+      siteMap: options.siteMap,
     };
 
     // Hide sign-in details (and secret-looking URL parameters) everywhere before anything is kept.
     await redactor.files(evidenceDir);
     const report = withPortablePaths(redactor.deep(fullReport), outputDir);
+
+    // Generate single-file HTML report
+    try {
+      const htmlPath = await generateSingleFileHtmlReport(report, { outputDir });
+      report.singleFileHtmlReportPath = htmlPath;
+    } catch (err) {
+      console.warn('[QA Orchestrator] Could not generate single-file HTML report:', err);
+    }
 
     // Emit reports to .qa-report
     console.log(`[QA Orchestrator] Generating release readiness report in ${outputDir}...`);

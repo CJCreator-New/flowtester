@@ -1,0 +1,89 @@
+import type { BrowserContext } from 'playwright';
+import type { DiscoveredFlow, DiscoveryDraft, PageInventoryItem } from '@qa/types';
+import { isPrivateHost } from './competitive/safe-crawler.js';
+import { SafetyFilter } from './discovery/safety-filter.js';
+
+/**
+ * The rules that keep a live site unchanged. Full testing (sending forms, pressing buttons that
+ * save or delete) needs both the owner's say-so and a test host. Anything else is treated as live:
+ * it is explored and checked, but nothing is sent.
+ */
+
+export const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
+
+/**
+ * Hosts that are test copies by nature: this machine, private networks, Docker's name for the host,
+ * Microsoft dev tunnels, and hosts the owner marked as staging. Anything uncertain is live.
+ */
+export function isTestHost(hostname: string, stagingHosts: string[] = []): boolean {
+  const h = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (isPrivateHost(h)) return true;
+  if (h === '0.0.0.0') return true;
+  // IPv6 unique-local (fc00::/7) and link-local (fe80::/10) addresses
+  if (/^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h)) return true;
+  if (/^169\.254\./.test(h)) return true;
+  if (h.endsWith('.devtunnels.ms')) return true;
+  return stagingHosts.some((s) => s.trim().toLowerCase() === h);
+}
+
+/**
+ * Aborts every request that could change data (POST, PUT, PATCH, DELETE) in this browser context.
+ * Returns the list it fills with what it blocked ("METHOD url"), so those can be kept out of the
+ * findings: they are the tool's doing, not the site's.
+ */
+export async function blockChanges(context: BrowserContext): Promise<string[]> {
+  const blocked: string[] = [];
+  await context.route('**/*', (route) => {
+    const request = route.request();
+    const method = request.method().toUpperCase();
+    if (MUTATING_METHODS.includes(method)) {
+      blocked.push(`${method} ${request.url()}`);
+      return route.abort('blockedbyclient');
+    }
+    return route.continue();
+  });
+  return blocked;
+}
+
+/** Button words that save, send or delete something. Links with a real address are only navigation. */
+const CHANGES_SOMETHING =
+  /\b(save|submit|send|delete|remove|pay|buy|purchase|order|subscribe|register|sign ?up|create|publish|comment|confirm|finish|upload|invite|reserve|book now|add to (?:cart|basket|bag)|check ?out|place order|update)\b/i;
+
+type FormInfo = NonNullable<DiscoveryDraft['forms']>[number];
+
+/**
+ * True when the journey sends a form or presses something that changes data, so on a live site it
+ * is kept in the plan, marked "needs a test copy", and not run. Typing alone sends nothing; a
+ * search form (sent with GET) only fetches a page.
+ */
+export function needsTestCopy(flow: DiscoveredFlow, pages: PageInventoryItem[], forms: FormInfo[] = []): boolean {
+  const safety = new SafetyFilter();
+  const elements = pages.flatMap((p) => p.elements || []);
+  for (const step of flow.steps || []) {
+    if (step.action !== 'click' || !step.selector) continue;
+    const el = elements.find((e) => e.selector === step.selector);
+    const name = el?.name || step.name;
+    const form = forms.find((f) => f.submitButtonSelector === step.selector);
+    if (form) {
+      // A GET form only fetches a page, unless a script sends it another way: its button says so.
+      if ((form.method || 'GET').toUpperCase() !== 'GET' || CHANGES_SOMETHING.test(name)) return true;
+      continue;
+    }
+    if (safety.isSensitive(name, step.selector)) return true;
+    const isLink = el ? el.role === 'link' && !!el.href && el.href !== '#' && !el.href.startsWith('javascript:') : false;
+    if (isLink) continue;
+    if (el?.insideForm && (el.role === 'button' || el.inputType === 'submit')) return true;
+    if (CHANGES_SOMETHING.test(name)) return true;
+  }
+  return false;
+}
+
+/** Marks every journey that needs a test copy. The mark shows in the plan on any site. */
+export function markJourneysNeedingTestCopy(draft: Pick<DiscoveryDraft, 'flows' | 'pages' | 'forms'>): void {
+  for (const flow of draft.flows) {
+    if (needsTestCopy(flow, draft.pages, draft.forms)) flow.needsTestCopy = true;
+    else delete flow.needsTestCopy;
+  }
+}
+
+export const NEEDS_TEST_COPY = 'Needs a test copy: it sends a form or changes data, which isn’t done on a live site.';

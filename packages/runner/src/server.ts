@@ -1,7 +1,9 @@
 import http from 'http';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { journeyPages } from '@qa/types';
 import type {
+  SiteMapSummary,
   ProductProfile,
   ReleaseReport,
   RoleCredential,
@@ -30,6 +32,28 @@ import {
   keepOrPickModels,
   PreFlightChecker,
   PlanValidator,
+  Redactor,
+  replaceCredentialsWithPlaceholders,
+  applySafeAnswers,
+  isTestHost,
+  markJourneysNeedingTestCopy,
+  needsTestCopy,
+  NEEDS_TEST_COPY,
+  loadSiteMemory,
+  saveSiteMemory,
+  emptySiteMemory,
+  applySiteMemory,
+  rememberRun,
+  rememberObservations,
+  interpretTest,
+  interpretRule,
+  VisualReviewer,
+  calculateSiteAspectGrades,
+  generateRankedRecommendations,
+  generateSingleFileHtmlReport,
+  type VisualReviewItemInput,
+  type MemorySummary,
+  type RunOptions,
   type AIProvider,
   type OrchestratorEvent,
 } from '@qa/core';
@@ -37,6 +61,11 @@ import {
 function isInside(dir: string, file: string): boolean {
   const rel = path.relative(dir, file);
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/** Saved sign-in sessions (auth/<role>.json) hold live session cookies. Any case: Windows and macOS read "AUTH" as "auth". */
+function isSavedSession(dir: string, file: string): boolean {
+  return path.relative(dir, file).split(path.sep)[0].toLowerCase() === 'auth';
 }
 
 function isLoopbackOrigin(origin: string): boolean {
@@ -48,7 +77,9 @@ function isLoopbackOrigin(origin: string): boolean {
 }
 
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+const MAX_RUN_EVENTS = 5000;
 const DOWNLOADABLE_REPORT_FILES: Record<string, string> = {
+  'report.html': 'text/html; charset=utf-8',
   'report.md': 'text/markdown; charset=utf-8',
   'findings.json': 'application/json; charset=utf-8',
 };
@@ -64,6 +95,12 @@ export interface RunnerServerOptions {
    * not the container. Set this (e.g. "host.docker.internal") to rewrite such hosts.
    */
   localhostAlias?: string;
+  /**
+   * Reach a host at another address, as a hosts file would: { "shop.example.com": "localhost" }.
+   * Everything decided about the site (live or test copy, what is remembered) still uses the host
+   * as typed. Mainly for tests that need a "live" site on this machine.
+   */
+  hostAliases?: Record<string, string>;
   keyResolver?: KeyResolver;
   openRouter?: OpenRouterClient;
   /** Test seam: replaces the real AI provider construction. */
@@ -98,6 +135,14 @@ export interface TriggerRunBody {
    * When false, pauses in 'awaiting-review' after discovery and writes the plan to disk.
    */
   skipReview?: boolean;
+  /**
+   * The URL-first wizard's "I own this site or it's a test copy" box. Full testing needs it and a
+   * test host; anything else runs read-only. Omitted by older callers, which count as owners (but
+   * a live host still stays read-only). Sending it also turns on planning without an AI key.
+   */
+  owner?: boolean;
+  /** The owner says this host is a test copy (staging). Remembered for the site. */
+  stagingHost?: boolean;
 }
 
 interface StoredPlanRecord {
@@ -115,27 +160,39 @@ interface StoredPlanRecord {
     hubToken?: string;
     releaseTarget?: string;
     draft: DiscoveryDraft;
+    /**
+     * Roles whose sign-in details were left out of the saved file. Set only on a plan read back
+     * from disk: the details have to be sent again with the approval.
+     */
+    signInNotSaved?: string[];
+    /** Nothing that could change data is sent: the site isn't a test copy. */
+    readOnly?: boolean;
+    /** The site as the person typed it, e.g. "localhost:3050": the key for what is remembered about it. */
+    siteHost?: string;
+    /** How to reach the text model again, e.g. to turn a sentence into a test. A key given in the request stays in memory only. */
+    ai?: { provider: AIProviderType; model?: string; apiKey?: string };
+    /** The review sent its own test cases, which run as they are. */
+    customTestCases?: boolean;
   };
 }
 
-function applySafeAnswers(questions: AmbiguityQuestion[]): void {
-  for (const q of questions) {
-    if (!q.selectedAnswer) {
-      const skipOpt = q.options.find((opt) => /skip/i.test(opt));
-      if (skipOpt) {
-        q.selectedAnswer = skipOpt;
-        continue;
-      }
-      const safeOpt = q.options.find((opt) => /mock|safe|generic/i.test(opt));
-      if (safeOpt) {
-        q.selectedAnswer = safeOpt;
-        continue;
-      }
-      if (q.options.length > 0) {
-        q.selectedAnswer = q.options[0];
-      }
-    }
-  }
+/** Why a run is read-only, in plain words. */
+function readOnlyReason(owner: boolean, testHost: boolean): string {
+  if (!owner) return 'You didn’t say you own this site, so it’s only looked at: nothing is sent or changed.';
+  if (!testHost) return 'This looks like a live site, so it’s only looked at: nothing is sent or changed. Mark it as a test copy if it is one.';
+  return '';
+}
+
+/** A test case in the shape the plan check reads. */
+function asFlow(testCase: TestCase): DiscoveredFlow {
+  return {
+    id: testCase.id,
+    name: testCase.name || testCase.id,
+    role: testCase.role,
+    description: '',
+    startPage: testCase.startPage,
+    steps: testCase.steps || [],
+  };
 }
 
 /**
@@ -155,6 +212,7 @@ export class RunnerServer {
   private streamClients = new Set<http.ServerResponse>();
 
   private localhostAlias?: string;
+  private hostAliases: Record<string, string>;
   private keyResolver: KeyResolver;
   private openRouter: OpenRouterClient;
   private makeAIProvider: (provider: AIProviderType, apiKey: string, model?: string) => AIProvider;
@@ -164,6 +222,10 @@ export class RunnerServer {
   private lastReport: ReleaseReport | null = null;
   private lastRunError: string | null = null;
   private currentPlanRecord: StoredPlanRecord | null = null;
+  /** The run in progress or paused, so a reopened page can pick it up again. */
+  private currentRunId: string | null = null;
+  /** This run's events, so a page that reopens or reconnects can replay them and show where the run is. */
+  private runEvents: Array<Record<string, unknown>> = [];
   /** The chosen free models (not secret), kept beside the key so every browser gets the same setup. */
   private aiModelsFile: string;
 
@@ -172,6 +234,7 @@ export class RunnerServer {
     this.host = options.host || 'localhost';
     this.outputDir = path.resolve(options.outputDir || path.join(process.cwd(), '.qa-runner-report'));
     this.localhostAlias = options.localhostAlias;
+    this.hostAliases = Object.fromEntries(Object.entries(options.hostAliases || {}).map(([k, v]) => [k.toLowerCase(), v]));
     this.dataDir = path.resolve(options.dataDir || process.cwd());
     this.planFile = path.join(this.dataDir, '.qa-plan.json');
     this.aiModelsFile = path.join(this.dataDir, '.qa-ai-models.json');
@@ -183,6 +246,7 @@ export class RunnerServer {
 
 
   public broadcastRunnerEvent(event: OrchestratorEvent | Record<string, unknown>): void {
+    this.recordRunEvent(event as Record<string, unknown>);
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of this.streamClients) {
       try {
@@ -190,6 +254,20 @@ export class RunnerServer {
       } catch {
         this.streamClients.delete(client);
       }
+    }
+  }
+
+  /**
+   * Keeps the event for replay. The finished report is left out (it is fetched on its own), and on a
+   * very long run the oldest step events go first: only the latest step matters to someone catching up.
+   */
+  private recordRunEvent(event: Record<string, unknown>): void {
+    if (!this.currentRunId || event.type === 'HUB_PUSH_RESULT') return;
+    if (typeof event.runId === 'string' && event.runId !== this.currentRunId) return;
+    this.runEvents.push(event.type === 'RUN_COMPLETED' ? { type: event.type, runId: event.runId } : event);
+    if (this.runEvents.length > MAX_RUN_EVENTS) {
+      const half = this.runEvents.length / 2;
+      this.runEvents = this.runEvents.filter((e, i) => i >= half || (e.type !== 'STEP_STARTED' && e.type !== 'STEP_COMPLETED'));
     }
   }
 
@@ -270,6 +348,7 @@ export class RunnerServer {
                 lastRunError: this.lastRunError,
                 phase: this.phase,
                 hasPlan: !!this.currentPlanRecord,
+                runId: this.currentRunId,
               })
             );
             return;
@@ -293,6 +372,12 @@ export class RunnerServer {
             return;
           }
 
+          // POST /api/runner/plan/interpret — a sentence becomes a test or a rule, shown back before it's added
+          if (pathname === '/api/runner/plan/interpret' && req.method === 'POST') {
+            await this.handleInterpret(req, res);
+            return;
+          }
+
           // POST /api/runner/preflight — is the target URL reachable? (no browser, no run)
           if (pathname === '/api/runner/preflight' && req.method === 'POST') {
             await this.handlePreflight(req, res);
@@ -306,6 +391,12 @@ export class RunnerServer {
           }
 
 
+          // POST /api/runner/ai/finish (Task 2.4: finish visual review on remaining screens)
+          if (pathname === '/api/runner/ai/finish' && req.method === 'POST') {
+            await this.handleAiFinish(req, res);
+            return;
+          }
+
           if (pathname.startsWith('/api/ai/openrouter/')) {
             await this.handleOpenRouter(pathname.replace('/api/ai/openrouter/', ''), req, res);
             return;
@@ -316,9 +407,15 @@ export class RunnerServer {
           if (pathname.startsWith('/api/evidence/') && req.method === 'GET') {
             const relPath = decodeURIComponent(pathname.replace('/api/evidence/', ''));
             const targetFile = path.resolve(this.outputDir, relPath);
-            // Saved sign-in sessions (auth/<role>.json) hold live session cookies: never served.
-            const isSavedSession = path.relative(this.outputDir, targetFile).split(path.sep)[0] === 'auth';
-            if (!isInside(this.outputDir, targetFile) || isSavedSession) {
+            // Checked again on the path the file system really opens, so neither a link nor another
+            // spelling of the same folder can reach a saved session.
+            const realTarget = await fs.realpath(targetFile).catch(() => null);
+            const realRoot = realTarget ? await fs.realpath(this.outputDir).catch(() => this.outputDir) : this.outputDir;
+            const forbidden =
+              !isInside(this.outputDir, targetFile) ||
+              isSavedSession(this.outputDir, targetFile) ||
+              (realTarget !== null && (!isInside(realRoot, realTarget) || isSavedSession(realRoot, realTarget)));
+            if (forbidden) {
               res.writeHead(403, { 'Content-Type': 'text/plain' });
               res.end('Forbidden');
               return;
@@ -389,19 +486,22 @@ export class RunnerServer {
     res.end(JSON.stringify(body));
   }
 
-  /** Maps localhost targets to the host machine when the runner itself runs in a container. */
+  /**
+   * The address to connect to: a host alias, or localhost mapped to the host machine when the
+   * runner itself runs in a container. Everything else is used as typed.
+   */
   private resolveTargetUrl(targetUrl: string): string {
-    if (!this.localhostAlias) return targetUrl;
     try {
       const u = new URL(targetUrl);
-      if (LOOPBACK_HOSTS.includes(u.hostname)) {
-        u.hostname = this.localhostAlias;
-        return u.toString();
-      }
+      const alias = this.hostAliases[u.hostname.toLowerCase()];
+      if (alias) u.hostname = alias;
+      else if (this.localhostAlias && LOOPBACK_HOSTS.includes(u.hostname)) u.hostname = this.localhostAlias;
+      else return targetUrl;
+      return u.toString();
     } catch {
       // Invalid URLs are reported by the caller.
+      return targetUrl;
     }
-    return targetUrl;
   }
 
   private async handlePreflight(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -446,6 +546,49 @@ export class RunnerServer {
     } catch {
       this.sendJson(res, 404, { error: `${fileName} was not written for the last run` });
     }
+  }
+
+  public pendingAiScreens: VisualReviewItemInput[] = [];
+
+  private async handleAiFinish(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.lastReport) {
+      this.sendJson(res, 404, { error: 'No report available to finish AI review' });
+      return;
+    }
+    const key = await this.storedOpenRouterKey();
+    const provider = key ? createAIProvider('openrouter', key) : undefined;
+    const reviewer = new VisualReviewer();
+
+    const screens = this.pendingAiScreens.length > 0 ? this.pendingAiScreens : [];
+    if (screens.length === 0) {
+      this.sendJson(res, 200, {
+        completed: true,
+        message: 'No remaining screens to review',
+        reviewedCount: 0,
+        addedFindingsCount: 0,
+        grades: this.lastReport.grades,
+      });
+      return;
+    }
+
+    const result = await reviewer.reviewScreens(screens, provider, { maxCalls: 20 });
+    this.pendingAiScreens = result.remainingScreens;
+
+    if (result.findings.length > 0) {
+      this.lastReport.findings.push(...result.findings);
+      this.lastReport.grades = calculateSiteAspectGrades(this.lastReport.findings);
+      this.lastReport.recommendations = generateRankedRecommendations(this.lastReport.findings);
+      await generateSingleFileHtmlReport(this.lastReport, { outputDir: this.outputDir }).catch(() => {});
+    }
+
+    this.sendJson(res, 200, {
+      completed: result.status === 'completed',
+      reviewedCount: result.reviewedCount,
+      remainingCount: this.pendingAiScreens.length,
+      addedFindingsCount: result.findings.length,
+      grades: this.lastReport.grades,
+      note: result.note,
+    });
   }
 
   /** The OpenRouter key saved on this machine, if any. Never returned to clients. */
@@ -565,6 +708,7 @@ export class RunnerServer {
     // is the SAME id the orchestrator will use for RUN_STARTED/RUN_COMPLETED — otherwise a
     // UI that trusts this response id would never see it appear in the SSE stream.
     const runId = `run-${Date.now()}`;
+    this.currentRunId = runId;
 
     this.isRunning = true;
     this.phase = 'scanning';
@@ -614,138 +758,97 @@ export class RunnerServer {
         body.roles && body.roles.length > 0
           ? { name: productId, productId, roles: body.roles }
           : undefined;
-      let specTestCases: TestCase[];
-      let reportNotes: string[] | undefined;
-      let aiModels: { text?: string; vision?: string } | undefined;
       const breakpoints: Breakpoint[] = (body.breakpoints as Breakpoint[]) || ['375px', '768px', '1440px'];
+
+      // Full testing needs the owner's say-so and a test host. Decided here, not by the screen.
+      const typed = new URL(body.targetUrl);
+      const siteHost = typed.host;
+      let memory = await loadSiteMemory(this.dataDir, siteHost);
+      if (body.stagingHost !== undefined) {
+        memory = { ...(memory ?? emptySiteMemory(siteHost)), staging: body.stagingHost || undefined };
+        await saveSiteMemory(this.dataDir, memory);
+      }
+      const urlFirst = body.owner !== undefined;
+      const owner = body.owner ?? true;
+      const testHost = isTestHost(typed.hostname, memory?.staging ? [typed.hostname] : []);
+      const readOnly = !(owner && testHost);
+
+      const context: StoredPlanRecord['context'] = {
+        targetUrl,
+        productId,
+        runId,
+        profile,
+        breakpoints,
+        headless: body.headless ?? true,
+        hubUrl: body.hubUrl,
+        hubToken: body.hubToken,
+        releaseTarget: body.releaseTarget,
+        draft: undefined as unknown as DiscoveryDraft,
+        readOnly,
+        siteHost,
+      };
 
       if (body.specTestCases && body.specTestCases.length > 0) {
         // Caller supplied an explicit spec — takes priority over AI discovery.
-        specTestCases = body.specTestCases;
-      } else if (body.useAI) {
-        const providerType: AIProviderType = body.aiProvider || 'mock';
-        let apiKey = body.apiKey;
-        if (!apiKey && providerType === 'openrouter') {
-          apiKey = await this.storedOpenRouterKey();
-          if (!apiKey) throw new Error('No OpenRouter key is saved. Add one before starting an AI run.');
-        }
-        // One fixed free model per role (text, vision) chosen by the runner, so every run of a
-        // site is planned by the same model and the report can say which.
-        let model = body.aiModel;
-        let visionModel: string | null | undefined;
-        if (providerType === 'openrouter') {
-          const chosen = await this.refreshAiModels(apiKey!).catch(async () => this.readAiModels());
-          model ??= chosen.text ?? undefined;
-          visionModel = chosen.vision;
-          if (!model) throw new Error('No free AI models are available right now — please try again later.');
-        }
-        aiModels = model ? { text: model, vision: visionModel ?? undefined } : undefined;
-        const aiProvider = this.makeAIProvider(providerType, apiKey || 'mock-key', model);
-
-        let contextFilePath: string | undefined;
-        if (body.productContext?.trim()) {
-          await fs.mkdir(this.outputDir, { recursive: true });
-          contextFilePath = path.join(this.outputDir, `product-context-${runId}.md`);
-          await fs.writeFile(contextFilePath, body.productContext, 'utf8');
-        }
-
-        this.phase = 'scanning';
-        this.broadcastRunnerEvent({ type: 'DISCOVERY_STARTED', runId, timestamp: Date.now() });
-        const agent = new DiscoveryAgent();
-        const draft = await agent.discover({
-          targetUrl,
-          productId,
-          profile,
-          contextFilePath,
-          outputDir: this.outputDir,
-          aiProvider,
-        });
-        this.broadcastRunnerEvent({ type: 'DISCOVERY_COMPLETED', runId, flowsFound: draft.flows.length, timestamp: Date.now() });
-        reportNotes = draft.exploration?.notes;
-
-        if (body.skipReview === false) {
-          // Pause for review: formulate plan, write to disk, broadcast PLAN_READY, and wait.
-          const planner = new TestPlanner();
-          const plannedCases = [...planner.plan(draft).testCases, ...buildPageSweep(draft)];
-          const plan: ReviewPlan = {
-            runId,
-            targetUrl: body.targetUrl,
-            discoveredAt: new Date().toISOString(),
-            siteType: draft.siteType,
-            pages: draft.pages,
-            flows: draft.flows,
-            questions: draft.ambiguityQuestions,
-            testCases: plannedCases.length ? plannedCases : [this.defaultTestCase()],
-            usedFallbackDiscovery: draft.usedFallbackSynthesis,
-          };
-          const record: StoredPlanRecord = {
-            plan,
-            context: {
-              targetUrl,
-              productId,
-              runId,
-              profile,
-              reportNotes,
-              aiModels,
-              breakpoints,
-              headless: body.headless ?? true,
-              hubUrl: body.hubUrl,
-              hubToken: body.hubToken,
-              releaseTarget: body.releaseTarget,
-              draft,
-            },
-          };
-          await this.savePlan(record);
-          this.phase = 'awaiting-review';
-          this.broadcastRunnerEvent({
-            type: 'PLAN_READY',
-            runId,
-            pageCount: draft.pages.length,
-            flowCount: draft.flows.length,
-            questionCount: draft.ambiguityQuestions.length,
-            timestamp: Date.now(),
-          });
-          return;
-        }
-
-        // skipReview is true or omitted: unanswered questions get their safe answer.
-        applySafeAnswers(draft.ambiguityQuestions);
-        const planner = new TestPlanner();
-        specTestCases = [...planner.plan(draft).testCases, ...buildPageSweep(draft)];
-        if (specTestCases.length === 0) {
-          specTestCases = [this.defaultTestCase()];
-        }
-      } else {
-        specTestCases = [this.defaultTestCase()];
+        await this.executeTesting({ plan: this.emptyPlan(runId, body.targetUrl), context }, body.specTestCases, []);
+        return;
+      }
+      if (!body.useAI && !urlFirst) {
+        await this.executeTesting({ plan: this.emptyPlan(runId, body.targetUrl), context }, [this.defaultTestCase()], []);
+        return;
       }
 
-      await this.executeTesting(
-        {
-          plan: {
-            runId,
-            targetUrl: body.targetUrl,
-            discoveredAt: new Date().toISOString(),
-            pages: [],
-            flows: [],
-            questions: [],
-          },
-          context: {
-            targetUrl,
-            productId,
-            runId,
-            profile,
-            reportNotes,
-            aiModels,
-            breakpoints,
-            headless: body.headless ?? true,
-            hubUrl: body.hubUrl,
-            hubToken: body.hubToken,
-            releaseTarget: body.releaseTarget,
-            draft: {} as any,
-          },
-        },
-        specTestCases
-      );
+      const ai = await this.prepareAI(body, urlFirst);
+      context.aiModels = ai.models;
+      context.ai = ai.settings;
+
+      let contextFilePath: string | undefined;
+      if (body.productContext?.trim()) {
+        await fs.mkdir(this.outputDir, { recursive: true });
+        contextFilePath = path.join(this.outputDir, `product-context-${runId}.md`);
+        await fs.writeFile(contextFilePath, body.productContext, 'utf8');
+      }
+
+      this.phase = 'scanning';
+      this.broadcastRunnerEvent({ type: 'DISCOVERY_STARTED', runId, timestamp: Date.now() });
+      const draft = await new DiscoveryAgent().discover({
+        targetUrl,
+        productId,
+        profile,
+        contextFilePath,
+        outputDir: this.outputDir,
+        aiProvider: ai.provider,
+        readOnly,
+      });
+      const sinceLastRun = applySiteMemory(draft, memory);
+      context.draft = draft;
+      context.reportNotes = [...(draft.exploration?.notes || [])];
+      this.broadcastRunnerEvent({ type: 'DISCOVERY_COMPLETED', runId, flowsFound: draft.flows.length, timestamp: Date.now() });
+
+      const record: StoredPlanRecord = { plan: this.emptyPlan(runId, body.targetUrl), context };
+      record.plan = this.buildPlan(record, sinceLastRun, !!ai.provider, readOnlyReason(owner, testHost));
+
+      if (body.skipReview === false) {
+        // Pause for review: the plan is written to disk and waits for the owner.
+        await this.savePlan(record);
+        this.phase = 'awaiting-review';
+        this.broadcastRunnerEvent({
+          type: 'PLAN_READY',
+          runId,
+          pageCount: draft.pages.length,
+          flowCount: draft.flows.length,
+          questionCount: draft.ambiguityQuestions.length,
+          timestamp: Date.now(),
+        });
+        return;
+      }
+
+      // No review: every question gets its safe answer, and only what was there is remembered.
+      applySafeAnswers(draft.ambiguityQuestions);
+      await saveSiteMemory(this.dataDir, rememberRun(memory, siteHost, draft, { reviewed: false }));
+      const { specTestCases, notRun } = this.testsFor(draft, readOnly);
+      context.reportNotes.push(...this.handCheckNotes(draft));
+      await this.executeTesting(record, specTestCases, notRun);
     } catch (err) {
       this.phase = 'failed';
       this.isRunning = false;
@@ -753,7 +856,143 @@ export class RunnerServer {
     }
   }
 
-  private async executeTesting(record: StoredPlanRecord, specTestCases: TestCase[]): Promise<void> {
+  /**
+   * The text model for a run. Older callers asking for AI without a key get an error, as before; the
+   * URL-first wizard plans with fixed rules instead (the AI sections then show as skipped).
+   */
+  private async prepareAI(
+    body: TriggerRunBody,
+    urlFirst: boolean
+  ): Promise<{ provider?: AIProvider; models?: { text?: string; vision?: string }; settings?: StoredPlanRecord['context']['ai'] }> {
+    if (!body.useAI) return {};
+    const providerType: AIProviderType = body.aiProvider || 'mock';
+    let apiKey = body.apiKey;
+    if (!apiKey && providerType === 'openrouter') {
+      apiKey = await this.storedOpenRouterKey();
+      if (!apiKey) {
+        if (urlFirst) return {};
+        throw new Error('No OpenRouter key is saved. Add one before starting an AI run.');
+      }
+    }
+    // One fixed free model per role (text, vision) chosen by the runner, so every run of a
+    // site is planned by the same model and the report can say which.
+    let model = body.aiModel;
+    let visionModel: string | null | undefined;
+    if (providerType === 'openrouter') {
+      const chosen = await this.refreshAiModels(apiKey!).catch(async () => this.readAiModels());
+      model ??= chosen.text ?? undefined;
+      visionModel = chosen.vision;
+      if (!model) {
+        if (urlFirst) return {};
+        throw new Error('No free AI models are available right now — please try again later.');
+      }
+    }
+    return {
+      provider: this.makeAIProvider(providerType, apiKey || 'mock-key', model),
+      models: model ? { text: model, vision: visionModel ?? undefined } : undefined,
+      settings: { provider: providerType, model, apiKey: body.apiKey },
+    };
+  }
+
+  /** The text model again, for turning a sentence into a test during the review. */
+  private async aiFor(context: StoredPlanRecord['context']): Promise<AIProvider | undefined> {
+    const settings = context.ai;
+    if (!settings) return undefined;
+    const apiKey = settings.apiKey || (settings.provider === 'openrouter' ? await this.storedOpenRouterKey() : 'mock-key');
+    if (!apiKey) return undefined;
+    return this.makeAIProvider(settings.provider, apiKey, settings.model);
+  }
+
+  private emptyPlan(runId: string, targetUrl: string): ReviewPlan {
+    return { runId, targetUrl, discoveredAt: new Date().toISOString(), pages: [], flows: [], questions: [] };
+  }
+
+  /** The plan the review shows, from the run's draft. Thumbnails are addressed relative to the report folder. */
+  private buildPlan(
+    record: StoredPlanRecord,
+    sinceLastRun: MemorySummary | undefined,
+    aiAvailable: boolean,
+    reason: string
+  ): ReviewPlan {
+    const { draft, readOnly } = record.context;
+    const relative = (file?: string) => this.relativeToOutput(file);
+    const { specTestCases } = this.testsFor(draft, !!readOnly);
+    return {
+      runId: record.context.runId,
+      targetUrl: record.plan.targetUrl,
+      discoveredAt: new Date().toISOString(),
+      siteType: draft.siteType,
+      pages: draft.pages.map((p) => ({ ...p, screenshotPath: relative(p.screenshotPath) })),
+      flows: draft.flows,
+      questions: draft.ambiguityQuestions,
+      testCases: specTestCases,
+      usedFallbackDiscovery: draft.usedFallbackSynthesis,
+      readOnly: readOnly || undefined,
+      readOnlyReason: reason || undefined,
+      notes: draft.exploration?.notes?.length ? draft.exploration.notes : undefined,
+      sinceLastRun: sinceLastRun?.seenBefore
+        ? {
+            newPages: sinceLastRun.newPages,
+            newJourneys: sinceLastRun.newJourneys,
+            newQuestions: sinceLastRun.newQuestions,
+            rememberedAnswers: sinceLastRun.rememberedAnswers,
+          }
+        : undefined,
+      aiAvailable,
+      signedInAs: draft.exploration?.signedInAs,
+    };
+  }
+
+  /** The tests a plan runs, and the planned journeys a live site leaves out (they need a test copy). */
+  private testsFor(draft: DiscoveryDraft, readOnly: boolean): { specTestCases: TestCase[]; notRun: RunOptions['notRun'] } {
+    const specTestCases = [...new TestPlanner().plan(draft, { readOnly }).testCases, ...buildPageSweep(draft)];
+    const notRun = readOnly
+      ? draft.flows
+          .filter((f) => f.needsTestCopy && !f.outOfScope && !f.needsHelp?.length)
+          .map((f) => ({ id: `TC-${f.id}`, flowId: f.id, name: f.name, role: f.role, reason: NEEDS_TEST_COPY }))
+      : [];
+    return { specTestCases: specTestCases.length > 0 ? specTestCases : [this.defaultTestCase()], notRun };
+  }
+
+  /** The page's thumbnail, addressed relative to the report folder (where evidence is served from). */
+  private relativeToOutput(file?: string): string | undefined {
+    if (!file) return undefined;
+    const rel = path.relative(this.outputDir, file);
+    return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.replace(/\\/g, '/') : undefined;
+  }
+
+  /** The site as the plan saw it, kept in the report so the report can be drawn as a map. */
+  private siteMapOf(draft: DiscoveryDraft): SiteMapSummary {
+    return {
+      siteType: draft.siteType,
+      pages: draft.pages.map((p) => ({
+        urlPath: p.urlPath,
+        title: p.title,
+        layoutGroup: p.layoutGroup,
+        screenshotPath: this.relativeToOutput(p.screenshotPath) ?? p.screenshotPath,
+        isNew: p.isNew,
+        reachedBy: p.reachedBy,
+      })),
+      journeys: draft.flows.map((f) => ({
+        id: f.id,
+        name: f.name,
+        reason: f.description,
+        pages: journeyPages(f),
+        needsTestCopy: f.needsTestCopy,
+        skipped: f.outOfScope || (f.needsHelp?.length ?? 0) > 0 || undefined,
+        source: f.source,
+      })),
+    };
+  }
+
+  /** Rules the owner added that no test can check: listed in the report for a person to check. */
+  private handCheckNotes(draft: DiscoveryDraft): string[] {
+    return draft.flows
+      .filter((f) => !f.outOfScope)
+      .flatMap((f) => (f.userRules || []).filter((r) => !r.checkable).map((r) => `Check by hand (“${f.name}”): ${r.text}`));
+  }
+
+  private async executeTesting(record: StoredPlanRecord, specTestCases: TestCase[], notRun: RunOptions['notRun']): Promise<void> {
     const { context } = record;
     this.phase = 'testing';
     this.isRunning = true;
@@ -765,20 +1004,39 @@ export class RunnerServer {
     });
 
     const orchestrator = new FlowTestOrchestrator();
-    const report = await orchestrator.run({
-      targetUrl: context.targetUrl,
-      productId: context.productId,
-      specTestCases,
-      profile: context.profile,
-      headless: context.headless ?? true,
-      outputDir: this.outputDir,
-      breakpoints: context.breakpoints || ['375px', '768px', '1440px'],
-      repoRoot: process.cwd(),
-      runId: context.runId,
-      reportNotes: context.reportNotes,
-      aiModels: context.aiModels,
-      onEvent: (event) => this.forwardRunEvent(event),
-    });
+    let report: ReleaseReport;
+    try {
+      report = await orchestrator.run({
+        targetUrl: context.targetUrl,
+        productId: context.productId,
+        specTestCases,
+        profile: context.profile,
+        headless: context.headless ?? true,
+        outputDir: this.outputDir,
+        breakpoints: context.breakpoints || ['375px', '768px', '1440px'],
+        repoRoot: process.cwd(),
+        runId: context.runId,
+        reportNotes: context.reportNotes,
+        aiModels: context.aiModels,
+        readOnly: context.readOnly,
+        notRun,
+        siteMap: context.draft ? this.siteMapOf(context.draft) : undefined,
+        onEvent: (event) => this.forwardRunEvent(event),
+      });
+    } finally {
+      // Tested, or failed trying: the plan no longer awaits review, so a restart mustn't bring it
+      // back. (If the runner dies mid-test the file stays, and the plan can be approved again.)
+      await this.clearPlan(context.runId);
+    }
+
+    // What the site was seen doing (the error it shows for an empty field) confirms a guessed rule next time.
+    if (context.siteHost && context.draft) {
+      const memory = await loadSiteMemory(this.dataDir, context.siteHost);
+      if (memory) {
+        rememberObservations(memory, context.draft, report);
+        await saveSiteMemory(this.dataDir, memory).catch(() => {});
+      }
+    }
 
     this.lastReport = report;
     this.phase = 'done';
@@ -814,6 +1072,7 @@ export class RunnerServer {
         if (this.phase === 'idle') {
           this.phase = 'awaiting-review';
           this.isRunning = true;
+          this.currentRunId = record.plan.runId;
         }
         return this.currentPlanRecord;
       }
@@ -826,10 +1085,32 @@ export class RunnerServer {
   private async savePlan(record: StoredPlanRecord): Promise<void> {
     this.currentPlanRecord = record;
     await fs.mkdir(this.dataDir, { recursive: true });
-    await fs.writeFile(this.planFile, JSON.stringify(record, null, 2), 'utf8');
+    await fs.writeFile(this.planFile, JSON.stringify(this.planForDisk(record), null, 2), 'utf8');
   }
 
-  private async clearPlan(): Promise<void> {
+  /**
+   * The plan as written to disk. Sign-in details and the hub token stay in memory only; after a
+   * restart the approval has to send them again.
+   */
+  private planForDisk(record: StoredPlanRecord): StoredPlanRecord {
+    const { profile, hubToken: _hubToken, ai, ...context } = record.context;
+    const roles = profile?.roles || [];
+    const notSaved = [...new Set([...(context.signInNotSaved || []), ...roles.map((r) => r.role)])];
+    return new Redactor(roles).deep({
+      plan: record.plan,
+      context: {
+        ...context,
+        profile: profile && { ...profile, roles: roles.map(({ role, loginPath }) => ({ role, username: '', loginPath })) },
+        signInNotSaved: notSaved.length > 0 ? notSaved : undefined,
+        // An AI key sent with the request isn't kept either; a saved key is looked up again.
+        ai: ai && { provider: ai.provider, model: ai.model },
+      },
+    });
+  }
+
+  /** Forgets the paused plan; with a runId, only while it is still that run's plan (a newer run may have replaced it). */
+  private async clearPlan(runId?: string): Promise<void> {
+    if (runId && this.currentPlanRecord && this.currentPlanRecord.plan.runId !== runId) return;
     this.currentPlanRecord = null;
     await fs.rm(this.planFile, { force: true }).catch(() => {});
   }
@@ -865,6 +1146,23 @@ export class RunnerServer {
       return;
     }
 
+    // Every edit gets the same check as the AI's plan. An edited test aimed at something the scan
+    // never found is refused, and nothing in this request is applied.
+    const validator = new PlanValidator(record.plan.pages, record.context.draft?.forms);
+    if (Array.isArray(body.testCases)) {
+      const issues = validator.check(body.testCases.map(asFlow));
+      if (issues.length > 0) {
+        this.sendJson(res, 422, { error: 'Some steps are aimed at things that aren’t on the page.', issues });
+        return;
+      }
+    }
+
+    // A typed sign-in detail becomes its placeholder, so the plan never holds it.
+    const roles = record.context.profile?.roles || [];
+    for (const item of [...(Array.isArray(body.flows) ? body.flows : []), ...(Array.isArray(body.testCases) ? body.testCases : [])]) {
+      replaceCredentialsWithPlaceholders(item.steps || [], roles);
+    }
+
     if (body.questions && Array.isArray(body.questions)) {
       for (const patchQ of body.questions) {
         const target = record.plan.questions.find((q) => q.id === patchQ.id);
@@ -884,22 +1182,68 @@ export class RunnerServer {
     }
 
     if (body.flows && Array.isArray(body.flows)) {
-      const validator = new PlanValidator(record.plan.pages);
       validator.markFlowsNeedingHelp(body.flows);
       record.plan.flows = body.flows;
-      if (record.context.draft) record.context.draft.flows = body.flows;
+      if (record.context.draft) {
+        record.context.draft.flows = body.flows;
+        // An added or edited journey that sends a form needs a test copy too.
+        markJourneysNeedingTestCopy(record.context.draft);
+      }
     }
 
     if (body.testCases && Array.isArray(body.testCases)) {
       record.plan.testCases = body.testCases;
+      record.context.customTestCases = true;
     } else if (record.context.draft) {
-      const planner = new TestPlanner();
-      const planned = planner.plan(record.context.draft);
-      record.plan.testCases = [...planned.testCases, ...buildPageSweep(record.context.draft)];
+      record.plan.testCases = this.testsFor(record.context.draft, !!record.context.readOnly).specTestCases;
+      record.context.customTestCases = undefined;
     }
 
     await this.savePlan(record);
     this.sendJson(res, 200, record.plan);
+  }
+
+  /**
+   * Turns a sentence into a test for one page ({ sentence, urlPath, role }), or into a rule for one
+   * journey ({ kind: 'rule', sentence, flowId }). Nothing is added: the person confirms first, and
+   * the wizard then sends the result with a PATCH.
+   */
+  private async handleInterpret(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const record = await this.ensurePlanLoaded();
+    if (!record || this.phase !== 'awaiting-review' || !record.context.draft) {
+      this.sendJson(res, 404, { error: 'No plan awaiting review' });
+      return;
+    }
+    let body: { sentence?: string; urlPath?: string; role?: string; kind?: 'test' | 'rule'; flowId?: string };
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+    const ai = await this.aiFor(record.context);
+    const draft = record.context.draft;
+    if (body.kind === 'rule') {
+      const flow = draft.flows.find((f) => f.id === body.flowId);
+      if (!flow) {
+        this.sendJson(res, 404, { ok: false, message: 'That journey isn’t in the plan any more.' });
+        return;
+      }
+      this.sendJson(res, 200, await interpretRule({ sentence: body.sentence || '', flow, draft, ai }));
+      return;
+    }
+    const interpretation = await interpretTest({
+      sentence: body.sentence || '',
+      urlPath: body.urlPath || '/',
+      role: body.role,
+      draft,
+      ai,
+    });
+    if (interpretation.ok) {
+      replaceCredentialsWithPlaceholders(interpretation.flow.steps, record.context.profile?.roles || []);
+      if (needsTestCopy(interpretation.flow, draft.pages, draft.forms)) interpretation.flow.needsTestCopy = true;
+    }
+    this.sendJson(res, 200, interpretation);
   }
 
   private async handleApprovePlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -909,40 +1253,61 @@ export class RunnerServer {
       return;
     }
 
-    try {
-      const body: { breakpoints?: string[] } = await this.readJsonBody<{ breakpoints?: string[] }>(req).catch(
-        () => ({})
-      );
-      if (body?.breakpoints) {
-        record.context.breakpoints = body.breakpoints as Breakpoint[];
-      }
-    } catch {
-      // ignore
+    const body: { breakpoints?: string[]; roles?: RoleCredential[]; hubToken?: string } = await this.readJsonBody<{
+      breakpoints?: string[];
+      roles?: RoleCredential[];
+      hubToken?: string;
+    }>(req).catch(() => ({}));
+    if (body?.breakpoints) {
+      record.context.breakpoints = body.breakpoints as Breakpoint[];
+    }
+    if (body?.hubToken) record.context.hubToken = body.hubToken;
+
+    // Sign-in details are never saved to disk, so a plan read back after a restart needs them again.
+    const notSaved = record.context.signInNotSaved || [];
+    if (notSaved.length > 0 && Array.isArray(body?.roles) && record.context.profile) {
+      const sent = new Map(body.roles.map((r) => [r.role, r]));
+      record.context.profile.roles = record.context.profile.roles.map((r) => sent.get(r.role) ?? r);
+      record.context.signInNotSaved = notSaved.filter((role) => !sent.has(role));
+    }
+    const stillMissing = record.context.signInNotSaved || [];
+    if (stillMissing.length > 0) {
+      this.sendJson(res, 409, {
+        error: `The QA Tool restarted since this plan was made, and sign-in details are never saved to disk. Send them again for: ${stillMissing.join(', ')}.`,
+        needsSignIn: stillMissing,
+      });
+      return;
     }
 
-
+    // The owner's own answers are remembered for the site; safe answers filled in now are not.
+    const draft = record.context.draft;
+    const answeredByOwner = Object.fromEntries(
+      (draft?.ambiguityQuestions || []).filter((q) => q.key && q.selectedAnswer).map((q) => [q.key!, q.selectedAnswer!])
+    );
     applySafeAnswers(record.plan.questions);
-    if (record.context.draft?.ambiguityQuestions) {
-      applySafeAnswers(record.context.draft.ambiguityQuestions);
-    }
+    if (draft?.ambiguityQuestions) applySafeAnswers(draft.ambiguityQuestions);
 
     let specTestCases: TestCase[];
-    if (record.plan.testCases && record.plan.testCases.length > 0) {
+    let notRun: RunOptions['notRun'] = [];
+    if (record.context.customTestCases && record.plan.testCases?.length) {
       specTestCases = record.plan.testCases;
-    } else if (record.context.draft) {
-      const planner = new TestPlanner();
-      specTestCases = [...planner.plan(record.context.draft).testCases, ...buildPageSweep(record.context.draft)];
-      if (specTestCases.length === 0) {
-        specTestCases = [this.defaultTestCase()];
-      }
+    } else if (draft) {
+      ({ specTestCases, notRun } = this.testsFor(draft, !!record.context.readOnly));
       record.plan.testCases = specTestCases;
     } else {
       specTestCases = [this.defaultTestCase()];
     }
+    if (draft) {
+      record.context.reportNotes = [...(record.context.reportNotes || []), ...this.handCheckNotes(draft)];
+      if (record.context.siteHost) {
+        const memory = await loadSiteMemory(this.dataDir, record.context.siteHost);
+        await saveSiteMemory(this.dataDir, rememberRun(memory, record.context.siteHost, draft, { reviewed: true, answeredByOwner }));
+      }
+    }
 
     this.sendJson(res, 200, { status: 'approved', runId: record.plan.runId });
 
-    this.executeTesting(record, specTestCases).catch((err: unknown) => {
+    this.executeTesting(record, specTestCases, notRun).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastRunError = msg;
       this.phase = 'failed';

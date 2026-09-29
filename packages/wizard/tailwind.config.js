@@ -1,23 +1,32 @@
 /**
- * Check-up wizard palette. Every text pairing is checked against WCAG AA in
- * tests/contrast.test.ts; see DESIGN.md for the reasoning behind each choice.
+ * Blueprint palette (Phase 1 direction B): a deep navy drawing board with light "drawings" on it.
+ * Every text pairing is checked against WCAG AA in tests/contrast.test.ts; see DESIGN.md for the
+ * reasoning behind each choice.
  */
 export const palette = {
-  paper: '#F3F6FB', // page background: cool, like a fresh form
-  surface: '#FFFFFF', // the sheet being filled in
-  ink: '#1B2440', // body text
-  'ink-soft': '#4B5675', // secondary text
-  rule: '#D5DCEA', // decorative dividers only (never the only cue)
-  edge: '#6E7A96', // form-control borders (3:1 against paper and surface)
-  stamp: '#5132C4', // stamp-pad violet: actions, focus, the verdict stamp
-  'stamp-dark': '#3D2399',
-  'stamp-tint': '#ECE8FB',
-  pass: '#1D6B45',
-  'pass-tint': '#E3F2EA',
-  fail: '#B42318',
-  'fail-tint': '#FBE9E7',
-  warn: '#8A5300',
-  'warn-tint': '#FBF0DC',
+  paper: '#111827', // page background
+  canvas: '#0D1322', // the map's drawing board
+  surface: '#1E2A3B', // cards and fields
+  panel: '#1A2438', // sidebars and the side panel
+  ink: '#E8EDF5', // body text
+  'ink-soft': '#A7B3C7', // secondary text
+  rule: '#2A3A52', // decorative dividers only (never the only cue)
+  edge: '#74859F', // control borders (3:1 against paper, panel and surface)
+  stamp: '#6C9BF2', // accent: actions, focus ring, progress
+  'stamp-dark': '#9DBDF7', // accent on hover (lighter on a dark board)
+  'stamp-tint': '#1C2C4C',
+  pass: '#4ADE9A',
+  'pass-tint': '#12302A',
+  fail: '#FA9191',
+  'fail-tint': '#3A1C20',
+  warn: '#FBC54A',
+  'warn-tint': '#3A2F14',
+  // One colour per journey on the map, like an architect's mark-up lines.
+  j1: '#B69CFB',
+  j2: '#6FB0FA',
+  j3: '#4ADE9A',
+  j4: '#F59AC6',
+  j5: '#FBA35C',
 };
 
 /** @type {import('tailwindcss').Config} */
@@ -30,6 +39,8 @@ export default {
       fontFamily: {
         sans: ['"Atkinson Hyperlegible Next Variable"', 'system-ui', 'sans-serif'],
         stamp: ['"Big Shoulders Stencil Display"', 'Impact', 'sans-serif'],
+        // Reference labels on the map (pg-01 · /cart): a system monospace, nothing to download.
+        mono: ['ui-monospace', '"Cascadia Mono"', 'Consolas', '"SF Mono"', 'monospace'],
       },
       fontSize: {
         // 18px base: this audience reads, it does not scan

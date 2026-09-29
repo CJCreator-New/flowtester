@@ -1,0 +1,609 @@
+{
+  "host": "localhost:3190",
+  "runs": [
+    {
+      "runId": "run-1790674382097",
+      "timestamp": "2026-09-29T09:34:31.640Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "F",
+            "score": 55,
+            "findings": [
+              "F-BUG-SWEEP-006-1",
+              "F-HTTP-SWEEP-006-2"
+            ]
+          },
+          "Accessible": {
+            "grade": "C",
+            "score": 70,
+            "findings": [
+              "F-A11Y-SWEEP-004-1",
+              "F-UX-DEADEND-SWEEP-008-1"
+            ]
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "F",
+            "score": 56,
+            "findings": [
+              "F-SEO-TC-FLOW-DASHBOARD-DESC-1",
+              "F-SEO-TC-FLOW-DASHBOARD-H1-MISSING-2",
+              "F-SEO-TC-FLOW-DASHBOARD-OG-3",
+              "F-SEO-SWEEP-001-DESC-1",
+              "F-SEO-SWEEP-001-OG-2",
+              "F-SEO-SWEEP-002-DESC-1",
+              "F-SEO-SWEEP-002-H1-MISSING-2",
+              "F-SEO-SWEEP-002-OG-3",
+              "F-SEO-SWEEP-003-DESC-1",
+              "F-SEO-SWEEP-003-H1-MISSING-2",
+              "F-SEO-SWEEP-003-OG-3",
+              "F-SEO-SWEEP-004-TITLE-1",
+              "F-SEO-SWEEP-004-DESC-2",
+              "F-SEO-SWEEP-004-OG-3",
+              "F-SEO-SWEEP-005-DESC-1",
+              "F-SEO-SWEEP-005-OG-2",
+              "F-SEO-SWEEP-007-DESC-1",
+              "F-SEO-SWEEP-007-OG-2",
+              "F-SEO-SWEEP-008-DESC-1",
+              "F-SEO-SWEEP-008-OG-2"
+            ]
+          },
+          "Secure": {
+            "grade": "B",
+            "score": 85,
+            "findings": [
+              "F-SEC-SWEEP-002-FORM"
+            ]
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "C",
+        "overallScore": 78
+      },
+      "findingFingerprints": [
+        "fp_610c94cb977b4b58",
+        "fp_9588c945ba695b9a",
+        "fp_99f2cc97ed04cc8c",
+        "fp_6bdcb556d7668f91",
+        "fp_454b24fceeb7b091",
+        "fp_acd977b2bed86678",
+        "fp_28625a86dff1be6f",
+        "fp_20a9d688f56d9869",
+        "fp_f2169102b1fae71a",
+        "fp_2b87453af4d9220c",
+        "fp_a9f09d093745d47d",
+        "fp_f72e0996183c9534",
+        "fp_f4b1514af01bc61d",
+        "fp_964d4774b66e0d1f",
+        "fp_8d664c4dda4009ad",
+        "fp_1a8f645c85810324",
+        "fp_b07b6858277509fa",
+        "fp_5f1e899e5d988395",
+        "fp_d78095957950a75c",
+        "fp_3305f6996b3a2ddf",
+        "fp_eba8be91aab31644",
+        "fp_d859ad452e0fdee8",
+        "fp_5f480cd55bed0351",
+        "fp_9e34aa8a924f122c",
+        "fp_20e464f636cca624"
+      ]
+    },
+    {
+      "runId": "run-1790674473319",
+      "timestamp": "2026-09-29T09:36:41.403Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "F",
+            "score": 55,
+            "findings": [
+              "F-BUG-SWEEP-006-1",
+              "F-HTTP-SWEEP-006-2"
+            ]
+          },
+          "Accessible": {
+            "grade": "C",
+            "score": 70,
+            "findings": [
+              "F-A11Y-SWEEP-004-1",
+              "F-UX-DEADEND-SWEEP-008-1"
+            ]
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "F",
+            "score": 56,
+            "findings": [
+              "F-SEO-TC-FLOW-INVOICE-DESC-1",
+              "F-SEO-TC-FLOW-INVOICE-H1-MISSING-2",
+              "F-SEO-TC-FLOW-INVOICE-OG-3",
+              "F-SEO-TC-FLOW-DASHBOARD-DESC-1",
+              "F-SEO-TC-FLOW-DASHBOARD-H1-MISSING-2",
+              "F-SEO-TC-FLOW-DASHBOARD-OG-3",
+              "F-SEO-SWEEP-001-DESC-1",
+              "F-SEO-SWEEP-001-OG-2",
+              "F-SEO-SWEEP-002-DESC-1",
+              "F-SEO-SWEEP-002-H1-MISSING-2",
+              "F-SEO-SWEEP-002-OG-3",
+              "F-SEO-SWEEP-003-DESC-1",
+              "F-SEO-SWEEP-003-H1-MISSING-2",
+              "F-SEO-SWEEP-003-OG-3",
+              "F-SEO-SWEEP-004-TITLE-1",
+              "F-SEO-SWEEP-004-DESC-2",
+              "F-SEO-SWEEP-004-OG-3",
+              "F-SEO-SWEEP-005-DESC-1",
+              "F-SEO-SWEEP-005-OG-2",
+              "F-SEO-SWEEP-007-DESC-1",
+              "F-SEO-SWEEP-007-OG-2",
+              "F-SEO-SWEEP-008-DESC-1",
+              "F-SEO-SWEEP-008-OG-2"
+            ]
+          },
+          "Secure": {
+            "grade": "B",
+            "score": 85,
+            "findings": [
+              "F-SEC-SWEEP-002-FORM"
+            ]
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "C",
+        "overallScore": 78
+      },
+      "findingFingerprints": [
+        "fp_f3535329b43506a2",
+        "fp_951616bf5b09c457",
+        "fp_334aa5fd3869b30c",
+        "fp_610c94cb977b4b58",
+        "fp_9588c945ba695b9a",
+        "fp_99f2cc97ed04cc8c",
+        "fp_6bdcb556d7668f91",
+        "fp_454b24fceeb7b091",
+        "fp_acd977b2bed86678",
+        "fp_28625a86dff1be6f",
+        "fp_20a9d688f56d9869",
+        "fp_f2169102b1fae71a",
+        "fp_2b87453af4d9220c",
+        "fp_a9f09d093745d47d",
+        "fp_f72e0996183c9534",
+        "fp_f4b1514af01bc61d",
+        "fp_964d4774b66e0d1f",
+        "fp_8d664c4dda4009ad",
+        "fp_1a8f645c85810324",
+        "fp_b07b6858277509fa",
+        "fp_5f1e899e5d988395",
+        "fp_d78095957950a75c",
+        "fp_3305f6996b3a2ddf",
+        "fp_eba8be91aab31644",
+        "fp_d859ad452e0fdee8",
+        "fp_5f480cd55bed0351",
+        "fp_9e34aa8a924f122c",
+        "fp_20e464f636cca624"
+      ]
+    },
+    {
+      "runId": "run-1790674614675",
+      "timestamp": "2026-09-29T09:38:14.376Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "F",
+            "score": 40,
+            "findings": [
+              "F-SPEC-TC-FLOW-USER-1790674621363-1",
+              "F-BUG-SWEEP-006-1",
+              "F-HTTP-SWEEP-006-2"
+            ]
+          },
+          "Accessible": {
+            "grade": "C",
+            "score": 70,
+            "findings": [
+              "F-A11Y-SWEEP-004-1",
+              "F-UX-DEADEND-SWEEP-008-1"
+            ]
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "F",
+            "score": 56,
+            "findings": [
+              "F-SEO-TC-FLOW-INVOICE-DESC-1",
+              "F-SEO-TC-FLOW-INVOICE-H1-MISSING-2",
+              "F-SEO-TC-FLOW-INVOICE-OG-3",
+              "F-SEO-SWEEP-001-DESC-1",
+              "F-SEO-SWEEP-001-OG-2",
+              "F-SEO-SWEEP-002-DESC-1",
+              "F-SEO-SWEEP-002-H1-MISSING-2",
+              "F-SEO-SWEEP-002-OG-3",
+              "F-SEO-SWEEP-003-DESC-1",
+              "F-SEO-SWEEP-003-H1-MISSING-2",
+              "F-SEO-SWEEP-003-OG-3",
+              "F-SEO-SWEEP-004-TITLE-1",
+              "F-SEO-SWEEP-004-DESC-2",
+              "F-SEO-SWEEP-004-OG-3",
+              "F-SEO-SWEEP-005-DESC-1",
+              "F-SEO-SWEEP-005-OG-2",
+              "F-SEO-SWEEP-006-DESC-1",
+              "F-SEO-SWEEP-006-H1-MISSING-2",
+              "F-SEO-SWEEP-006-OG-3",
+              "F-SEO-SWEEP-007-DESC-1",
+              "F-SEO-SWEEP-007-OG-2",
+              "F-SEO-SWEEP-008-DESC-1",
+              "F-SEO-SWEEP-008-OG-2"
+            ]
+          },
+          "Secure": {
+            "grade": "B",
+            "score": 85,
+            "findings": [
+              "F-SEC-SWEEP-002-FORM"
+            ]
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "C",
+        "overallScore": 75
+      },
+      "findingFingerprints": [
+        "fp_f3535329b43506a2",
+        "fp_951616bf5b09c457",
+        "fp_334aa5fd3869b30c",
+        "fp_8181222158daac00",
+        "fp_6bdcb556d7668f91",
+        "fp_454b24fceeb7b091",
+        "fp_acd977b2bed86678",
+        "fp_28625a86dff1be6f",
+        "fp_20a9d688f56d9869",
+        "fp_f2169102b1fae71a",
+        "fp_2b87453af4d9220c",
+        "fp_a9f09d093745d47d",
+        "fp_f72e0996183c9534",
+        "fp_f4b1514af01bc61d",
+        "fp_964d4774b66e0d1f",
+        "fp_8d664c4dda4009ad",
+        "fp_1a8f645c85810324",
+        "fp_b07b6858277509fa",
+        "fp_5f1e899e5d988395",
+        "fp_d78095957950a75c",
+        "fp_3305f6996b3a2ddf",
+        "fp_610c94cb977b4b58",
+        "fp_9588c945ba695b9a",
+        "fp_99f2cc97ed04cc8c",
+        "fp_eba8be91aab31644",
+        "fp_d859ad452e0fdee8",
+        "fp_5f480cd55bed0351",
+        "fp_9e34aa8a924f122c",
+        "fp_20e464f636cca624"
+      ]
+    },
+    {
+      "runId": "run-1790675340961",
+      "timestamp": "2026-09-29T09:50:23.994Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "F",
+            "score": 55,
+            "findings": [
+              "F-BUG-SWEEP-006-1",
+              "F-HTTP-SWEEP-006-2"
+            ]
+          },
+          "Accessible": {
+            "grade": "C",
+            "score": 70,
+            "findings": [
+              "F-A11Y-SWEEP-004-1",
+              "F-UX-DEADEND-SWEEP-008-1"
+            ]
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "F",
+            "score": 56,
+            "findings": [
+              "F-SEO-TC-FLOW-DASHBOARD-DESC-1",
+              "F-SEO-TC-FLOW-DASHBOARD-H1-MISSING-2",
+              "F-SEO-TC-FLOW-DASHBOARD-OG-3",
+              "F-SEO-SWEEP-001-DESC-1",
+              "F-SEO-SWEEP-001-OG-2",
+              "F-SEO-SWEEP-002-DESC-1",
+              "F-SEO-SWEEP-002-H1-MISSING-2",
+              "F-SEO-SWEEP-002-OG-3",
+              "F-SEO-SWEEP-003-DESC-1",
+              "F-SEO-SWEEP-003-H1-MISSING-2",
+              "F-SEO-SWEEP-003-OG-3",
+              "F-SEO-SWEEP-004-TITLE-1",
+              "F-SEO-SWEEP-004-DESC-2",
+              "F-SEO-SWEEP-004-OG-3",
+              "F-SEO-SWEEP-005-DESC-1",
+              "F-SEO-SWEEP-005-OG-2",
+              "F-SEO-SWEEP-007-DESC-1",
+              "F-SEO-SWEEP-007-OG-2",
+              "F-SEO-SWEEP-008-DESC-1",
+              "F-SEO-SWEEP-008-OG-2"
+            ]
+          },
+          "Secure": {
+            "grade": "B",
+            "score": 85,
+            "findings": [
+              "F-SEC-SWEEP-002-FORM"
+            ]
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "C",
+        "overallScore": 78
+      },
+      "findingFingerprints": [
+        "fp_610c94cb977b4b58",
+        "fp_9588c945ba695b9a",
+        "fp_99f2cc97ed04cc8c",
+        "fp_6bdcb556d7668f91",
+        "fp_454b24fceeb7b091",
+        "fp_acd977b2bed86678",
+        "fp_28625a86dff1be6f",
+        "fp_20a9d688f56d9869",
+        "fp_f2169102b1fae71a",
+        "fp_2b87453af4d9220c",
+        "fp_a9f09d093745d47d",
+        "fp_f72e0996183c9534",
+        "fp_f4b1514af01bc61d",
+        "fp_964d4774b66e0d1f",
+        "fp_8d664c4dda4009ad",
+        "fp_1a8f645c85810324",
+        "fp_b07b6858277509fa",
+        "fp_5f1e899e5d988395",
+        "fp_d78095957950a75c",
+        "fp_3305f6996b3a2ddf",
+        "fp_eba8be91aab31644",
+        "fp_d859ad452e0fdee8",
+        "fp_5f480cd55bed0351",
+        "fp_9e34aa8a924f122c",
+        "fp_20e464f636cca624"
+      ]
+    },
+    {
+      "runId": "run-1790675424780",
+      "timestamp": "2026-09-29T09:51:56.011Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "F",
+            "score": 55,
+            "findings": [
+              "F-BUG-SWEEP-006-1",
+              "F-HTTP-SWEEP-006-2"
+            ]
+          },
+          "Accessible": {
+            "grade": "C",
+            "score": 70,
+            "findings": [
+              "F-A11Y-SWEEP-004-1",
+              "F-UX-DEADEND-SWEEP-008-1"
+            ]
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "F",
+            "score": 56,
+            "findings": [
+              "F-SEO-TC-FLOW-INVOICE-DESC-1",
+              "F-SEO-TC-FLOW-INVOICE-H1-MISSING-2",
+              "F-SEO-TC-FLOW-INVOICE-OG-3",
+              "F-SEO-TC-FLOW-DASHBOARD-DESC-1",
+              "F-SEO-TC-FLOW-DASHBOARD-H1-MISSING-2",
+              "F-SEO-TC-FLOW-DASHBOARD-OG-3",
+              "F-SEO-SWEEP-001-DESC-1",
+              "F-SEO-SWEEP-001-OG-2",
+              "F-SEO-SWEEP-002-DESC-1",
+              "F-SEO-SWEEP-002-H1-MISSING-2",
+              "F-SEO-SWEEP-002-OG-3",
+              "F-SEO-SWEEP-003-DESC-1",
+              "F-SEO-SWEEP-003-H1-MISSING-2",
+              "F-SEO-SWEEP-003-OG-3",
+              "F-SEO-SWEEP-004-TITLE-1",
+              "F-SEO-SWEEP-004-DESC-2",
+              "F-SEO-SWEEP-004-OG-3",
+              "F-SEO-SWEEP-005-DESC-1",
+              "F-SEO-SWEEP-005-OG-2",
+              "F-SEO-SWEEP-007-DESC-1",
+              "F-SEO-SWEEP-007-OG-2",
+              "F-SEO-SWEEP-008-DESC-1",
+              "F-SEO-SWEEP-008-OG-2"
+            ]
+          },
+          "Secure": {
+            "grade": "B",
+            "score": 85,
+            "findings": [
+              "F-SEC-SWEEP-002-FORM"
+            ]
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "C",
+        "overallScore": 78
+      },
+      "findingFingerprints": [
+        "fp_f3535329b43506a2",
+        "fp_951616bf5b09c457",
+        "fp_334aa5fd3869b30c",
+        "fp_610c94cb977b4b58",
+        "fp_9588c945ba695b9a",
+        "fp_99f2cc97ed04cc8c",
+        "fp_6bdcb556d7668f91",
+        "fp_454b24fceeb7b091",
+        "fp_acd977b2bed86678",
+        "fp_28625a86dff1be6f",
+        "fp_20a9d688f56d9869",
+        "fp_f2169102b1fae71a",
+        "fp_2b87453af4d9220c",
+        "fp_a9f09d093745d47d",
+        "fp_f72e0996183c9534",
+        "fp_f4b1514af01bc61d",
+        "fp_964d4774b66e0d1f",
+        "fp_8d664c4dda4009ad",
+        "fp_1a8f645c85810324",
+        "fp_b07b6858277509fa",
+        "fp_5f1e899e5d988395",
+        "fp_d78095957950a75c",
+        "fp_3305f6996b3a2ddf",
+        "fp_eba8be91aab31644",
+        "fp_d859ad452e0fdee8",
+        "fp_5f480cd55bed0351",
+        "fp_9e34aa8a924f122c",
+        "fp_20e464f636cca624"
+      ]
+    },
+    {
+      "runId": "run-1790675535858",
+      "timestamp": "2026-09-29T09:53:49.368Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "F",
+            "score": 40,
+            "findings": [
+              "F-SPEC-TC-FLOW-USER-1790675548080-1",
+              "F-BUG-SWEEP-006-1",
+              "F-HTTP-SWEEP-006-2"
+            ]
+          },
+          "Accessible": {
+            "grade": "C",
+            "score": 70,
+            "findings": [
+              "F-A11Y-SWEEP-004-1",
+              "F-UX-DEADEND-SWEEP-008-1"
+            ]
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "F",
+            "score": 56,
+            "findings": [
+              "F-SEO-TC-FLOW-INVOICE-DESC-1",
+              "F-SEO-TC-FLOW-INVOICE-H1-MISSING-2",
+              "F-SEO-TC-FLOW-INVOICE-OG-3",
+              "F-SEO-SWEEP-001-DESC-1",
+              "F-SEO-SWEEP-001-OG-2",
+              "F-SEO-SWEEP-002-DESC-1",
+              "F-SEO-SWEEP-002-H1-MISSING-2",
+              "F-SEO-SWEEP-002-OG-3",
+              "F-SEO-SWEEP-003-DESC-1",
+              "F-SEO-SWEEP-003-H1-MISSING-2",
+              "F-SEO-SWEEP-003-OG-3",
+              "F-SEO-SWEEP-004-TITLE-1",
+              "F-SEO-SWEEP-004-DESC-2",
+              "F-SEO-SWEEP-004-OG-3",
+              "F-SEO-SWEEP-005-DESC-1",
+              "F-SEO-SWEEP-005-OG-2",
+              "F-SEO-SWEEP-006-DESC-1",
+              "F-SEO-SWEEP-006-H1-MISSING-2",
+              "F-SEO-SWEEP-006-OG-3",
+              "F-SEO-SWEEP-007-DESC-1",
+              "F-SEO-SWEEP-007-OG-2",
+              "F-SEO-SWEEP-008-DESC-1",
+              "F-SEO-SWEEP-008-OG-2"
+            ]
+          },
+          "Secure": {
+            "grade": "B",
+            "score": 85,
+            "findings": [
+              "F-SEC-SWEEP-002-FORM"
+            ]
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "C",
+        "overallScore": 75
+      },
+      "findingFingerprints": [
+        "fp_f3535329b43506a2",
+        "fp_951616bf5b09c457",
+        "fp_334aa5fd3869b30c",
+        "fp_8181222158daac00",
+        "fp_6bdcb556d7668f91",
+        "fp_454b24fceeb7b091",
+        "fp_acd977b2bed86678",
+        "fp_28625a86dff1be6f",
+        "fp_20a9d688f56d9869",
+        "fp_f2169102b1fae71a",
+        "fp_2b87453af4d9220c",
+        "fp_a9f09d093745d47d",
+        "fp_f72e0996183c9534",
+        "fp_f4b1514af01bc61d",
+        "fp_964d4774b66e0d1f",
+        "fp_8d664c4dda4009ad",
+        "fp_1a8f645c85810324",
+        "fp_b07b6858277509fa",
+        "fp_5f1e899e5d988395",
+        "fp_d78095957950a75c",
+        "fp_3305f6996b3a2ddf",
+        "fp_610c94cb977b4b58",
+        "fp_9588c945ba695b9a",
+        "fp_99f2cc97ed04cc8c",
+        "fp_eba8be91aab31644",
+        "fp_d859ad452e0fdee8",
+        "fp_5f480cd55bed0351",
+        "fp_9e34aa8a924f122c",
+        "fp_20e464f636cca624"
+      ]
+    }
+  ]
+}

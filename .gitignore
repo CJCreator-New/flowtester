@@ -5,6 +5,8 @@ dist/
 .env
 .qa-keys.json
 .qa-ai-models.json
+# A plan paused for review (sign-in details are left out of it, but it names the site and its pages)
+.qa-plan.json
 
 # Run output (approved .qa-baselines/ are committed)
 .qa-report/

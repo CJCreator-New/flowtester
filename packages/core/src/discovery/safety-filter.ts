@@ -1,4 +1,5 @@
 import type { SensitiveAction, AmbiguityQuestion } from '@qa/types';
+import { sensitiveQuestion } from './questions.js';
 
 export class SafetyFilter {
   private forbiddenActions: string[];
@@ -65,17 +66,6 @@ export class SafetyFilter {
   }
 
   createAmbiguityQuestion(sensitive: SensitiveAction, index: number): AmbiguityQuestion {
-    return {
-      id: `Q-SENSITIVE-${index}`,
-      targetElement: sensitive.elementSelector,
-      urlPath: sensitive.urlPath,
-      question: `Encountered sensitive action "${sensitive.elementText}" (${sensitive.reason}). How should the test runner handle this?`,
-      options: [
-        'Allow action for this test run',
-        'Skip permanently (out of scope)',
-        'Use safe mock / simulated test data',
-      ],
-      category: 'sensitive_action',
-    };
+    return sensitiveQuestion(sensitive, index);
   }
 }

@@ -40,6 +40,8 @@ export class BugDetectionChecker {
         requestsByUrl.set(key, [...(requestsByUrl.get(key) || []), req]);
       }
       const attributed = new Set<ConsoleEntry>();
+      // A third-party failure is minor unless the page broke with it: a crash in the same step.
+      const pageBroke = step.consoleErrors.some((c) => c.text.includes('Uncaught Exception'));
 
       for (const [url, requests] of requestsByUrl) {
         const consoleSigns = step.consoleErrors.filter(
@@ -60,7 +62,7 @@ export class BugDetectionChecker {
           id: `F-HTTP-${context.testCaseId || 'GEN'}-${findingCounter++}`,
           testCaseId: context.testCaseId,
           flowId: context.flowId,
-          severity: isThirdParty ? 'Minor' : is5xx ? 'Blocker' : 'Major',
+          severity: isThirdParty ? (pageBroke ? 'Major' : 'Minor') : is5xx ? 'Blocker' : 'Major',
           checker: 'bug-detection',
           title: isThirdParty
             ? `Third-party request failed: HTTP ${status || 'Failed'} on ${method} ${url}`

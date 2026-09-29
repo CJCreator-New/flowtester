@@ -4,3 +4,5 @@ export * from './ux-quality.js';
 export * from './design-standards.js';
 export * from './permission-matrix.js';
 export * from './security.js';
+export * from './performance.js';
+export * from './seo.js';

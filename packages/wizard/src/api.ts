@@ -1,4 +1,4 @@
-import type { ReleaseReport, RoleCredential } from '@qa/types';
+import type { ReleaseReport, RoleCredential, ReviewPlan, DiscoveredFlow, TestCase } from '@qa/types';
 
 /**
  * Every call to the runner lives here, and every failure becomes a RunnerError whose message is a
@@ -37,6 +37,9 @@ export interface RunnerStatus {
   isRunning: boolean;
   hasReport: boolean;
   lastRunError: string | null;
+  phase?: 'idle' | 'scanning' | 'awaiting-review' | 'testing' | 'done' | 'failed';
+  hasPlan?: boolean;
+  runId?: string;
 }
 
 /** null means the runner can't be reached (not started yet, or stopped). */
@@ -96,28 +99,42 @@ export async function checkReachable(targetUrl: string): Promise<Reachability> {
 
 export type StartRunRequest =
   | {
-      mode: 'product';
+      mode?: 'product';
       targetUrl: string;
-      aiModel: string;
-      roles: RoleCredential[];
+      owner?: boolean;
+      skipReview?: boolean;
+      aiModel?: string;
+      roles?: RoleCredential[];
       productContext?: string;
     }
-  | { mode: 'safe-public'; targetUrl: string };
+  | { mode: 'safe-public'; targetUrl: string; owner?: boolean; skipReview?: boolean };
 
 export async function startRun(request: StartRunRequest): Promise<string> {
-  const productId = new URL(request.targetUrl).hostname;
-  const body =
-    request.mode === 'safe-public'
-      ? { targetUrl: request.targetUrl, productId, mode: 'safe-public' }
-      : {
-          targetUrl: request.targetUrl,
-          productId,
-          useAI: true,
-          aiProvider: 'openrouter',
-          aiModel: request.aiModel,
-          roles: request.roles,
-          ...(request.productContext ? { productContext: request.productContext } : {}),
-        };
+  let hostname = 'default-product';
+  try {
+    hostname = new URL(request.targetUrl).hostname;
+  } catch {
+    // handled by runner preflight
+  }
+  const productId = hostname;
+
+  const body: Record<string, unknown> = {
+    targetUrl: request.targetUrl,
+    productId,
+    owner: request.owner ?? true,
+    skipReview: request.skipReview ?? false,
+  };
+
+  if (request.mode === 'safe-public') {
+    body.mode = 'safe-public';
+  } else {
+    body.mode = 'product';
+    body.useAI = true;
+    body.aiProvider = 'openrouter';
+    if (request.aiModel) body.aiModel = request.aiModel;
+    if (request.roles) body.roles = request.roles;
+    if (request.productContext) body.productContext = request.productContext;
+  }
 
   const res = await call('/api/runner/run', { method: 'POST', body: JSON.stringify(body) });
   if (res.status === 409) {
@@ -127,25 +144,110 @@ export async function startRun(request: StartRunRequest): Promise<string> {
   return (await json<{ runId: string }>(res)).runId;
 }
 
+export async function getPlan(): Promise<ReviewPlan> {
+  const res = await call('/api/runner/plan');
+  if (res.status === 404) throw new RunnerError('No plan awaiting review right now.');
+  if (!res.ok) throw new RunnerError('Couldn’t fetch the plan. Try again.');
+  return json<ReviewPlan>(res);
+}
+
+export interface PatchPlanBody {
+  flows?: DiscoveredFlow[];
+  questions?: Array<{ id: string; selectedAnswer: string }>;
+  answers?: Record<string, string>;
+  testCases?: TestCase[];
+}
+
+export async function patchPlan(body: PatchPlanBody): Promise<ReviewPlan> {
+  const res = await call('/api/runner/plan', { method: 'PATCH', body: JSON.stringify(body) });
+  if (res.status === 422) {
+    const err = await json<{ error: string; issues?: string[] }>(res);
+    throw new RunnerError(err.error || 'Some steps are aimed at things that aren’t on the page.');
+  }
+  if (!res.ok) throw new RunnerError('Couldn’t update the plan. Try again.');
+  return json<ReviewPlan>(res);
+}
+
+export async function approvePlan(options?: { roles?: RoleCredential[]; breakpoints?: string[] }): Promise<void> {
+  const res = await call('/api/runner/plan/approve', { method: 'POST', body: JSON.stringify(options || {}) });
+  if (res.status === 409) {
+    const err = await json<{ error: string; needsSignIn?: string[] }>(res);
+    throw new RunnerError(err.error);
+  }
+  if (!res.ok) throw new RunnerError('Couldn’t start testing the plan. Try again.');
+}
+
+export interface InterpretResult {
+  ok: boolean;
+  flow?: DiscoveredFlow;
+  message?: string;
+}
+
+export async function interpretSentence(options: {
+  sentence: string;
+  urlPath?: string;
+  role?: string;
+  kind?: 'test' | 'rule';
+  flowId?: string;
+}): Promise<InterpretResult> {
+  const res = await call('/api/runner/plan/interpret', { method: 'POST', body: JSON.stringify(options) });
+  if (!res.ok) throw new RunnerError('Couldn’t interpret that test description.');
+  return json<InterpretResult>(res);
+}
+
 export async function getReport(): Promise<ReleaseReport> {
   const res = await call('/api/report');
   if (!res.ok) throw new RunnerError('The report isn’t available. Run the check again.');
   return json<ReleaseReport>(res);
 }
 
-/** Saves report.md and findings.json exactly as the runner wrote them. */
-export async function downloadReportFiles(): Promise<void> {
-  for (const file of ['report.md', 'findings.json']) {
-    const res = await call(`/api/report/download/${file}`);
-    if (!res.ok) throw new RunnerError('The report files couldn’t be downloaded. Try again.');
-    const blob = await res.blob();
-    const href = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = href;
-    link.download = file;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(href);
+/** Downloads the single-file offline HTML report. */
+export async function downloadHtmlReport(): Promise<void> {
+  const res = await call('/api/report/download/report.html');
+  if (!res.ok) throw new RunnerError('The HTML report couldn’t be downloaded. Try again.');
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = 'report.html';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
+}
+
+/** Saves report.html (first), plus report.md and findings.json. */
+export async function downloadReportFiles(onlyHtml = false): Promise<void> {
+  const files = onlyHtml ? ['report.html'] : ['report.html', 'report.md', 'findings.json'];
+  for (const file of files) {
+    try {
+      const res = await call(`/api/report/download/${file}`);
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = file;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(href);
+    } catch {
+      // Continue with remaining files
+    }
   }
+}
+
+/** Finishes AI visual and copy review for screens remaining after a partial run. */
+export async function finishAiReview(): Promise<{
+  completed: boolean;
+  reviewedCount: number;
+  remainingCount: number;
+  addedFindingsCount: number;
+  grades?: any;
+  note?: string;
+}> {
+  const res = await call('/api/runner/ai/finish', { method: 'POST' });
+  if (!res.ok) throw new RunnerError('Couldn’t finish AI review. Try again.');
+  return json(res);
 }

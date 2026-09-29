@@ -131,6 +131,13 @@ describe('RunnerServer', () => {
     expect((await fetch(`${runnerBaseUrl}/api/evidence/auth/manager.json`)).status).toBe(403);
     expect((await fetch(`${runnerBaseUrl}/api/evidence/auth%2Fmanager.json`)).status).toBe(403);
     expect((await fetch(`${runnerBaseUrl}/api/evidence/visible.json`)).status).toBe(200);
+
+    // Other spellings of the same folder: Windows and macOS open "AUTH" as "auth".
+    for (const variant of ['AUTH/manager.json', 'Auth/manager.json', 'auth./manager.json', 'auth%2E/manager.json']) {
+      const res = await fetch(`${runnerBaseUrl}/api/evidence/${variant}`);
+      expect(res.status, variant).not.toBe(200);
+      expect(await res.text(), variant).not.toContain('secret');
+    }
   });
 
   it('pauses in awaiting-review when skipReview: false, survives runner reload, accepts PATCH edits, and resumes on approve', async () => {
@@ -178,6 +185,30 @@ describe('RunnerServer', () => {
     const reloadedPlan = await reloadedPlanRes.json();
     expect(reloadedPlan.runId).toBe(runId);
 
+    // An edited test aimed at something the scan never found is refused, and nothing changes.
+    const refusedRes = await fetch(`${runnerBaseUrl}/api/runner/plan`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        answers: { [reloadedPlan.questions[0]?.id ?? 'none']: 'Skip permanently' },
+        testCases: [
+          {
+            id: 'TC-MADE-UP',
+            flowId: 'made-up',
+            role: 'anonymous',
+            startPage: '/dashboard',
+            steps: [{ action: 'click', selector: '[data-testid="no-such-button"]', name: 'Press a button that is not there' }],
+            expectations: {},
+          },
+        ],
+      }),
+    });
+    expect(refusedRes.status).toBe(422);
+    expect((await refusedRes.json()).issues[0].message).toContain('no-such-button');
+    const unchanged = await (await fetch(`${runnerBaseUrl}/api/runner/plan`)).json();
+    expect(unchanged.testCases).toEqual(reloadedPlan.testCases);
+    expect(unchanged.questions).toEqual(reloadedPlan.questions);
+
     // PATCH /api/runner/plan applies user edits
     const patchRes = await fetch(`${runnerBaseUrl}/api/runner/plan`, {
       method: 'PATCH',
@@ -220,7 +251,75 @@ describe('RunnerServer', () => {
     expect(reportRes.status).toBe(200);
     const report = await reportRes.json();
     expect(report.runId).toBe(runId);
+
+    // Once tested, the plan is gone: a restart doesn't bring it back for review.
+    await runner.stop();
+    runner = new RunnerServer({ port: RUNNER_PORT, outputDir, dataDir: `${outputDir}-data` });
+    await runner.start();
+    const afterRestart = await (await fetch(`${runnerBaseUrl}/api/runner/status`)).json();
+    expect(afterRestart).toMatchObject({ phase: 'idle', hasPlan: false, isRunning: false });
+    expect((await fetch(`${runnerBaseUrl}/api/runner/plan`)).status).toBe(404);
   }, 90000);
+
+  it('keeps sign-in details out of the saved plan, and asks for them again after a restart', async () => {
+    const roles = [{ role: 'manager', username: 'manager@example.com', password: 'manager-password', loginPath: '/signin' }];
+    const runRes = await fetch(`${runnerBaseUrl}/api/runner/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targetUrl: fixtureBaseUrl,
+        productId: 'secrets-test',
+        useAI: true,
+        aiProvider: 'mock',
+        skipReview: false,
+        breakpoints: ['375px'],
+        roles,
+        hubToken: 'hub-secret-token',
+      }),
+    });
+    expect(runRes.status).toBe(202);
+
+    let phase = 'scanning';
+    for (let i = 0; i < 90 && phase === 'scanning'; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      phase = (await (await fetch(`${runnerBaseUrl}/api/runner/status`)).json()).phase;
+    }
+    expect(phase).toBe('awaiting-review');
+
+    const saved = await fs.readFile(path.join(`${outputDir}-data`, '.qa-plan.json'), 'utf8');
+    expect(saved).not.toContain('manager-password');
+    expect(saved).not.toContain('manager@example.com');
+    expect(saved).not.toContain('hub-secret-token');
+
+    // After a restart the plan is still there, but approving needs the sign-in details again.
+    await runner.stop();
+    runner = new RunnerServer({ port: RUNNER_PORT, outputDir, dataDir: `${outputDir}-data` });
+    await runner.start();
+
+    const withoutRes = await fetch(`${runnerBaseUrl}/api/runner/plan/approve`, { method: 'POST' });
+    expect(withoutRes.status).toBe(409);
+    expect((await withoutRes.json()).needsSignIn).toEqual(['manager']);
+    expect((await (await fetch(`${runnerBaseUrl}/api/runner/status`)).json()).phase).toBe('awaiting-review');
+
+    const withRes = await fetch(`${runnerBaseUrl}/api/runner/plan/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roles }),
+    });
+    expect(withRes.status).toBe(200);
+
+    let isRunning = true;
+    for (let i = 0; i < 240 && isRunning; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      isRunning = (await (await fetch(`${runnerBaseUrl}/api/runner/status`)).json()).isRunning;
+    }
+    expect(isRunning).toBe(false);
+
+    // The details sent with the approval were used: the manager signed in.
+    const report = await (await fetch(`${runnerBaseUrl}/api/report`)).json();
+    expect(report.productId).toBe('secrets-test');
+    expect((report.notes || []).filter((n: string) => n.includes('Signing in as'))).toEqual([]);
+  }, 180000);
 
   it('runs straight through to completion when skipReview: true is provided', async () => {
     const runRes = await fetch(`${runnerBaseUrl}/api/runner/run`, {

@@ -214,6 +214,97 @@ export class SpecConformanceChecker {
       }
     }
 
+    // 2b. Sending a form should lead to another page, e.g. a confirmation page
+    if (testCase.expectations.navigatesAway) {
+      const { fromPath, description } = testCase.expectations.navigatesAway;
+      const urlPath = new URL(currentUrl, context.baseUrl).pathname;
+      if (urlPath === fromPath) {
+        findings.push(
+          asGuess(
+            {
+              id: `F-SPEC-${testCase.id}-${counter++}`,
+              testCaseId: testCase.id,
+              flowId: testCase.flowId,
+              severity: 'Major',
+              checker: 'spec-conformance',
+              title: `Stayed on ${fromPath} instead of moving on to a confirmation page`,
+              where: { urlPath, role: context.role, breakpoint: context.breakpoint },
+              expectedVsActual: {
+                expected: description || `After the steps, the page moves on from ${fromPath}`,
+                actual: `Still on ${urlPath}`,
+              },
+              stepsToReproduce: [
+                `Navigate to ${testCase.startPage}`,
+                ...testCase.steps.map((s) => `Execute "${s.name}"`),
+                `Look at which page you are on`,
+              ],
+              evidence: {
+                screenshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.screenshotPath,
+                domSnapshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.domSnapshotPath,
+              },
+              resolution: `After a successful send, take people to a page that confirms it.`,
+              verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
+            },
+            `Could not verify: expected to move on from ${fromPath}, but stayed there.`
+          )
+        );
+      }
+    }
+
+    // 2c. Sending a form should show a success message and no error
+    if (testCase.expectations.successMessage) {
+      const { description } = testCase.expectations.successMessage;
+      const messages = await page
+        .evaluate(() => {
+          const read = (selector: string) =>
+            Array.from(document.querySelectorAll(selector))
+              .filter((el) => {
+                const rect = (el as HTMLElement).getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0 && (el as HTMLElement).innerText.trim() !== '';
+              })
+              .map((el) => (el as HTMLElement).innerText.replace(/\s+/g, ' ').trim().slice(0, 160));
+          return {
+            success: read('[role="status"], [aria-live="polite"], [class*="success" i], [class*="toast" i], [class*="notice" i], [data-testid*="success" i]'),
+            error: read('[role="alert"], [class*="error" i], [class*="invalid" i], [data-testid*="error" i]'),
+          };
+        })
+        .catch(() => ({ success: [] as string[], error: [] as string[] }));
+      if (messages.success.length > 0 && messages.error.length === 0) {
+        context.onObservation?.(`Sending the form shows: "${messages.success[0]}"`);
+      } else {
+        const urlPath = new URL(currentUrl, context.baseUrl).pathname;
+        findings.push(
+          asGuess(
+            {
+              id: `F-SPEC-${testCase.id}-${counter++}`,
+              testCaseId: testCase.id,
+              flowId: testCase.flowId,
+              severity: 'Major',
+              checker: 'spec-conformance',
+              title: messages.error.length > 0 ? 'An error appeared instead of a success message' : 'No success message appeared',
+              where: { urlPath, role: context.role, breakpoint: context.breakpoint },
+              expectedVsActual: {
+                expected: description || 'A success message appears after the steps',
+                actual: messages.error.length > 0 ? `The page showed: "${messages.error[0]}"` : 'No success message appeared',
+              },
+              stepsToReproduce: [
+                `Navigate to ${testCase.startPage}`,
+                ...testCase.steps.map((s) => `Execute "${s.name}"`),
+                `Look for a message saying it worked`,
+              ],
+              evidence: {
+                screenshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.screenshotPath,
+                domSnapshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.domSnapshotPath,
+              },
+              resolution: 'Show a short message saying the form was sent.',
+              verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
+            },
+            'Could not verify: expected a success message after sending the form.'
+          )
+        );
+      }
+    }
+
     // 3. API Call expectation
     if (testCase.expectations.apiCall) {
       const { method, path: apiPath, status } = testCase.expectations.apiCall;

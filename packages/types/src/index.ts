@@ -10,7 +10,10 @@ export type CheckerType =
   | 'design-standards'
   | 'ux-quality'
   | 'permission-matrix'
-  | 'security';
+  | 'security'
+  | 'performance'
+  | 'seo'
+  | 'ai-review';
 
 export type TriageStatus = 'Pending' | 'Confirmed' | 'Intended' | 'False Positive' | 'Resolved';
 
@@ -73,6 +76,10 @@ export interface TestCaseExpectations {
     disabled?: boolean;
     description?: string;
   };
+  /** After the steps, the page is no longer `fromPath`, e.g. a form led to a confirmation page. */
+  navigatesAway?: { fromPath: string; description?: string };
+  /** After the steps, a success message shows on the page and no error does. */
+  successMessage?: { description?: string };
 }
 
 export interface ValidationRule {
@@ -250,6 +257,12 @@ export interface TestPointResult {
   videoPath?: string;
   /** What the site was seen doing, e.g. the error message it showed. Becomes an 'observed' rule. */
   observations?: string[];
+  /** Why a Skipped test point wasn't run, in plain words, e.g. "Needs a test copy". */
+  skipReason?: string;
+  /** The screen width it ran at. */
+  breakpoint?: Breakpoint;
+  /** Every check that ran, and how it went, so a report can list the passed ones too. */
+  checks?: Array<{ checker: CheckerType; name: string; outcome: 'passed' | 'failed' | 'could-not-verify' }>;
 }
 
 export interface RunCoverage {
@@ -304,15 +317,92 @@ export interface ReleaseReport {
   usedFallbackDiscovery?: boolean;
   /**
    * 'safe-public' when this report came from a read-only website scan (no sign-in, no form
-   * submissions, no data changes), so it must not be read as full product coverage.
+   * submissions, no data changes), so it must not be read as full product coverage. 'read-only'
+   * when a planned run was kept from sending forms because the site isn't a test copy.
    */
-  scanMode?: 'full' | 'safe-public';
+  scanMode?: 'full' | 'read-only' | 'safe-public';
   /** Plain sentences about what this run could and couldn't cover, e.g. pages behind a sign-in. */
   notes?: string[];
   /** Pages a website scan visited, in order, grouped by layout (pages built from one template share a group). */
   pages?: VisitedPage[];
   /** The AI models that planned the run (text) and would review screenshots (vision). */
   aiModels?: { text?: string; vision?: string };
+  grades?: SiteAspectGrades;
+  recommendations?: RankedRecommendation[];
+  history?: SiteHistoryDiff;
+  singleFileHtmlReportPath?: string;
+  /** The site as the plan saw it, so the report can be drawn as a map. Absent for runs without a scan. */
+  siteMap?: SiteMapSummary;
+}
+
+export type AspectType =
+  | 'Works'
+  | 'Accessible'
+  | 'Fast and mobile'
+  | 'Findable'
+  | 'Secure'
+  | 'Looks and reads well';
+
+export type AspectGrade = 'A' | 'B' | 'C' | 'D' | 'F';
+
+export interface AspectScore {
+  grade: AspectGrade;
+  score: number;
+  findings: string[];
+}
+
+export interface SiteAspectGrades {
+  aspects: Record<AspectType, AspectScore>;
+  overallGrade: AspectGrade;
+  overallScore: number;
+}
+
+export interface RankedRecommendation {
+  id: string;
+  category: 'quick-win' | 'bigger-change';
+  title: string;
+  aspect: AspectType;
+  severity: FindingSeverity;
+  effort: 'Low' | 'Medium' | 'High';
+  impact: 'Low' | 'Medium' | 'High';
+  affectedPages: string[];
+  findingIds: string[];
+  screenshotPath?: string;
+  summary: string;
+  suggestedFix: string;
+  isAiGenerated?: boolean;
+}
+
+export interface AspectGradeDelta {
+  previousGrade?: AspectGrade;
+  currentGrade: AspectGrade;
+  previousScore?: number;
+  currentScore: number;
+}
+
+export interface SiteHistoryDiff {
+  previousRunId?: string;
+  previousTimestamp?: string;
+  aspectDeltas: Record<AspectType, AspectGradeDelta>;
+  newFindingFingerprints: string[];
+  fixedFindingFingerprints: string[];
+  openFindingFingerprints: string[];
+}
+
+/** Pages and journeys of a planned run, for drawing the site map in a report. */
+export interface SiteMapSummary {
+  siteType?: string;
+  pages: Array<{ urlPath: string; title: string; layoutGroup?: string; screenshotPath?: string; isNew?: boolean; reachedBy?: string[] }>;
+  journeys: Array<{
+    id: string;
+    name: string;
+    reason?: string;
+    /** The pages the journey passes through, in order. */
+    pages: string[];
+    needsTestCopy?: boolean;
+    skipped?: boolean;
+    source?: 'ai' | 'fallback' | 'user';
+  }>;
 }
 
 export interface VisitedPage {
@@ -356,6 +446,14 @@ export interface AmbiguityQuestion {
   options: string[]; // e.g. ["Allow action for tests", "Skip permanently", "Use safe mock input"]
   selectedAnswer?: string;
   category: 'sensitive_action' | 'untested_form' | 'missing_permission' | 'unlinked_page' | 'unverified_step';
+  /** The same for the same question on every run, so a site's answers can be remembered. */
+  key?: string;
+  /** The answer that sends nothing and deletes nothing, used when nobody answers. */
+  safeAnswer?: string;
+  /** The journey the question is about, when it is about one. */
+  flowId?: string;
+  /** Not asked in this site's last reviewed run. */
+  isNew?: boolean;
 }
 
 /** One interactive element the crawler saw on a page. Plans may only target elements listed here. */
@@ -393,6 +491,12 @@ export interface PageInventoryItem {
   hasSignInForm?: boolean;
   /** Who reached this page while exploring: 'visitor' (signed out) and/or role names. */
   reachedBy?: string[];
+  /** Pages built from the same template share a group, e.g. "layout-2" for every product page. */
+  layoutGroup?: string;
+  /** A small screenshot of the page, relative to the report folder. */
+  screenshotPath?: string;
+  /** Not found in this site's last reviewed run. */
+  isNew?: boolean;
 }
 
 export interface DiscoveredFlow {
@@ -402,6 +506,7 @@ export interface DiscoveredFlow {
   description: string;
   startPage: string;
   steps: TestCaseStep[];
+  /** Rules the AI inferred. Always AI guesses: they never fail a site until someone confirms them. */
   inferredRules?: string[];
   candidateExpectations?: TestCaseExpectations;
   candidateValidationRules?: ValidationRule[];
@@ -411,6 +516,17 @@ export interface DiscoveredFlow {
    * A flow needing help is not run until someone fixes it in the plan review.
    */
   needsHelp?: string[];
+  /** It sends a form or presses something that changes data: on a live site it stays in the plan but isn't run. */
+  needsTestCopy?: boolean;
+  /** Who planned it: the AI, the fixed rules used when there's no AI, or the user. */
+  source?: 'ai' | 'fallback' | 'user';
+  /**
+   * Business rules the user added in plain words. A checkable rule becomes its own test: the
+   * journey's steps with the rule's check. Others are listed in the report for a person to check.
+   */
+  userRules?: Array<{ text: string; origin: RuleOrigin; checkable: boolean; check?: TestCaseExpectations }>;
+  /** Not in this site's last reviewed run, or its steps changed since. */
+  isNew?: boolean;
 }
 
 export interface DiscoveryDraft {
@@ -440,12 +556,23 @@ export interface DiscoveryDraft {
   };
   /** Site category: 'shop' | 'SaaS' | 'content' | 'booking' | 'app' | 'other' */
   siteType?: 'shop' | 'SaaS' | 'content' | 'booking' | 'app' | 'other';
+  /** Form fields and submit buttons the crawler found. Plan steps may use their selectors too. */
+  forms?: Array<{
+    urlPath: string;
+    inputs: Array<{ selector: string }>;
+    submitButtonSelector?: string;
+    /** How the form is sent: GET only fetches a page (a search); anything else sends data. */
+    method?: string;
+  }>;
+  /** True when this plan runs read-only because the site isn't a test copy. */
+  readOnly?: boolean;
 }
 
 
 // --- Phase 3: Hub, Consolidation, Design & UX Types ---
 
 export * from './fingerprint.js';
+export * from './site-map.js';
 
 export type FindingLifecycleStatus = 'OPEN' | 'VERIFIED_FIXED' | 'REGRESSED' | 'ACCEPTED_RISK';
 
@@ -718,6 +845,18 @@ export interface ReviewPlan {
   testCases?: TestCase[];
   /** True if the generic template fallback was used because AI discovery failed. */
   usedFallbackDiscovery?: boolean;
+  /** The site isn't a test copy: journeys that send a form stay in the plan but aren't run. */
+  readOnly?: boolean;
+  /** Why the run is read-only, in plain words. */
+  readOnlyReason?: string;
+  /** Sentences about what the scan could and couldn't reach, e.g. pages behind a sign-in. */
+  notes?: string[];
+  /** What changed since this site's last run. Absent on a site's first run. */
+  sinceLastRun?: { newPages: number; newJourneys: number; newQuestions: number; rememberedAnswers: number };
+  /** False when no AI key is set up: fixed rules chose the journeys, and describing a test is off. */
+  aiAvailable?: boolean;
+  /** Roles that signed in and explored the site. */
+  signedInAs?: string[];
   /** Journeys translated to plain sentences with origins. */
   journeys?: PlanJourney[];
   /** Fixed site-wide checks that apply across all pages. */

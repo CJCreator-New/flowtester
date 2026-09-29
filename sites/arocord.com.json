@@ -1,0 +1,18 @@
+{
+  "host": "arocord.com",
+  "updatedAt": "2026-09-29T10:57:56.131Z",
+  "pages": [
+    "/"
+  ],
+  "journeys": {
+    "/|visit the main pages": {
+      "name": "Visit the main pages",
+      "steps": "navigate:/"
+    }
+  },
+  "questions": [],
+  "answers": {},
+  "edits": {},
+  "addedJourneys": [],
+  "observed": {}
+}

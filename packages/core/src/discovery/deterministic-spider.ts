@@ -1,8 +1,12 @@
+import { promises as fs } from 'fs';
+import path from 'path';
 import type { BrowserContext } from 'playwright';
 import type { PageInventoryItem, SensitiveAction, AmbiguityQuestion, ElementInventoryItem } from '@qa/types';
 import { SafetyFilter } from './safety-filter.js';
 import { collectElementInventory, TEST_ID_ATTRIBUTES } from './element-inventory.js';
 import { redactUrl } from '../redact.js';
+import { readLayoutFingerprint } from '../competitive/safe-crawler.js';
+import type { RobotsPolicy } from '../competitive/robots.js';
 
 export interface FormInputInfo {
   /** The HTML name attribute (may be empty). */
@@ -31,6 +35,8 @@ export interface SpiderResult {
   ambiguityQuestions: AmbiguityQuestion[];
   /** Pages that sent the crawler to a sign-in form instead of opening. */
   signInWalls: string[];
+  /** Same-site pages robots.txt asked crawlers to leave alone. */
+  skippedByRobots?: string[];
 }
 
 export interface CrawlOptions {
@@ -38,6 +44,14 @@ export interface CrawlOptions {
   startPaths?: string[];
   /** Click script-driven links and navigation buttons to find pages links alone don't reach. Default true. */
   exploreClicks?: boolean;
+  /** Pages robots.txt asks crawlers to leave alone are skipped (public sites). */
+  robots?: RobotsPolicy;
+  /** Minimum pause between page loads, to go easy on a site we don't own. Default 0. */
+  pageDelayMs?: number;
+  /** Folder for a small screenshot of each page, shown on the plan map. None when absent. */
+  screenshotDir?: string;
+  /** Start of each screenshot's file name, so crawls as different roles don't overwrite each other. */
+  screenshotPrefix?: string;
 }
 
 /** Links and buttons that would end a signed-in session. */
@@ -83,8 +97,11 @@ export class DeterministicSpider {
     const sensitiveActions: SensitiveAction[] = [];
     const ambiguityQuestions: AmbiguityQuestion[] = [];
     const signInWalls: string[] = [];
+    const skippedByRobots: string[] = [];
     let questionCounter = 1;
     let clickBudget = MAX_EXPLORATION_CLICKS;
+    let lastLoadAt = 0;
+    if (options.screenshotDir) await fs.mkdir(options.screenshotDir, { recursive: true });
 
     const page = await context.newPage();
 
@@ -95,8 +112,15 @@ export class DeterministicSpider {
       visited.add(requestedPath);
 
       const fullUrl = new URL(requested, targetUrl).toString();
+      if (options.robots && !options.robots.isAllowed(requested)) {
+        skippedByRobots.push(requestedPath);
+        continue;
+      }
 
       try {
+        // Go easy on sites we don't own: a pause between page loads.
+        if (options.pageDelayMs) await page.waitForTimeout(Math.max(0, lastLoadAt + options.pageDelayMs - Date.now()));
+        lastLoadAt = Date.now();
         await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
         const landed = new URL(page.url());
         const hasSignInForm = (await page.locator('input[type="password"]').count()) > 0;
@@ -202,6 +226,15 @@ export class DeterministicSpider {
           });
         }
 
+        // The fingerprint itself names the group: the same template gets the same name in every
+        // crawl (signed out or as any role) and on every run.
+        const fingerprint = await readLayoutFingerprint(page);
+        let screenshotPath: string | undefined;
+        if (options.screenshotDir) {
+          screenshotPath = path.join(options.screenshotDir, `${options.screenshotPrefix || 'page'}-${pages.length + 1}.jpg`);
+          await page.screenshot({ path: screenshotPath, type: 'jpeg', quality: 55 }).catch(() => (screenshotPath = undefined));
+        }
+
         pages.push({
           urlPath: currentPath,
           title,
@@ -209,6 +242,8 @@ export class DeterministicSpider {
           formsCount: pageForms.length,
           elements,
           hasSignInForm: hasSignInForm || undefined,
+          layoutGroup: fingerprint ? `layout-${fingerprint}` : undefined,
+          screenshotPath,
         });
 
         // 4. Single-page apps navigate by script: try the controls that look like navigation.
@@ -223,7 +258,11 @@ export class DeterministicSpider {
           for (const el of candidates.slice(0, MAX_CLICKS_PER_PAGE)) {
             if (clickBudget-- <= 0) break;
             try {
-              if (page.url() !== fullUrl) await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+              if (page.url() !== fullUrl) {
+                if (options.pageDelayMs) await page.waitForTimeout(Math.max(0, lastLoadAt + options.pageDelayMs - Date.now()));
+                lastLoadAt = Date.now();
+                await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+              }
               await page.locator(el.selector).first().click({ timeout: 3000 });
               await page.waitForTimeout(600);
               const after = new URL(page.url());
@@ -246,6 +285,7 @@ export class DeterministicSpider {
       sensitiveActions,
       ambiguityQuestions,
       signInWalls,
+      skippedByRobots: skippedByRobots.length > 0 ? skippedByRobots : undefined,
     };
   }
 

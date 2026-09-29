@@ -1,156 +1,121 @@
 import { describe, it, expect } from 'vitest';
+import type { ElementInventoryItem, PageInventoryItem } from '@qa/types';
 import { detectSiteType, generateFallbackJourneys } from '../src/discovery/site-type.js';
-import type { PageInventoryItem } from '@qa/types';
 import type { SpiderResult } from '../src/discovery/deterministic-spider.js';
 
-describe('detectSiteType and generateFallbackJourneys (Task 1.4 / D4)', () => {
-  it('detects books.toscrape.com as "shop" and synthesizes a browse -> product journey', () => {
-    const pages: PageInventoryItem[] = [
-      {
-        urlPath: '/',
-        title: 'All products | Books to Scrape',
-        elements: [
-          { role: 'link', name: 'A Light in the Attic', selector: 'article.product_pod h3 a' },
-          { role: 'button', name: 'Add to basket', selector: 'form button[type="submit"]' },
-        ],
-      },
-      {
-        urlPath: '/catalogue/a-light-in-the-attic_1000/index.html',
-        title: 'A Light in the Attic | Books to Scrape',
-        elements: [
-          { role: 'button', name: 'Add to basket', selector: 'button.btn-primary' },
-        ],
-      },
-    ];
+const el = (role: string, name: string, selector: string, extra: Partial<ElementInventoryItem> = {}): ElementInventoryItem => ({
+  role,
+  name,
+  selector,
+  tagName: role === 'link' ? 'a' : role === 'textbox' ? 'input' : 'button',
+  visible: true,
+  enabled: true,
+  ...extra,
+});
 
-    const type = detectSiteType(pages, 'https://books.toscrape.com/');
-    expect(type).toBe('shop');
+const page = (urlPath: string, title: string, elements: ElementInventoryItem[] = [], extra: Partial<PageInventoryItem> = {}): PageInventoryItem => ({
+  urlPath,
+  title,
+  interactiveElementsCount: elements.length,
+  formsCount: 0,
+  elements,
+  ...extra,
+});
 
-    const spiderResult: SpiderResult = {
-      pages,
-      forms: [],
-      routes: ['/', '/catalogue/a-light-in-the-attic_1000/index.html'],
-      buttons: [],
-      anchors: [],
-    };
+const spider = (pages: PageInventoryItem[], forms: SpiderResult['forms'] = []): SpiderResult => ({
+  pages,
+  forms,
+  sensitiveActions: [],
+  ambiguityQuestions: [],
+  signInWalls: [],
+});
 
-    const journeys = generateFallbackJourneys(type, spiderResult);
-    expect(journeys.length).toBeGreaterThanOrEqual(1);
+// What the scan of books.toscrape.com records (its address says nothing about shopping).
+const books = [
+  page('/', 'All products | Books to Scrape - Sandbox', [
+    el('link', 'A Light in the Attic', 'role=link[name="A Light in the Attic"]', { href: 'catalogue/a-light-in-the-attic_1000/index.html' }),
+    el('button', 'Add to basket', 'role=button[name="Add to basket"]', { insideForm: true }),
+  ]),
+  page('/catalogue/a-light-in-the-attic_1000/index.html', 'A Light in the Attic | Books to Scrape - Sandbox', [
+    el('button', 'Add to basket', 'role=button[name="Add to basket"]', { insideForm: true }),
+  ]),
+];
 
-    const browseJourney = journeys.find((j) => j.name.toLowerCase().includes('browse') || j.name.toLowerCase().includes('product'));
-    expect(browseJourney).toBeDefined();
-    expect(browseJourney!.description).toBeTruthy();
-    expect(browseJourney!.description.length).toBeGreaterThan(10);
-    // Should have navigate and click steps
-    expect(browseJourney!.steps.some((s) => s.action === 'navigate')).toBe(true);
-    expect(browseJourney!.steps.some((s) => s.action === 'click')).toBe(true);
+// TodoMVC: one screen, one field outside any form.
+const todo = [page('/todomvc/', 'React • TodoMVC', [el('textbox', 'What needs to be done?', '.new-todo', { inputType: 'text' })])];
+
+describe('Site type (Task 1.4 / D4)', () => {
+  it('names a shop from its pages and buttons, not its address', () => {
+    expect(detectSiteType(books, 'https://books.toscrape.com/')).toBe('shop');
   });
 
-  it('detects TodoMVC as "app" and synthesizes task creation journey', () => {
-    const pages: PageInventoryItem[] = [
-      {
-        urlPath: '/',
-        title: 'TodoMVC',
-        elements: [
-          { role: 'textbox', name: 'What needs to be done?', selector: 'input.new-todo', testId: 'new-todo' },
-        ],
-      },
-    ];
-
-    const type = detectSiteType(pages, 'https://demo.playwright.dev/todomvc/');
-    expect(type).toBe('app');
-
-    const spiderResult: SpiderResult = {
-      pages,
-      forms: [],
-      routes: ['/'],
-      buttons: [],
-      anchors: [],
-    };
-
-    const journeys = generateFallbackJourneys(type, spiderResult);
-    expect(journeys.length).toBeGreaterThanOrEqual(1);
-
-    const taskJourney = journeys.find((j) => j.name.toLowerCase().includes('submit') || j.name.toLowerCase().includes('item') || j.name.toLowerCase().includes('create'));
-    expect(taskJourney).toBeDefined();
-    expect(taskJourney!.description).toBeTruthy();
-    expect(taskJourney!.steps.some((s) => s.action === 'fill')).toBe(true);
+  it('names a one-screen to-do list an app', () => {
+    expect(detectSiteType(todo, 'https://demo.playwright.dev/todomvc/')).toBe('app');
   });
 
-  it('detects SaaS and content sites based on content and structure signals', () => {
-    const saasPages: PageInventoryItem[] = [
-      {
-        urlPath: '/dashboard',
-        title: 'Team Dashboard',
-        elements: [
-          { role: 'link', name: 'Billing & Invoices', selector: 'a[href="/billing"]' },
-          { role: 'button', name: 'Upgrade Plan', selector: 'button.upgrade' },
-        ],
-      },
-    ];
-    expect(detectSiteType(saasPages, 'https://cloud-app.io/dashboard')).toBe('SaaS');
-
-    const contentPages: PageInventoryItem[] = [
-      {
-        urlPath: '/blog/first-post',
-        title: 'Company Blog Articles & News',
-        elements: [],
-      },
-      {
-        urlPath: '/guides/getting-started',
-        title: 'Documentation Guide',
-        elements: [],
-      },
-    ];
-    expect(detectSiteType(contentPages, 'https://news-docs.org')).toBe('content');
+  it('reads whole words in an address: a workshop is not a shop', () => {
+    expect(detectSiteType([page('/', 'Welcome')], 'https://shop.example.com/')).toBe('shop');
+    expect(detectSiteType([page('/', 'Welcome')], 'https://workshop.example.com/')).toBe('other');
   });
 
-  it('synthesizes 3-5 journeys with reasons when forms and multiple pages exist', () => {
-    const pages: PageInventoryItem[] = [
-      { urlPath: '/', title: 'Home', elements: [] },
-      { urlPath: '/contact', title: 'Contact Us', elements: [] },
-      { urlPath: '/pricing', title: 'Pricing', elements: [] },
-    ];
+  it('names SaaS and content sites from their pages', () => {
+    const saas = [page('/dashboard', 'Team Dashboard', [el('button', 'Upgrade Plan', 'button.upgrade')])];
+    expect(detectSiteType(saas, 'https://cloud-app.io/dashboard')).toBe('SaaS');
 
-    const spiderResult: SpiderResult = {
-      pages,
-      forms: [
-        {
-          id: 'contact-form',
-          name: 'Contact',
-          urlPath: '/contact',
-          selector: 'form#contact',
-          submitButtonSelector: 'button[type="submit"]',
-          inputs: [
-            { type: 'text', name: 'name', selector: 'input[name="name"]', label: 'Full Name' },
-            { type: 'email', name: 'email', selector: 'input[name="email"]', label: 'Email Address' },
-          ],
-        },
-        {
-          id: 'newsletter-form',
-          name: 'Newsletter',
-          urlPath: '/',
-          selector: 'form#newsletter',
-          submitButtonSelector: 'button#sub',
-          inputs: [
-            { type: 'email', name: 'sub_email', selector: 'input#sub_email', label: 'Newsletter Email' },
-          ],
-        },
-      ],
-      routes: ['/', '/contact', '/pricing'],
-      buttons: [],
-      anchors: [],
-    };
+    const content = [page('/blog/first-post', 'Company Blog Articles & News'), page('/guides/getting-started', 'Documentation Guide')];
+    expect(detectSiteType(content, 'https://news-docs.org')).toBe('content');
+  });
 
-    const journeys = generateFallbackJourneys('other', spiderResult);
-    expect(journeys.length).toBeGreaterThanOrEqual(3);
-    expect(journeys.length).toBeLessThanOrEqual(5);
+  it('gives the same answer for the same pages every time', () => {
+    const answers = new Set(Array.from({ length: 5 }, () => detectSiteType(books, 'https://books.toscrape.com/')));
+    expect(answers.size).toBe(1);
+  });
+});
 
-    for (const journey of journeys) {
-      expect(journey.name).toBeTruthy();
-      expect(journey.description).toBeTruthy();
-      expect(journey.description.length).toBeGreaterThan(10);
-      expect(journey.steps.length).toBeGreaterThanOrEqual(1);
+describe('Journeys without AI', () => {
+  it('plans browse → book for a shop, plus a visit to the main pages', () => {
+    const journeys = generateFallbackJourneys('shop', spider(books));
+    const browse = journeys.find((j) => j.name === 'Browse and view product');
+    expect(browse?.steps.some((s) => s.action === 'click' && s.selector === 'role=link[name="A Light in the Attic"]')).toBe(true);
+    expect(journeys.at(-1)?.name).toBe('Visit the main pages');
+    for (const j of journeys) {
+      expect(j.description.length, j.name).toBeGreaterThan(10);
+      expect(j.source).toBe('fallback');
     }
+  });
+
+  it('types into the main field of an app', () => {
+    const journeys = generateFallbackJourneys('app', spider(todo));
+    expect(journeys[0].steps.some((s) => s.action === 'fill' && s.selector === '.new-todo')).toBe(true);
+  });
+
+  it('sends each ordinary form, never the sign-in form', () => {
+    const pages = [page('/', 'Home'), page('/contact', 'Contact Us'), page('/login', 'Sign in', [], { hasSignInForm: true })];
+    const forms: SpiderResult['forms'] = [
+      {
+        action: '/contact',
+        method: 'POST',
+        urlPath: '/contact',
+        submitButtonSelector: 'button[type="submit"]',
+        inputs: [
+          { type: 'text', name: 'name', selector: 'input[name="name"]', label: 'Full Name' },
+          { type: 'email', name: 'email', selector: 'input[name="email"]', label: 'Email Address' },
+        ],
+      },
+      {
+        action: '/login',
+        method: 'POST',
+        urlPath: '/login',
+        submitButtonSelector: '#sign-in',
+        inputs: [
+          { type: 'email', name: 'email', selector: '#email', label: 'Email' },
+          { type: 'password', name: 'password', selector: '#password', label: 'Password' },
+        ],
+      },
+    ];
+    const journeys = generateFallbackJourneys('other', spider(pages, forms));
+    expect(journeys.map((j) => j.name)).toEqual(['Send the form on /contact', 'Visit the main pages']);
+    // The sign-in page isn't one of the main pages to visit either: roles sign in before tests run.
+    expect(journeys[1].steps.map((s) => s.value)).toEqual(['/', '/contact']);
   });
 });
