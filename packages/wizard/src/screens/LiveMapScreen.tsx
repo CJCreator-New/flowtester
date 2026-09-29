@@ -8,7 +8,9 @@ export interface LiveMapScreenProps {
   targetUrl: string;
   feed: FeedState;
   events?: RunnerEvent[];
+  onStop?: () => void;
   onCancel?: () => void;
+  onBack?: () => void;
 }
 
 const FALLBACK_PAGES: PageInventoryItem[] = [
@@ -19,6 +21,9 @@ export function LiveMapScreen({
   plan,
   targetUrl,
   feed,
+  onStop,
+  onCancel,
+  onBack,
 }: LiveMapScreenProps) {
   const [selectedPagePath, setSelectedPagePath] = useState<string | null>(null);
 
@@ -68,6 +73,18 @@ export function LiveMapScreen({
         <div className="w-28 sm:w-36 h-1.5 rounded-full bg-edge/40 overflow-hidden">
           <div className="h-full bg-stamp progress-indeterminate" />
         </div>
+
+        {(onStop || onCancel || onBack) && (
+          <button
+            type="button"
+            onClick={onStop || onCancel || onBack}
+            className="flex items-center gap-1.5 rounded border border-fail/40 bg-fail/10 px-3 py-1 font-mono text-xs font-bold text-fail hover:bg-fail/20 shadow-sm transition-colors active:scale-95"
+            title="Stop live testing execution"
+          >
+            <span>⏹</span>
+            <span>Stop Run</span>
+          </button>
+        )}
       </div>
 
       {/* ─── MAIN LAYOUT: SIDEBAR + BLUEPRINT MAP + LIVE INSPECTOR ─── */}

@@ -1,0 +1,113 @@
+{
+  "host": "localhost:3288",
+  "runs": [
+    {
+      "runId": "run-1790684725297",
+      "timestamp": "2026-09-29T12:26:01.853Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Accessible": {
+            "grade": "F",
+            "score": 50,
+            "findings": [
+              "F-A11Y-TC-DEFAULT-001-1",
+              "F-A11Y-TC-DEFAULT-001-2",
+              "F-UX-TARGET-TC-DEFAULT-001-3"
+            ]
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "A",
+            "score": 93,
+            "findings": [
+              "F-SEO-TC-DEFAULT-001-DESC-1",
+              "F-SEO-TC-DEFAULT-001-OG-2"
+            ]
+          },
+          "Secure": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "C",
+        "overallScore": 91
+      },
+      "findingFingerprints": [
+        "fp_faedaf39571ef100",
+        "fp_623c84712345c63e",
+        "fp_330cf696b09afa18",
+        "fp_6bdcb556d7668f91",
+        "fp_454b24fceeb7b091"
+      ]
+    },
+    {
+      "runId": "run-1790684762330",
+      "timestamp": "2026-09-29T12:26:28.562Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Accessible": {
+            "grade": "F",
+            "score": 50,
+            "findings": [
+              "F-A11Y-TC-DEFAULT-001-1",
+              "F-A11Y-TC-DEFAULT-001-2",
+              "F-UX-TARGET-TC-DEFAULT-001-3"
+            ]
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "A",
+            "score": 93,
+            "findings": [
+              "F-SEO-TC-DEFAULT-001-DESC-1",
+              "F-SEO-TC-DEFAULT-001-OG-2"
+            ]
+          },
+          "Secure": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "C",
+        "overallScore": 91
+      },
+      "findingFingerprints": [
+        "fp_faedaf39571ef100",
+        "fp_623c84712345c63e",
+        "fp_330cf696b09afa18",
+        "fp_6bdcb556d7668f91",
+        "fp_454b24fceeb7b091"
+      ]
+    }
+  ]
+}

@@ -143,6 +143,8 @@ export interface TriggerRunBody {
   owner?: boolean;
   /** The owner says this host is a test copy (staging). Remembered for the site. */
   stagingHost?: boolean;
+  /** Attached design system tokens or styling guidelines. */
+  designNotes?: string;
 }
 
 interface StoredPlanRecord {
@@ -173,6 +175,12 @@ interface StoredPlanRecord {
     ai?: { provider: AIProviderType; model?: string; apiKey?: string };
     /** The review sent its own test cases, which run as they are. */
     customTestCases?: boolean;
+    /** Product context / spec documents provided for discovery. */
+    productContext?: string;
+    /** Design tokens / design notes. */
+    designNotes?: string;
+    /** Path to product context file on disk if written. */
+    contextFilePath?: string;
   };
 }
 
@@ -221,6 +229,8 @@ export class RunnerServer {
   private phase: RunnerPhase = 'idle';
   private lastReport: ReleaseReport | null = null;
   private lastRunError: string | null = null;
+  private lastErrorCode: string | null = null;
+  private activeAbortController: AbortController | null = null;
   private currentPlanRecord: StoredPlanRecord | null = null;
   /** The run in progress or paused, so a reopened page can pick it up again. */
   private currentRunId: string | null = null;
@@ -325,6 +335,12 @@ export class RunnerServer {
             return;
           }
 
+          // POST /api/runner/abort or /api/runner/stop
+          if ((pathname === '/api/runner/abort' || pathname === '/api/runner/stop') && req.method === 'POST') {
+            await this.handleAbortRun(req, res);
+            return;
+          }
+
           // GET /api/report — last completed run's ReleaseReport
           if (pathname === '/api/report' && req.method === 'GET') {
             if (!this.lastReport) {
@@ -346,6 +362,7 @@ export class RunnerServer {
                 isRunning: this.isRunning,
                 hasReport: !!this.lastReport,
                 lastRunError: this.lastRunError,
+                lastErrorCode: this.lastErrorCode,
                 phase: this.phase,
                 hasPlan: !!this.currentPlanRecord,
                 runId: this.currentRunId,
@@ -510,7 +527,12 @@ export class RunnerServer {
       ({ targetUrl } = await this.readJsonBody<{ targetUrl?: string }>(req));
       if (!targetUrl || !/^https?:$/.test(new URL(targetUrl).protocol)) throw new Error();
     } catch {
-      this.sendJson(res, 400, { reachable: false, reason: 'invalid-url' });
+      this.sendJson(res, 400, {
+        reachable: false,
+        reason: 'invalid-url',
+        code: 'ERR_INVALID_URL',
+        suggestion: 'Please enter a valid HTTP or HTTPS address (e.g. http://localhost:3050 or https://example.com).',
+      });
       return;
     }
 
@@ -518,10 +540,16 @@ export class RunnerServer {
     if (check.ok) {
       this.sendJson(res, 200, { reachable: true, statusCode: check.status });
     } else {
+      const code = check.status ? 'ERR_SERVER_ERROR' : 'ERR_TARGET_UNREACHABLE';
+      const suggestion = check.status
+        ? `Target responded with HTTP ${check.status}. Check your server logs or ensure the endpoint is healthy.`
+        : 'Could not connect to target host. Ensure your server is running, the port is open, and there are no firewall or network restrictions.';
       this.sendJson(res, 200, {
         reachable: false,
         reason: check.status ? 'server-error' : 'unreachable',
+        code,
         statusCode: check.status,
+        suggestion,
       });
     }
   }
@@ -682,7 +710,13 @@ export class RunnerServer {
   private async handleTriggerRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (this.phase === 'scanning' || this.phase === 'testing') {
       res.writeHead(409, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'A run is already in progress' }));
+      res.end(
+        JSON.stringify({
+          error: 'A run is already in progress',
+          code: 'ERR_RUN_IN_PROGRESS',
+          suggestion: 'Wait for the current run or scan to finish, or click Stop to abort it before starting a new one.',
+        })
+      );
       return;
     }
 
@@ -691,13 +725,25 @@ export class RunnerServer {
       body = await this.readJsonBody<TriggerRunBody>(req);
     } catch {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      res.end(
+        JSON.stringify({
+          error: 'Invalid JSON body',
+          code: 'ERR_INVALID_REQUEST',
+          suggestion: 'Check the request format and try again.',
+        })
+      );
       return;
     }
 
     if (!body.targetUrl) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'targetUrl is required' }));
+      res.end(
+        JSON.stringify({
+          error: 'targetUrl is required',
+          code: 'ERR_MISSING_TARGET_URL',
+          suggestion: 'Please provide a valid website address to check.',
+        })
+      );
       return;
     }
 
@@ -713,6 +759,8 @@ export class RunnerServer {
     this.isRunning = true;
     this.phase = 'scanning';
     this.lastRunError = null;
+    this.lastErrorCode = null;
+    this.activeAbortController = new AbortController();
 
     res.writeHead(202, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ runId }));
@@ -720,12 +768,45 @@ export class RunnerServer {
     // Fire the actual run asynchronously — the HTTP response has already been sent;
     // progress and completion are delivered exclusively over the SSE stream.
     this.executeRun(body, productId, runId).catch((err: unknown) => {
+      if (this.lastErrorCode === 'ERR_RUN_ABORTED') return;
       const msg = err instanceof Error ? err.message : String(err);
       this.lastRunError = msg;
+      this.lastErrorCode = 'ERR_DISCOVERY_FAILED';
       this.phase = 'failed';
       this.isRunning = false;
-      this.broadcastRunnerEvent({ type: 'RUN_FAILED', runId, error: msg, timestamp: Date.now() });
+      this.broadcastRunnerEvent({ type: 'RUN_FAILED', runId, error: msg, code: 'ERR_DISCOVERY_FAILED', timestamp: Date.now() });
     });
+  }
+
+  private async handleAbortRun(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const runId = this.currentRunId;
+    if (!this.isRunning && this.phase === 'idle') {
+      this.sendJson(res, 200, { aborted: false, message: 'No run currently active' });
+      return;
+    }
+
+    if (this.activeAbortController) {
+      try {
+        this.activeAbortController.abort();
+      } catch {}
+      this.activeAbortController = null;
+    }
+
+    this.isRunning = false;
+    this.phase = 'idle';
+    this.lastErrorCode = 'ERR_RUN_ABORTED';
+    this.lastRunError = 'Run was manually stopped by user.';
+    await this.clearPlan(runId ?? undefined);
+
+    this.broadcastRunnerEvent({
+      type: 'RUN_ABORTED',
+      runId,
+      code: 'ERR_RUN_ABORTED',
+      message: 'Run was stopped by the user.',
+      timestamp: Date.now(),
+    });
+
+    this.sendJson(res, 200, { aborted: true, code: 'ERR_RUN_ABORTED', message: 'Run aborted successfully' });
   }
 
   private async executeRun(body: TriggerRunBody, productId: string, runId: string): Promise<void> {
@@ -786,6 +867,8 @@ export class RunnerServer {
         draft: undefined as unknown as DiscoveryDraft,
         readOnly,
         siteHost,
+        productContext: body.productContext,
+        designNotes: body.designNotes,
       };
 
       if (body.specTestCases && body.specTestCases.length > 0) {
@@ -807,6 +890,7 @@ export class RunnerServer {
         await fs.mkdir(this.outputDir, { recursive: true });
         contextFilePath = path.join(this.outputDir, `product-context-${runId}.md`);
         await fs.writeFile(contextFilePath, body.productContext, 'utf8');
+        context.contextFilePath = contextFilePath;
       }
 
       this.phase = 'scanning';
@@ -820,6 +904,9 @@ export class RunnerServer {
         aiProvider: ai.provider,
         readOnly,
       });
+      if (this.lastErrorCode === 'ERR_RUN_ABORTED' || this.activeAbortController?.signal.aborted) {
+        return;
+      }
       const sinceLastRun = applySiteMemory(draft, memory);
       context.draft = draft;
       context.reportNotes = [...(draft.exploration?.notes || [])];
@@ -940,6 +1027,8 @@ export class RunnerServer {
         : undefined,
       aiAvailable,
       signedInAs: draft.exploration?.signedInAs,
+      productContext: record.context.productContext,
+      designNotes: record.context.designNotes,
     };
   }
 
@@ -1136,6 +1225,8 @@ export class RunnerServer {
       questions?: Array<{ id: string; selectedAnswer: string }>;
       answers?: Record<string, string>;
       testCases?: TestCase[];
+      productContext?: string;
+      designNotes?: string;
     }
 
     let body: PatchPlanBody;
@@ -1197,6 +1288,22 @@ export class RunnerServer {
     } else if (record.context.draft) {
       record.plan.testCases = this.testsFor(record.context.draft, !!record.context.readOnly).specTestCases;
       record.context.customTestCases = undefined;
+    }
+
+    if (body.productContext !== undefined) {
+      record.context.productContext = body.productContext;
+      record.plan.productContext = body.productContext;
+      if (body.productContext.trim()) {
+        const filePath = record.context.contextFilePath || path.join(this.outputDir, `product-context-${record.plan.runId}.md`);
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, body.productContext, 'utf8');
+        record.context.contextFilePath = filePath;
+      }
+    }
+
+    if (body.designNotes !== undefined) {
+      record.context.designNotes = body.designNotes;
+      record.plan.designNotes = body.designNotes;
     }
 
     await this.savePlan(record);
@@ -1307,12 +1414,16 @@ export class RunnerServer {
 
     this.sendJson(res, 200, { status: 'approved', runId: record.plan.runId });
 
+    this.activeAbortController = new AbortController();
+    this.lastErrorCode = null;
     this.executeTesting(record, specTestCases, notRun).catch((err: unknown) => {
+      if (this.lastErrorCode === 'ERR_RUN_ABORTED') return;
       const msg = err instanceof Error ? err.message : String(err);
       this.lastRunError = msg;
+      this.lastErrorCode = 'ERR_TEST_EXECUTION_FAILED';
       this.phase = 'failed';
       this.isRunning = false;
-      this.broadcastRunnerEvent({ type: 'RUN_FAILED', runId: record.plan.runId, error: msg, timestamp: Date.now() });
+      this.broadcastRunnerEvent({ type: 'RUN_FAILED', runId: record.plan.runId, error: msg, code: 'ERR_TEST_EXECUTION_FAILED', timestamp: Date.now() });
     });
   }
 

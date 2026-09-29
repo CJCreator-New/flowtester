@@ -111,6 +111,9 @@ export function plainFailure(error: unknown, mode: RunMode): string {
   if (/timeout|timed out/i.test(text)) {
     return 'Your site took too long to respond, so the check stopped. Try again when it’s less busy.';
   }
+  if (/abort|stopped by user/i.test(text)) {
+    return 'The run was stopped.';
+  }
   return 'Something went wrong and the check stopped before it finished. Try again. If it happens again, ask whoever set up this tool to look at the runner’s log.';
 }
 
@@ -182,6 +185,14 @@ export function reduceFeed(state: FeedState, event: RunnerEvent, mode: RunMode):
         ...milestone('All done. Putting your report together…'),
         status: 'completed',
         progress: state.progress ? { ...state.progress, done: state.progress.total } : null,
+      };
+
+    case 'RUN_ABORTED':
+      return {
+        ...state,
+        status: 'failed',
+        current: 'Run was stopped by user.',
+        failure: 'Run was stopped by user.',
       };
 
     case 'RUN_FAILED':

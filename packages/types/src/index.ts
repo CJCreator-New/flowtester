@@ -863,5 +863,9 @@ export interface ReviewPlan {
   siteWideChecks?: PlanSiteWideCheck[];
   /** Scanned pages grouped by section and layout. */
   pageGroups?: PlanPageGroup[];
+  /** Attached product specification, PRD, or user stories context. */
+  productContext?: string;
+  /** Attached design system tokens or styling guidelines. */
+  designNotes?: string;
 }
 

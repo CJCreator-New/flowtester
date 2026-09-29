@@ -110,6 +110,9 @@ describe('Unconfirmed guesses never fail a site', () => {
       outputDir: path.join(outputDir, 'login'),
       breakpoints: ['1440px'],
       enableA11y: false,
+      enableSeo: false,
+      enablePerformance: false,
+      enableSecurity: false,
       recordVideo: false,
     });
 
@@ -127,6 +130,9 @@ describe('Unconfirmed guesses never fail a site', () => {
       outputDir: path.join(outputDir, 'invoice'),
       breakpoints: ['1440px'],
       enableA11y: false,
+      enableSeo: false,
+      enablePerformance: false,
+      enableSecurity: false,
       recordVideo: false,
     });
 

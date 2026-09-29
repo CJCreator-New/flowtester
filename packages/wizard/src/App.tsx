@@ -7,6 +7,7 @@ import {
   getPlan,
   approvePlan,
   startRun,
+  abortRun,
   RunnerError,
   STREAM_URL,
 } from './api';
@@ -16,11 +17,12 @@ import { initialFeed, plainFailure, reduceFeed, type FeedState, type RunMode, ty
 import { ConnectionScreen } from './screens/ConnectionScreen';
 import { KeySetupScreen } from './screens/KeySetupScreen';
 import { UrlFirstScreen, type UrlFirstSubmitOptions } from './screens/UrlFirstScreen';
+import { ScanningScreen } from './screens/ScanningScreen';
 import { PlanReviewScreen } from './screens/PlanReviewScreen';
 import { LiveMapScreen } from './screens/LiveMapScreen';
 import { ReportMapScreen } from './screens/ReportMapScreen';
 
-export type WizardStep = 'connect' | 'loading' | 'key' | 'url-first' | 'plan' | 'live' | 'report';
+export type WizardStep = 'connect' | 'loading' | 'key' | 'url-first' | 'scanning' | 'plan' | 'live' | 'report';
 
 interface ActiveRun {
   id?: string;
@@ -42,6 +44,9 @@ export default function App() {
   // Stored inputs
   const [url, setUrl] = useState<string>('');
   const [isOwner, setIsOwner] = useState(true);
+  const [hasSpecs, setHasSpecs] = useState(false);
+  const [hasDesignNotes, setHasDesignNotes] = useState(false);
+  const [scanningMessage, setScanningMessage] = useState('Crawling routes, identifying interactive forms, and mapping user journeys...');
 
   // The active run & plan
   const runRef = useRef<ActiveRun | null>(null);
@@ -65,7 +70,9 @@ export default function App() {
               setStep('plan');
             })
             .catch(() => setStep('url-first'));
-        } else if (status?.phase === 'testing' || status?.phase === 'scanning') {
+        } else if (status?.phase === 'scanning') {
+          setStep('scanning');
+        } else if (status?.phase === 'testing') {
           setStep('live');
         } else if (status?.phase === 'done' && status.hasReport) {
           getReport()
@@ -119,6 +126,10 @@ export default function App() {
       } catch {
         // ignore retry
       }
+    } else if (status.phase === 'scanning') {
+      if (step !== 'scanning') setStep('scanning');
+    } else if (status.phase === 'testing') {
+      if (step !== 'live') setStep('live');
     } else if (status.phase === 'done' && status.hasReport && step === 'live') {
       finishRun();
     } else if (status.phase === 'failed' && status.lastRunError) {
@@ -130,6 +141,17 @@ export default function App() {
     (event: RunnerEvent) => {
       const active = runRef.current;
       if (typeof event.runId === 'string' && active?.id && event.runId !== active.id) return;
+
+      if (event.type === 'DISCOVERY_STARTED') {
+        setScanningMessage('Crawling pages, analyzing forms, and mapping user journeys...');
+        return;
+      }
+
+      if (event.type === 'DISCOVERY_COMPLETED') {
+        const flows = typeof event.flowsFound === 'number' ? `${event.flowsFound} flows found` : 'flows mapped';
+        setScanningMessage(`Discovery complete (${flows}). Preparing interactive test plan...`);
+        return;
+      }
 
       if (event.type === 'PLAN_READY') {
         getPlan()
@@ -163,15 +185,24 @@ export default function App() {
   useRunnerStream(STREAM_URL, reachable, onEvent, reconcile);
 
   useEffect(() => {
-    if (step !== 'live') return;
+    if (step !== 'live' && step !== 'scanning') return;
     const timer = setInterval(reconcile, RUN_SAFETY_POLL_MS);
     return () => clearInterval(timer);
   }, [step, reconcile]);
 
-  // Handler: Start a URL-first check
-  const handleStartUrlFirst = async ({ targetUrl, owner, skipReview }: UrlFirstSubmitOptions) => {
+  // Handler: Start a URL-first check with mandatory plan review gate
+  const handleStartUrlFirst = async ({
+    targetUrl,
+    owner,
+    productContext,
+    designNotes,
+  }: UrlFirstSubmitOptions) => {
     setUrl(targetUrl);
     setIsOwner(owner);
+    setHasSpecs(!!productContext);
+    setHasDesignNotes(!!designNotes);
+    setScanningMessage('Connecting to target site and initializing architectural crawler...');
+
     const active: ActiveRun = {
       mode: 'product',
       targetUrl,
@@ -183,12 +214,15 @@ export default function App() {
     setReport(null);
     setPlan(null);
 
-    setStep('live');
+    // Enter scanning phase immediately; DO NOT jump to live testing!
+    setStep('scanning');
     try {
       active.id = await startRun({
         targetUrl,
         owner,
-        skipReview,
+        skipReview: false, // Mandatory review gate: plan must always be approved
+        productContext,
+        designNotes,
       });
       setRun({ ...active });
     } catch (err: unknown) {
@@ -207,16 +241,6 @@ export default function App() {
     }
   };
 
-  // Handler: Skip review from plan screen
-  const handleSkipReviewFromPlan = async () => {
-    try {
-      await approvePlan();
-      setStep('live');
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to approve plan');
-    }
-  };
-
   // Handler: Go Deeper with credentials
   const handleGoDeeper = async (credentials?: { username?: string; password?: string }) => {
     if (!url) return;
@@ -224,7 +248,7 @@ export default function App() {
       ? [{ role: 'member', username: credentials.username, password: credentials.password || '' }]
       : [];
 
-    setStep('live');
+    setStep('scanning');
     try {
       await startRun({
         targetUrl: url,
@@ -245,6 +269,32 @@ export default function App() {
     setStep('url-first');
   };
 
+  const handleStopScan = async () => {
+    try {
+      await abortRun();
+    } catch {}
+    runRef.current = null;
+    setRun(null);
+    setStep('url-first');
+  };
+
+  const handleStopLive = async () => {
+    try {
+      await abortRun();
+    } catch {}
+    runRef.current = null;
+    setRun(null);
+    if (plan) {
+      setStep('plan');
+    } else {
+      setStep('url-first');
+    }
+  };
+
+  const handleBackToUrl = () => {
+    setStep('url-first');
+  };
+
   const openKeySetup = () => {
     setKeyReturnStep(step);
     setStep('key');
@@ -252,7 +302,7 @@ export default function App() {
 
   // Render Topbar
   const activeTabIndex =
-    step === 'url-first' ? 0 : step === 'plan' ? 1 : step === 'live' ? 2 : step === 'report' ? 3 : 0;
+    step === 'url-first' || step === 'scanning' ? 0 : step === 'plan' ? 1 : step === 'live' ? 2 : step === 'report' ? 3 : 0;
 
   return (
     <div className="min-h-screen bg-paper font-sans text-ink">
@@ -271,20 +321,78 @@ export default function App() {
           </span>
         </div>
 
-        {/* Step Tabs Indicator */}
+        {/* Step Tabs Indicator with Back Navigation */}
         <nav aria-label="Check progress" className="hidden md:flex rounded-md border border-rule bg-panel p-0.5 text-xs font-mono">
-          <span className={`rounded px-3 py-1 transition-colors ${activeTabIndex === 0 ? 'bg-stamp text-surface font-bold' : 'text-ink-soft'}`}>
-            1 · Enter URL
+          <button
+            type="button"
+            onClick={() => {
+              if (step === 'scanning') handleStopScan();
+              else if (step === 'live') {
+                if (window.confirm('Stop the live test run and return to URL setup?')) handleStopLive();
+              } else {
+                setStep('url-first');
+              }
+            }}
+            disabled={step === 'connect' || step === 'loading' || step === 'key'}
+            className={`rounded px-3 py-1 transition-colors ${
+              activeTabIndex === 0
+                ? 'bg-stamp text-surface font-bold'
+                : 'text-ink-soft hover:text-ink hover:bg-canvas cursor-pointer'
+            }`}
+            title="Return to URL and Specs input"
+          >
+            1 · Enter URL & Docs
+          </button>
+
+          <button
+            type="button"
+            disabled={!plan || step === 'url-first' || step === 'scanning'}
+            onClick={() => {
+              if (plan) {
+                if (step === 'live') {
+                  if (window.confirm('Stop live testing and return to Plan Review?')) handleStopLive();
+                } else {
+                  setStep('plan');
+                }
+              }
+            }}
+            className={`rounded px-3 py-1 transition-colors ${
+              activeTabIndex === 1
+                ? 'bg-stamp text-surface font-bold'
+                : plan
+                  ? 'text-ink-soft hover:text-ink hover:bg-canvas cursor-pointer'
+                  : 'text-ink-soft/40 cursor-not-allowed'
+            }`}
+            title={plan ? 'Go to reviewed plan' : 'Plan not generated yet'}
+          >
+            2 · Review & Approve Plan
+          </button>
+
+          <span
+            className={`rounded px-3 py-1 transition-colors ${
+              activeTabIndex === 2 ? 'bg-stamp text-surface font-bold' : 'text-ink-soft/50'
+            }`}
+          >
+            3 · Live testing
           </span>
-          <span className={`rounded px-3 py-1 transition-colors ${activeTabIndex === 1 ? 'bg-stamp text-surface font-bold' : 'text-ink-soft'}`}>
-            2 · Review plan
-          </span>
-          <span className={`rounded px-3 py-1 transition-colors ${activeTabIndex === 2 ? 'bg-stamp text-surface font-bold' : 'text-ink-soft'}`}>
-            3 · Live view
-          </span>
-          <span className={`rounded px-3 py-1 transition-colors ${activeTabIndex === 3 ? 'bg-stamp text-surface font-bold' : 'text-ink-soft'}`}>
+
+          <button
+            type="button"
+            disabled={!report}
+            onClick={() => {
+              if (report) setStep('report');
+            }}
+            className={`rounded px-3 py-1 transition-colors ${
+              activeTabIndex === 3
+                ? 'bg-stamp text-surface font-bold'
+                : report
+                  ? 'text-ink-soft hover:text-ink hover:bg-canvas cursor-pointer'
+                  : 'text-ink-soft/40 cursor-not-allowed'
+            }`}
+            title={report ? 'View final test report' : 'Report not ready yet'}
+          >
             4 · Report
-          </span>
+          </button>
         </nav>
 
         {/* Settings button */}
@@ -333,12 +441,24 @@ export default function App() {
         />
       )}
 
+      {step === 'scanning' && (
+        <ScanningScreen
+          targetUrl={url}
+          hasSpecs={hasSpecs}
+          hasDesignNotes={hasDesignNotes}
+          statusMessage={scanningMessage}
+          onStop={handleStopScan}
+          onCancel={handleStopScan}
+          onBack={handleBackToUrl}
+        />
+      )}
+
       {step === 'plan' && plan && (
         <PlanReviewScreen
           plan={plan}
           onApprove={handleApprovePlan}
-          onSkipReview={handleSkipReviewFromPlan}
           onPlanUpdated={(newPlan) => setPlan(newPlan)}
+          onBack={handleBackToUrl}
         />
       )}
 
@@ -347,7 +467,9 @@ export default function App() {
           plan={plan}
           targetUrl={url}
           feed={feed}
-          onCancel={handleRestart}
+          onStop={handleStopLive}
+          onCancel={handleStopLive}
+          onBack={handleStopLive}
         />
       )}
 

@@ -1,0 +1,224 @@
+{
+  "host": "localhost:3085",
+  "runs": [
+    {
+      "runId": "run-1790684732343",
+      "timestamp": "2026-09-29T12:25:51.503Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "F",
+            "score": 55,
+            "findings": [
+              "F-BUG-TC-E2E-002-1",
+              "F-HTTP-TC-E2E-002-2"
+            ]
+          },
+          "Accessible": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "C",
+            "score": 73,
+            "findings": [
+              "F-SEO-TC-E2E-001-DESC-1",
+              "F-SEO-TC-E2E-001-H1-MISSING-2",
+              "F-SEO-TC-E2E-001-OG-3",
+              "F-SEO-TC-E2E-002-DESC-1",
+              "F-SEO-TC-E2E-002-H1-MISSING-2",
+              "F-SEO-TC-E2E-002-OG-3"
+            ]
+          },
+          "Secure": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "C",
+        "overallScore": 88
+      },
+      "findingFingerprints": [
+        "fp_9654a87b16ca9575",
+        "fp_6a063663deeed0a6",
+        "fp_9c7cdfc0ed9a87f9",
+        "fp_df0499ebcdca2bb8",
+        "fp_59d70cda935d8404",
+        "fp_a27a90fb855957e3",
+        "fp_f48ce5df593ac5c6",
+        "fp_fdeed81393df0764"
+      ]
+    },
+    {
+      "runId": "run-1790684751901",
+      "timestamp": "2026-09-29T12:25:55.683Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Accessible": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "C",
+            "score": 78,
+            "findings": [
+              "F-SEO-TC-VISUAL-001-DESC-1",
+              "F-SEO-TC-VISUAL-001-H1-MISSING-2",
+              "F-SEO-TC-VISUAL-001-OG-3"
+            ]
+          },
+          "Secure": {
+            "grade": "B",
+            "score": 85,
+            "findings": [
+              "F-SEC-TC-VISUAL-001-FORM"
+            ]
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "A",
+        "overallScore": 94
+      },
+      "findingFingerprints": [
+        "fp_777074f81c0e7a2f",
+        "fp_d588acb9b32f2f95",
+        "fp_34a7001b26859fba",
+        "fp_0fcc37960c81e724"
+      ]
+    },
+    {
+      "runId": "run-1790684755718",
+      "timestamp": "2026-09-29T12:26:09.651Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Accessible": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "C",
+            "score": 78,
+            "findings": [
+              "F-SEO-TC-VISUAL-001-DESC-1",
+              "F-SEO-TC-VISUAL-001-H1-MISSING-2",
+              "F-SEO-TC-VISUAL-001-OG-3"
+            ]
+          },
+          "Secure": {
+            "grade": "B",
+            "score": 85,
+            "findings": [
+              "F-SEC-TC-VISUAL-001-FORM"
+            ]
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "A",
+        "overallScore": 94
+      },
+      "findingFingerprints": [
+        "fp_777074f81c0e7a2f",
+        "fp_d588acb9b32f2f95",
+        "fp_34a7001b26859fba",
+        "fp_0fcc37960c81e724"
+      ]
+    },
+    {
+      "runId": "run-1790684770353",
+      "timestamp": "2026-09-29T12:26:28.599Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Accessible": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "C",
+            "score": 78,
+            "findings": [
+              "F-SEO-TC-VISUAL-001-DESC-1",
+              "F-SEO-TC-VISUAL-001-H1-MISSING-2",
+              "F-SEO-TC-VISUAL-001-OG-3"
+            ]
+          },
+          "Secure": {
+            "grade": "B",
+            "score": 85,
+            "findings": [
+              "F-SEC-TC-VISUAL-001-FORM"
+            ]
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 95,
+            "findings": [
+              "F-VISUAL-TC-VISUAL-001-1440px"
+            ]
+          }
+        },
+        "overallGrade": "A",
+        "overallScore": 93
+      },
+      "findingFingerprints": [
+        "fp_777074f81c0e7a2f",
+        "fp_d588acb9b32f2f95",
+        "fp_34a7001b26859fba",
+        "fp_0fcc37960c81e724",
+        "fp_1de07aac83d3d790"
+      ]
+    }
+  ]
+}

@@ -138,6 +138,9 @@ export interface RunOptions {
   breakpoints?: Breakpoint[];
   repoRoot?: string;
   enableA11y?: boolean;
+  enableSeo?: boolean;
+  enablePerformance?: boolean;
+  enableSecurity?: boolean;
   /** Record a video per test point; kept only when the point fails. Default true. */
   recordVideo?: boolean;
   /** Overwrite visual baselines with this run's screenshots instead of comparing against them. */
@@ -464,45 +467,54 @@ export class FlowTestOrchestrator {
           });
 
           // 3b. Security (passive): passwords in page addresses
-          const securityFindings = [
-            ...this.securityChecker.checkEvidence(stepEvidenceList, {
-              testCaseId: testCase.id,
-              flowId: testCase.flowId,
-              role: testCase.role,
-              breakpoint: bp,
-            }),
-            ...(await this.securityChecker.checkPage(page, {
-              testCaseId: testCase.id,
-              flowId: testCase.flowId,
-              role: testCase.role,
-              breakpoint: bp,
-              urlPath: new URL(page.url(), options.targetUrl).pathname,
-              baseUrl: options.targetUrl,
-            })),
-          ];
+          const securityFindings =
+            options.enableSecurity === false
+              ? []
+              : [
+                  ...this.securityChecker.checkEvidence(stepEvidenceList, {
+                    testCaseId: testCase.id,
+                    flowId: testCase.flowId,
+                    role: testCase.role,
+                    breakpoint: bp,
+                  }),
+                  ...(await this.securityChecker.checkPage(page, {
+                    testCaseId: testCase.id,
+                    flowId: testCase.flowId,
+                    role: testCase.role,
+                    breakpoint: bp,
+                    urlPath: new URL(page.url(), options.targetUrl).pathname,
+                    baseUrl: options.targetUrl,
+                  })),
+                ];
 
           // 3c. Performance (Speed, Web Vitals, Mobile Overflow & Overlap)
-          const perfFindings = await this.performanceChecker.checkPage(
-            page,
-            {
-              testCaseId: testCase.id,
-              flowId: testCase.flowId,
-              role: testCase.role,
-              breakpoint: bp,
-              urlPath: new URL(page.url(), options.targetUrl).pathname,
-            },
-            stepEvidenceList
-          );
+          const perfFindings =
+            options.enablePerformance === false
+              ? []
+              : await this.performanceChecker.checkPage(
+                  page,
+                  {
+                    testCaseId: testCase.id,
+                    flowId: testCase.flowId,
+                    role: testCase.role,
+                    breakpoint: bp,
+                    urlPath: new URL(page.url(), options.targetUrl).pathname,
+                  },
+                  stepEvidenceList
+                );
 
           // 3d. SEO & Link Health
-          const seoFindings = await this.seoChecker.checkPage(page, {
-            testCaseId: testCase.id,
-            flowId: testCase.flowId,
-            role: testCase.role,
-            breakpoint: bp,
-            urlPath: new URL(page.url(), options.targetUrl).pathname,
-            baseUrl: options.targetUrl,
-          });
+          const seoFindings =
+            options.enableSeo === false
+              ? []
+              : await this.seoChecker.checkPage(page, {
+                  testCaseId: testCase.id,
+                  flowId: testCase.flowId,
+                  role: testCase.role,
+                  breakpoint: bp,
+                  urlPath: new URL(page.url(), options.targetUrl).pathname,
+                  baseUrl: options.targetUrl,
+                });
 
           // 4. Permission Matrix Check
           const permFindings: Finding[] = [];

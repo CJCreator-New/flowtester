@@ -9,7 +9,16 @@ export const RUNNER_URL =
   ((import.meta.env.VITE_RUNNER_URL as string | undefined) || 'http://localhost:3001').replace(/\/+$/, '');
 export const STREAM_URL = `${RUNNER_URL}/api/runner/stream`;
 
-export class RunnerError extends Error {}
+export class RunnerError extends Error {
+  code?: string;
+  suggestion?: string;
+  constructor(message: string, code?: string, suggestion?: string) {
+    super(message);
+    this.name = 'RunnerError';
+    this.code = code;
+    this.suggestion = suggestion;
+  }
+}
 
 const NOT_RESPONDING = 'The QA Tool isn’t responding. Make sure it’s still running, then try again.';
 
@@ -21,7 +30,7 @@ async function call(path: string, init: RequestInit = {}, timeoutMs = 15000): Pr
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
-    throw new RunnerError(NOT_RESPONDING);
+    throw new RunnerError(NOT_RESPONDING, 'ERR_SERVER_UNRESPONSIVE', 'Check that the runner process is running and responding on port 3001.');
   }
 }
 
@@ -29,7 +38,7 @@ async function json<T>(res: Response): Promise<T> {
   try {
     return (await res.json()) as T;
   } catch {
-    throw new RunnerError(NOT_RESPONDING);
+    throw new RunnerError(NOT_RESPONDING, 'ERR_INVALID_RESPONSE', 'The server returned an invalid or empty response.');
   }
 }
 
@@ -37,6 +46,7 @@ export interface RunnerStatus {
   isRunning: boolean;
   hasReport: boolean;
   lastRunError: string | null;
+  lastErrorCode?: string | null;
   phase?: 'idle' | 'scanning' | 'awaiting-review' | 'testing' | 'done' | 'failed';
   hasPlan?: boolean;
   runId?: string;
@@ -82,19 +92,39 @@ export async function saveKey(apiKey: string): Promise<{ model: string | null }>
   throw new RunnerError(body.reason || 'The key couldn’t be saved. Try again.');
 }
 
-export type Reachability = { ok: true } | { ok: false; reason: string };
+export type Reachability =
+  | { ok: true; statusCode?: number }
+  | { ok: false; reason: string; code: string; suggestion: string; statusCode?: number };
 
 export async function checkReachable(targetUrl: string): Promise<Reachability> {
   const res = await call('/api/runner/preflight', { method: 'POST', body: JSON.stringify({ targetUrl }) }, 15000);
-  const body = await json<{ reachable: boolean; reason?: string }>(res);
-  if (body.reachable) return { ok: true };
-  if (body.reason === 'server-error') {
-    return { ok: false, reason: 'That site answered with an error page. It may be down right now. Try again later.' };
+  const body = await json<{ reachable: boolean; reason?: string; code?: string; suggestion?: string; statusCode?: number }>(res);
+  if (body.reachable) return { ok: true, statusCode: body.statusCode };
+  if (body.reason === 'server-error' || body.code === 'ERR_SERVER_ERROR') {
+    return {
+      ok: false,
+      reason: 'That site answered with an error page. It may be down right now.',
+      code: body.code || 'ERR_SERVER_ERROR',
+      suggestion: body.suggestion || 'Target responded with a server error. Check your server logs or restart the service.',
+      statusCode: body.statusCode,
+    };
   }
-  if (body.reason === 'invalid-url') {
-    return { ok: false, reason: 'That doesn’t look like a web address. Try something like shop.example.com.' };
+  if (body.reason === 'invalid-url' || body.code === 'ERR_INVALID_URL') {
+    return {
+      ok: false,
+      reason: 'That doesn’t look like a valid web address.',
+      code: body.code || 'ERR_INVALID_URL',
+      suggestion: body.suggestion || 'Ensure the address starts with http:// or https:// and has a valid domain/port.',
+      statusCode: body.statusCode,
+    };
   }
-  return { ok: false, reason: 'Couldn’t reach that site — check the URL and try again.' };
+  return {
+    ok: false,
+    reason: 'Couldn’t reach that site — check the URL and try again.',
+    code: body.code || 'ERR_TARGET_UNREACHABLE',
+    suggestion: body.suggestion || 'Could not connect to target host. Ensure your server is running, the port is open, and there are no network firewalls.',
+    statusCode: body.statusCode,
+  };
 }
 
 export type StartRunRequest =
@@ -106,6 +136,7 @@ export type StartRunRequest =
       aiModel?: string;
       roles?: RoleCredential[];
       productContext?: string;
+      designNotes?: string;
     }
   | { mode: 'safe-public'; targetUrl: string; owner?: boolean; skipReview?: boolean };
 
@@ -134,14 +165,45 @@ export async function startRun(request: StartRunRequest): Promise<string> {
     if (request.aiModel) body.aiModel = request.aiModel;
     if (request.roles) body.roles = request.roles;
     if (request.productContext) body.productContext = request.productContext;
+    if (request.designNotes) body.designNotes = request.designNotes;
+  }
+
+  interface ApiErrorPayload {
+    error?: string;
+    code?: string;
+    suggestion?: string;
   }
 
   const res = await call('/api/runner/run', { method: 'POST', body: JSON.stringify(body) });
   if (res.status === 409) {
-    throw new RunnerError('Another check is already running. Wait for it to finish, then start this one.');
+    const err: ApiErrorPayload = await json<ApiErrorPayload>(res).catch((): ApiErrorPayload => ({}));
+    throw new RunnerError(
+      err.error || 'Another check is already running. Wait for it to finish, then start this one.',
+      err.code || 'ERR_RUN_IN_PROGRESS',
+      err.suggestion || 'Wait for the current scan or run to finish, or click Stop to abort it.'
+    );
   }
-  if (!res.ok) throw new RunnerError('The check couldn’t be started. Try again.');
+  if (!res.ok) {
+    const err: ApiErrorPayload = await json<ApiErrorPayload>(res).catch((): ApiErrorPayload => ({}));
+    throw new RunnerError(
+      err.error || 'The check couldn’t be started. Try again.',
+      err.code || 'ERR_START_FAILED',
+      err.suggestion || 'Verify the target address and runner configuration.'
+    );
+  }
   return (await json<{ runId: string }>(res)).runId;
+}
+
+export async function abortRun(): Promise<{ aborted: boolean; code?: string; message?: string }> {
+  try {
+    const res = await call('/api/runner/abort', { method: 'POST' });
+    if (res.ok) {
+      return await json<{ aborted: boolean; code?: string; message?: string }>(res);
+    }
+  } catch {
+    // runner might be busy or unreachable
+  }
+  return { aborted: false };
 }
 
 export async function getPlan(): Promise<ReviewPlan> {
@@ -156,6 +218,8 @@ export interface PatchPlanBody {
   questions?: Array<{ id: string; selectedAnswer: string }>;
   answers?: Record<string, string>;
   testCases?: TestCase[];
+  productContext?: string;
+  designNotes?: string;
 }
 
 export async function patchPlan(body: PatchPlanBody): Promise<ReviewPlan> {

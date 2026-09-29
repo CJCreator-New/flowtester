@@ -1,0 +1,54 @@
+{
+  "host": "localhost:3095",
+  "runs": [
+    {
+      "runId": "run-1790684863369",
+      "timestamp": "2026-09-29T12:27:47.644Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Accessible": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "C",
+            "score": 78,
+            "findings": [
+              "F-SEO-TC-FLOW-001-DESC-1",
+              "F-SEO-TC-FLOW-001-H1-MISSING-2",
+              "F-SEO-TC-FLOW-001-OG-3"
+            ]
+          },
+          "Secure": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "A",
+        "overallScore": 96
+      },
+      "findingFingerprints": [
+        "fp_5666c66248f1343f",
+        "fp_8173d54091840e3e",
+        "fp_94b61acbf91ac182"
+      ]
+    }
+  ]
+}
