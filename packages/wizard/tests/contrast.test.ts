@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { palette } from '../tailwind.config.js';
+import { GRADE_TOKENS } from '../src/lib/grades';
 
 /** WCAG relative luminance and contrast ratio. */
 function luminance(hex: string): number {
@@ -57,5 +58,14 @@ describe('wizard palette meets WCAG 2.2 AA', () => {
 
   it.each(NON_TEXT_PAIRS)('%s against %s is at least 3:1', (fg, bg) => {
     expect(contrast(palette[fg], palette[bg])).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('grade colours use the palette only', () => {
+  it.each(Object.entries(GRADE_TOKENS))('grade %s is readable on its tint and on a card', (_grade, { text, tint }) => {
+    expect(contrast(palette[text], palette[tint])).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(palette[text], palette.surface)).toBeGreaterThanOrEqual(4.5);
+    // Its border marks the grade against the card.
+    expect(contrast(palette[text], palette.surface)).toBeGreaterThanOrEqual(3);
   });
 });

@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { DiscoveredFlow, DiscoveryDraft, PageInventoryItem, PlanItemSource, PlanPageTest, ReleaseReport, TestCaseExpectations } from '@qa/types';
+import type { Breakpoint, DiscoveredFlow, DiscoveryDraft, PageInventoryItem, PlanItemSource, PlanPageTest, ReleaseReport, TestCaseExpectations } from '@qa/types';
 import { PlanValidator } from './discovery/plan-validator.js';
 
 /**
@@ -27,6 +27,8 @@ export interface RememberedPlan {
   /** The journeys, reused while every page is as it was (`journeysFrom`). */
   flows?: DiscoveredFlow[];
   journeysFrom?: string;
+  /** The screen sizes it was approved with: "Test again" tests at the same ones. */
+  screenSizes?: Breakpoint[];
 }
 
 /** A fingerprint of every page's controls: the same while no page changed. */
@@ -48,6 +50,8 @@ export interface SiteMemory {
   updatedAt: string;
   /** The owner said this host is a test copy (staging), so it may be tested fully. */
   staging?: boolean;
+  /** The answer to "I own this site or it's a test copy" last time, so the next check-up starts with it. */
+  owner?: boolean;
   /** Pages found in the last run. */
   pages: string[];
   /** Journeys in the last run, by journey key, with a fingerprint of their steps. */
@@ -64,6 +68,8 @@ export interface SiteMemory {
   observed: Record<string, Array<{ field: string; message: string }>>;
   /** The last approved Plan, reused where the site hasn't changed. */
   plan?: RememberedPlan;
+  /** When that Plan was approved (ISO-8601): "Test again" names it when nothing changed since. */
+  planApprovedAt?: string;
 }
 
 /** The same journey on another run: same start page and name. */
@@ -115,8 +121,11 @@ const OBSERVED_EMPTY_FIELD = /^Leaving "(.+)" empty shows: "(.+)"$/;
  * added tests and confirmed rules. Flags pages, journeys and questions that weren't there before.
  */
 export function applySiteMemory(draft: DiscoveryDraft, memory: SiteMemory | null): MemorySummary {
-  const summary: MemorySummary = { seenBefore: !!memory, newPages: 0, newJourneys: 0, newQuestions: 0, rememberedAnswers: 0 };
-  if (!memory) return summary;
+  // A memory that only holds the owner's choices (saved before the site's first scan) isn't a run
+  // seen before: nothing is flagged as new then.
+  const seenBefore = !!memory && memory.pages.length > 0;
+  const summary: MemorySummary = { seenBefore, newPages: 0, newJourneys: 0, newQuestions: 0, rememberedAnswers: 0 };
+  if (!memory || !seenBefore) return summary;
 
   const knownPages = new Set(memory.pages);
   for (const page of draft.pages) {
@@ -195,7 +204,7 @@ export function rememberRun(
   memory: SiteMemory | null,
   host: string,
   draft: DiscoveryDraft,
-  review: { reviewed: boolean; answeredByOwner?: Record<string, string> } = { reviewed: false }
+  review: { reviewed: boolean; answeredByOwner?: Record<string, string>; screenSizes?: Breakpoint[] } = { reviewed: false }
 ): SiteMemory {
   const next: SiteMemory = memory ? JSON.parse(JSON.stringify(memory)) : emptySiteMemory(host);
   next.pages = draft.pages.map((p) => p.urlPath);
@@ -251,7 +260,9 @@ export function rememberRun(
           .filter((f) => f.source !== 'user')
           .map(({ isNew: _isNew, needsHelp: _needsHelp, outOfScope: _off, ...flow }) => flow),
         journeysFrom: siteContentKey(draft.pages),
+        screenSizes: review.screenSizes,
       };
+      next.planApprovedAt = new Date().toISOString();
     }
   }
   return next;

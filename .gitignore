@@ -8,6 +8,11 @@ dist/
 # A plan paused for review (sign-in details are left out of it, but it names the site and its pages)
 .qa-plan.json
 
+# The runner's data folder: site memory and history, the saved key's models, a waiting plan
+.qa-data/
+# Where site data lived before .qa-data/ (the runner moves it there on start)
+/sites/
+
 # Run output (approved .qa-baselines/ are committed)
 .qa-report/
 .qa-runner-report/

@@ -1,6 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Breakpoint, ReviewPlan } from '@qa/types';
 import { SiteMap } from '../components/SiteMap';
+import { FocusHeading, Notice, Spinner } from '../components/text';
+import { count } from '../lib/format';
+import { useDocumentTitle } from '../lib/title';
 import { PlanDocument, type PlanActions } from '../components/plan/PlanDocument';
 import { showItem } from '../components/plan/parts';
 import { patchPlan, replanItem, replanEverything, addPageToPlan, includeHostInPlan, downloadPlanMarkdown, interpretSentence } from '../api';
@@ -13,16 +16,22 @@ export interface PlanUpdateState {
   error?: string | null;
 }
 
+/** A banner over the plan: testing stopped or failed, or the site changed since the plan was approved. */
+export interface PlanNotice {
+  tone: 'fail' | 'warn' | 'stamp';
+  title: string;
+  body?: string;
+}
+
 export interface PlanReviewScreenProps {
   plan: ReviewPlan;
   onApprove: () => void;
   onPlanUpdated: (plan: ReviewPlan) => void;
-  onBack?: () => void;
   update: PlanUpdateState;
   approveError?: string | null;
+  approving?: boolean;
+  notice?: PlanNotice | null;
 }
-
-const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /**
  * The plan as the person sees it: switches they just flipped show at once, before the QA Tool has
@@ -40,7 +49,11 @@ function withChanges(plan: ReviewPlan, switched: Record<string, boolean>, sizes:
   };
 }
 
-export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, onBack, update, approveError }: PlanReviewScreenProps) {
+/**
+ * The Plan Review. Leaving it keeps the plan waiting (the new check-up screen offers it again), so
+ * there's no Back here that could throw it away.
+ */
+export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, approveError, approving = false, notice }: PlanReviewScreenProps) {
   const [tab, setTab] = useState<'plan' | 'map'>('plan');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,26 +135,22 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, onBack, updat
     // keep the address as it is
   }
   const lines = plan.summary?.lines || [];
+  useDocumentTitle(`Plan for ${host}`);
 
   return (
-    <div className="flex min-h-[calc(100vh-56px)] w-full flex-col bg-canvas">
-      <div className="sticky top-14 z-40 border-b border-rule bg-surface/95 px-4 py-3 backdrop-blur sm:px-6">
+    <div className="flex min-h-[calc(100vh-7rem)] w-full flex-col bg-canvas">
+      <div className="border-b border-rule bg-surface px-4 py-4 sm:px-6">
         <div className="mx-auto flex max-w-6xl flex-wrap items-end justify-between gap-3">
           <div className="min-w-0">
-            {onBack && (
-              <button type="button" onClick={onBack} className="btn-link text-xs">
-                ← Back to the address
-              </button>
-            )}
-            <h1 className="break-words text-xl font-bold text-ink sm:text-2xl">Review the plan for {host}</h1>
-            <p className="font-mono text-xs text-ink-soft">
+            <FocusHeading className="break-words text-2xl font-bold text-ink sm:text-3xl">Review the plan for {host}</FocusHeading>
+            <p className="text-sm text-ink-soft">
               {plan.siteType ? `${plan.siteType} · ` : ''}
               {count(plan.planPages?.length ?? plan.pages.length, 'page', 'pages')} · {count(plan.navigation?.length ?? 0, 'link', 'links')} ·{' '}
               {count(plan.flows.length, 'journey', 'journeys')}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <div role="tablist" aria-label="How to show the plan" className="flex rounded border border-rule bg-panel p-0.5 text-xs">
+            <div role="tablist" aria-label="How to show the plan" className="flex rounded border border-rule bg-panel p-0.5 text-sm">
               {(
                 [
                   ['plan', 'Full plan'],
@@ -154,25 +163,31 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, onBack, updat
                   role="tab"
                   aria-selected={tab === id}
                   onClick={() => setTab(id)}
-                  className={`rounded px-3 py-1 font-bold ${tab === id ? 'bg-stamp text-surface' : 'text-ink-soft hover:text-ink'}`}
+                  className={`min-h-[40px] rounded px-3 font-bold ${tab === id ? 'bg-stamp text-surface' : 'text-ink-soft hover:text-ink'}`}
                 >
                   {name}
                 </button>
               ))}
             </div>
-            <button type="button" className="btn-quiet px-3 py-1.5 text-xs" onClick={() => downloadPlanMarkdown().catch((err: Error) => setError(err.message))}>
+            <button type="button" className="btn-quiet min-h-[44px] px-3 text-sm" onClick={() => downloadPlanMarkdown().catch((err: Error) => setError(err.message))}>
               Download the plan
             </button>
           </div>
         </div>
+        {notice && (
+          <div className="mx-auto mt-4 max-w-6xl">
+            <Notice tone={notice.tone} title={notice.title}>
+              {notice.body}
+            </Notice>
+          </div>
+        )}
         {busy && (
-          <p role="status" className="mx-auto mt-2 flex max-w-6xl items-center gap-2 text-xs text-stamp">
-            <span aria-hidden="true" className="h-3 w-3 animate-spin rounded-full border-2 border-stamp border-t-transparent" />
-            Updating the plan: {update.step || update.what || 'starting'}…
+          <p role="status" className="mx-auto mt-3 flex max-w-6xl items-center gap-2 text-sm text-stamp">
+            <Spinner label={`Updating the plan: ${update.step || update.what || 'starting'}…`} />
           </p>
         )}
         {(update.error || error) && (
-          <p role="alert" className="mx-auto mt-2 max-w-6xl text-xs text-fail">
+          <p role="alert" className="mx-auto mt-3 max-w-6xl text-sm text-fail">
             {update.error || error}
           </p>
         )}
@@ -200,17 +215,17 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, onBack, updat
 
       <div className="sticky bottom-0 z-40 border-t border-rule bg-surface/95 px-4 py-3 backdrop-blur sm:px-6">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0 text-sm text-ink">
+          <div className="min-w-0 flex-1 text-sm text-ink">
             <p className="font-bold">{lines[0]?.text ?? 'Ready to test'}</p>
-            <p className="text-xs text-ink-soft">{lines.length > 1 ? lines.slice(1).map((l) => l.text).join(' · ') : 'Nothing runs until you approve.'}</p>
+            <p className="text-ink-soft">{lines.length > 1 ? lines.slice(1).map((l) => l.text).join(' · ') : 'Nothing runs until you approve.'}</p>
             {approveError && (
-              <p role="alert" className="text-xs text-fail">
+              <p role="alert" className="font-bold text-fail">
                 {approveError}
               </p>
             )}
           </div>
-          <button type="button" className="btn-primary px-5 py-2.5 text-sm font-bold" disabled={busy} onClick={onApprove}>
-            Approve plan & start testing →
+          <button type="button" className="btn-primary" disabled={busy || approving} onClick={onApprove}>
+            {approving ? <Spinner label="Starting the tests…" /> : 'Approve the plan and start testing'}
           </button>
         </div>
       </div>

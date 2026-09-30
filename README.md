@@ -40,15 +40,14 @@ The platform operates across four primary operational layers:
 
 ```mermaid
 flowchart TD
-    subgraph UI ["User Interfaces (served by the QA Tool on port 3001)"]
-        Wizard["Wizard UI (@qa/wizard)\n/ · Non-technical"]
-        Studio["QA Flow Studio (@qa/web)\n/studio/ · Technical QA"]
+    subgraph UI ["User Interfaces"]
+        Wizard["Release check-up (@qa/wizard)\nServed by the QA Tool on port 3001, for everyone:\nplain words on top, details for developers under each finding"]
         LocalDash["Review Dashboard (@qa/dashboard)\nPort 3000 / CLI runs only"]
     end
 
     subgraph CoreEngine ["Execution & Discovery Core"]
         CLI["CLI: qa-test (@qa/cli)"]
-        Runner["QA Tool server (@qa/runner)\nPort 3001: API (HTTP + SSE) and both UIs"]
+        Runner["QA Tool server (@qa/runner)\nPort 3001: API (HTTP + SSE) and the Wizard"]
         Orchestrator["Flow Test Orchestrator (@qa/core)"]
         AI["AI Discovery Agent\n(Claude / OpenAI / Gemini / OpenRouter / Mock)"]
         Checkers["Audit Checkers (@qa/checkers)\n(Axe WCAG, Design Tokens, Visual Diff, Console/Network)"]
@@ -65,9 +64,7 @@ flowchart TD
     end
 
     Wizard -->|POST /api/runner/run| Runner
-    Studio -->|POST /api/runner/run| Runner
-    Studio -->|/api/v1/* passed on when HUB_API_URL is set| Runner
-    Runner -.->|/api/v1/*| Hub
+    Runner -.->|/hub and /api/v1/* passed on when HUB_API_URL is set| Hub
     Runner --> Orchestrator
     CLI --> Orchestrator
     Orchestrator --> AI
@@ -101,11 +98,10 @@ flowchart TD
 | [`packages/core`](packages/core) | Core test orchestration, AI discovery agent, test planner, crawler, benchmarking engine, and AI providers |
 | [`packages/checkers`](packages/checkers) | Automated checkers (A11y/WCAG, design tokens, visual diffs, console errors, network failures) |
 | [`packages/cli`](packages/cli) | Command line interface providing the `qa-test` executable |
-| [`packages/runner`](packages/runner) | The QA Tool server: runs checks over HTTP with Server-Sent Events (SSE) streaming, and serves the Wizard and QA Flow Studio on the same port |
+| [`packages/runner`](packages/runner) | The QA Tool server: runs checks over HTTP with Server-Sent Events (SSE) streaming, keeps every check-up's report, and serves the Wizard on the same port |
 | [`packages/hub`](packages/hub) | Central report aggregation service, PostgreSQL database driver, and S3 evidence store |
 | [`packages/dashboard`](packages/dashboard) | Local review server for confirmation of AI discovery drafts and reports |
-| [`packages/web`](packages/web) | "QA Flow Studio" — React + Vite advanced developer & QA dashboard |
-| [`packages/wizard`](packages/wizard) | Non-technical, jargon-free step-by-step wizard UI |
+| [`packages/wizard`](packages/wizard) | "Release check-up": the one app, in plain language, with details for developers under each finding ([ADR 0010](docs/adr/0010-one-app-with-details-on-demand.md)) |
 | [`packages/types`](packages/types) | Shared TypeScript type definitions, schemas, and interfaces |
 | [`fixtures/test-app`](fixtures/test-app) | Built-in target test application (Invoicing app with simulated errors) |
 | [`scripts/benchmark.ts`](scripts/benchmark.ts) | Automated benchmark harness measuring check accuracy and planted defect detection |
@@ -143,10 +139,14 @@ Run `pnpm bootstrap` again after every `git pull`. (It isn't called `pnpm setup`
 pnpm start
 ```
 
-This builds anything that's missing and opens **`http://localhost:3001/`** in your browser:
+This builds anything that's missing and opens **Release check-up** at **`http://localhost:3001/`** in your browser. Every screen has its own address:
 
-- **Wizard** (step-by-step checks): `http://localhost:3001/`
-- **QA Flow Studio** (the detailed view for engineers): `http://localhost:3001/studio/`
+- `/`: a new check-up
+- `/reports`: past check-ups, and `/reports/<runId>` for one report
+- `/settings`: the AI key
+- `/hub`: the Report Hub's dashboard, when `HUB_API_URL` is set
+
+QA Flow Studio was retired ([ADR 0010](docs/adr/0010-one-app-with-details-on-demand.md)): its old address, `/studio`, leads to Past check-ups.
 
 Leave the terminal open while you use it. `pnpm start --no-open` starts without opening a browser. To use another port, set `RUNNER_PORT` first (PowerShell: `$env:RUNNER_PORT=3055; pnpm start`). The QA Tool only answers on this computer (`localhost`).
 
@@ -177,7 +177,7 @@ S3_SECRET_ACCESS_KEY=minioadmin
 
 # The QA Tool (pnpm start)
 RUNNER_PORT=3001
-# Optional: the Report Hub behind Studio's release history and triage (/api/v1/*)
+# Optional: a Report Hub, passed on at /hub (its dashboard) and /api/v1/*
 HUB_API_URL=http://localhost:4000
 ```
 
@@ -187,13 +187,15 @@ HUB_API_URL=http://localhost:4000
 
 ### Option A: One Command (`pnpm start`)
 
-`pnpm start` runs the whole tool as one process on one port: the API that runs checks, the Wizard at `/` and QA Flow Studio at `/studio/`. `qa-test runner` starts the same server from the CLI:
+`pnpm start` runs the whole tool as one process on one port: the API that runs checks, and the Wizard at `/`. `qa-test runner` starts the same server from the CLI:
 
 ```bash
 node packages/cli/dist/index.js runner -p 3001 [--hub http://localhost:4000]
 ```
 
-The Report Hub (below) stays a separate, optional service. Without `HUB_API_URL`, Studio's Hub views show an empty state.
+The Report Hub (below) stays a separate, optional service. With `HUB_API_URL` set, the top bar links to its dashboard at `/hub`; without it there's no Team Hub link.
+
+Data is kept in `.qa-data/` in the working folder (git ignores it): each site's approved plan and answers, and its grade history. Set `RUNNER_DATA_DIR` to keep it elsewhere. Each check-up's report, screenshots and downloads go in `.qa-runner-report/runs/<runId>/` (`RUNNER_OUTPUT_DIR`). The last 10 check-ups of each site are kept; older ones are deleted by themselves, and any can be deleted from Past check-ups.
 
 ---
 
@@ -207,7 +209,7 @@ docker compose up -d
 ```
 
 Service endpoints:
-- **QA Tool** (Wizard, QA Flow Studio at `/studio/`, and the API): `http://localhost:3001`
+- **QA Tool** (the Wizard, the Hub's dashboard at `/hub`, and the API): `http://localhost:3001`
 - **Report Hub API**: `http://localhost:4000`
 - **MinIO Console**: `http://localhost:9001` (User: `minioadmin` / Pass: `minioadmin`)
 - **Postgres Database**: `localhost:5432` (User: `qahub` / Pass: `qahub_secret`)
@@ -219,13 +221,12 @@ docker compose down
 
 ---
 
-### Working on the UIs (Hot Reload)
+### Working on the Wizard (Hot Reload)
 
-Only needed when you change the Wizard or Studio code. Keep the QA Tool running (`pnpm start`), then:
+Only needed when you change the Wizard's code. Keep the QA Tool running (`pnpm start`), then:
 
 ```bash
-pnpm dev:wizard   # http://localhost:3002, API calls passed on to the QA Tool on 3001
-pnpm dev:web      # http://localhost:3000
+pnpm dev   # http://localhost:3002, API calls passed on to the QA Tool on 3001
 ```
 
 ---
@@ -302,18 +303,24 @@ node packages/cli/dist/index.js plan --draft .qa-report/discovery-draft.json --o
 
 ---
 
-### Step 4: Use the Non-Technical Wizard UI
+### Step 4: Use Release check-up
 
 1. Start the QA Tool, if it isn't running:
    ```bash
    pnpm start
    ```
-2. Use the Wizard it opens at `http://localhost:3001/`.
-3. Enter the site's address. Tick **I own this site or it’s a test copy** for full testing; without it the check is read-only. Optionally add specs, design notes or flow docs, or adjust **Explore up to N pages** under Advanced (default 200).
-4. Set up an OpenRouter key under **Settings & AI Key** (the free tier works).
-5. Click **Scan Site & Build Plan**. The scan shows live progress with numbers: pages found, layouts, AI requests used and how many are left today, and about how long is left.
-6. Review the plan, change it if you like, and approve it. Nothing is tested before you approve (see [The plan review](#the-plan-review) below).
-7. Watch the live run, then read the report and download it.
+2. Use Release check-up, which it opens at `http://localhost:3001/`.
+3. The first time, paste an OpenRouter key at the top of the screen (the free tier works). It's checked as you paste it, and nothing else you type is lost. You can replace it later in **Settings**.
+4. Enter the site's address. A bare address on this computer or a private network (`localhost:3050`, `192.168.1.5`) gets `http://`; anything else gets `https://`. Once it's checked, the screen shows the address used and which kind of check-up it gets:
+   - **Test copy**: forms can be filled in and sent. That needs an address on this computer, a private network or a dev tunnel, or one you marked with **This is a test copy**, and **I own this site** ticked.
+   - **Live site**: only looked at, nothing is sent or changed.
+
+   Both choices are remembered for the site. Optionally add specs, design notes or journeys to test, or change **Explore up to N pages** (default 200).
+5. Click **Scan the site**. The scan shows live progress with numbers: pages found, layouts, AI requests used and how many are left today, and about how long is left. **Stop scanning** asks first, then goes back with everything still filled in.
+6. Review the plan, change it if you like, and approve it. Nothing is tested before you approve (see [The plan review](#the-plan-review) below). Leaving the plan keeps it waiting: the new check-up screen offers it again.
+7. Watch the testing: the test count and time left, the page under test, the latest screenshot and what's been found so far. **Stop testing** keeps your plan, so you can approve it again.
+8. Read the report. The stamp, **Ready to release** or **Not ready yet**, is the verdict, with its reason; the six areas are graded A–F under it, and an area that wasn't checked says so. Problems are grouped **Must fix before release**, **Should fix** and **Suggestions**. Each has **Details for developers**: the screenshot, steps to reproduce, the page and element, console errors, **Copy bug report**, **Copy Playwright test** and the `qa-test verify` command.
+9. **Test again** scans the site again and reuses the plan you approved: if nothing changed, testing starts at once; if something did, only what's new waits for your review. Every report is kept under **Past check-ups**.
 
 #### The plan review
 
@@ -327,7 +334,7 @@ The AI writes the whole plan from what the crawler found. The **Full plan** tab 
 
 Every item can be switched on or off, or re-planned with the AI (optionally saying what should change). **Download the plan** saves the whole plan as Markdown for sign-off. The **Map** tab draws the pages and the links between them.
 
-The plan needs an AI key: set one up under **Settings & AI Key** (OpenRouter's free tier works). Free models allow 20 requests a minute, and 50 a day until the account has bought 10 credits (then 1,000). The plan asks for about one request per three pages, plus one for the shared menus and one for the journeys. Anything past the day's budget is planned by fixed rules, labelled as such, and can be re-planned later. Free models may occasionally produce malformed JSON or hit output token limits; trailing commas are tolerated, while comments, single quotes or unquoted keys safely trigger the Fixed-Rule Fallback. Any fallback item can be re-planned with one click via **Re-plan**. The next run of the same site reuses the approved plan and only asks the AI about pages and links that changed.
+The plan needs an AI key: set one up on the new check-up screen or in **Settings** (OpenRouter's free tier works). Free models allow 20 requests a minute, and 50 a day until the account has bought 10 credits (then 1,000). The plan asks for about one request per three pages, plus one for the shared menus and one for the journeys. Anything past the day's budget is planned by fixed rules, labelled as such, and can be re-planned later. Free models may occasionally produce malformed JSON or hit output token limits; trailing commas are tolerated, while comments, single quotes or unquoted keys safely trigger the Fixed-Rule Fallback. Any fallback item can be re-planned with one click via **Re-plan**. The next run of the same site reuses the approved plan and only asks the AI about pages and links that changed.
 
 ---
 
@@ -400,7 +407,7 @@ qa-test verify <findingId> -o .qa-report
 ```
 
 ### `qa-test runner`
-Starts the QA Tool server: the API (HTTP + SSE) plus the Wizard at `/` and QA Flow Studio at `/studio/`, all on one port. `--hub` (or `HUB_API_URL`) passes `/api/v1/*` on to a Report Hub.
+Starts the QA Tool server: the API (HTTP + SSE) plus the Wizard at `/`, on one port. `--hub` (or `HUB_API_URL`) passes `/hub` and `/api/v1/*` on to a Report Hub.
 ```bash
 qa-test runner -p 3001 [--hub http://localhost:4000]
 ```
@@ -512,7 +519,12 @@ This occurs if the local Google Cloud telemetry plugin on Windows has invalid pa
   ```
 - Or use another port: `$env:RUNNER_PORT=3055; pnpm start` (or `qa-test runner -p 3055`).
 
-### 4. Playwright Browser Launch Errors
+### 4. The check-up stopped, or its screen says nothing is in progress
+- A scan that fails says why, with **Start a new check-up**; what you typed is still there.
+- Testing that fails part-way goes back to the plan with what happened above it. Approve the plan again once the site is working.
+- Addresses like `/check/plan` only show the check-up in progress. When there's none, open **Past check-ups** for finished ones.
+
+### 5. Playwright Browser Launch Errors
 - `pnpm start` stops with a message when the browser is missing. `pnpm bootstrap` installs it. On Linux, system libraries may also be needed:
   ```bash
   pnpm --filter @qa/core exec playwright install chromium --with-deps

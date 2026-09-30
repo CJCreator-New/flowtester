@@ -103,6 +103,37 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
     expect(grades1.aspects.Accessible.findings).toHaveLength(3);
   });
 
+  it('marks an aspect none of whose checks ran as not checked, and leaves it out of the overall score', () => {
+    const minorOnHome: Finding = {
+      id: 'F-UX-1',
+      title: 'Low contrast on footer link',
+      severity: 'Minor',
+      checker: 'ux-quality',
+      where: { urlPath: '/', role: 'visitor', breakpoint: '1440px' },
+      expectedVsActual: { expected: '', actual: '' },
+      stepsToReproduce: [],
+      evidence: {},
+      resolution: '',
+      verifyCommand: '',
+    };
+    // Only the bug and accessibility checks ran; the security one still found something.
+    const grades = calculateSiteAspectGrades([minorOnHome, { ...minorOnHome, id: 'F-SEC-1', checker: 'security', title: 'No HSTS' }], {
+      checkersRun: ['bug-detection', 'ux-quality'],
+    });
+    expect(grades.aspects.Works).toMatchObject({ grade: 'A', checked: true });
+    expect(grades.aspects.Accessible).toMatchObject({ score: 95, checked: true });
+    // A checker that found something ran, whatever the list says.
+    expect(grades.aspects.Secure).toMatchObject({ score: 95, checked: true });
+    for (const aspect of ['Fast and mobile', 'Findable', 'Looks and reads well'] as const) {
+      expect(grades.aspects[aspect].checked, aspect).toBe(false);
+    }
+    // (100 + 95 + 95) / 3, not lifted by three untouched A 100s.
+    expect(grades.overallScore).toBe(97);
+
+    // Reports made before this was recorded say nothing either way.
+    expect(calculateSiteAspectGrades([]).aspects.Findable.checked).toBeUndefined();
+  });
+
   it('fails an aspect (Grade F) when multiple major/blocker defects occur', () => {
     const criticalFindings: Finding[] = [
       {

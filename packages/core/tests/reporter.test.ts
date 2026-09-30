@@ -61,7 +61,7 @@ describe('ReportGenerator', () => {
     const mdContent = await fs.readFile(mdPath, 'utf8');
     expect(mdContent).toContain('# Pre-Release Readiness Report');
     expect(mdContent).toContain('product-omega');
-    expect(mdContent).toContain('RELEASE BLOCKED');
+    expect(mdContent).toContain('**Not ready yet**: 1 problem must be fixed first.');
     expect(mdContent).toContain('F-BLOCKER-001');
     expect(mdContent).toContain('Critical checkout crash');
     expect(mdContent).toContain('`qa-test verify F-BLOCKER-001`');

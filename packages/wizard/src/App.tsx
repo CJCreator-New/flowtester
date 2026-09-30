@@ -1,559 +1,615 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { ReleaseReport, ReviewPlan } from '@qa/types';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import type { ReleaseReport, ReviewPlan, RunSummary } from '@qa/types';
 import {
-  getReport,
-  getStatus,
+  abortRun,
+  approvePlan,
+  checkReachable,
   getAiSetup,
   getPlan,
-  approvePlan,
-  startRun,
-  abortRun,
+  getStatus,
+  listRuns,
+  readRunText,
   RunnerError,
+  startRun,
   STREAM_URL,
+  type AiSetup,
+  type RunnerStatus,
+  type SiteFacts,
+  type StartRunRequest,
 } from './api';
+import { useConfirm } from './components/ConfirmDialog';
+import { NothingInProgress } from './components/RunStates';
+import { StepBar, type Step } from './components/StepBar';
+import { Spinner } from './components/text';
+import { TopBar } from './components/TopBar';
 import { useRunnerConnection } from './hooks/useRunnerConnection';
 import { useRunnerStream } from './hooks/useRunnerStream';
-import { initialFeed, plainFailure, reduceFeed, type FeedState, type RunMode, type RunnerEvent } from './lib/translate';
+import { DEFAULT_MAX_PAGES, EMPTY_FORM, productContextOf, type CheckupForm } from './lib/form';
+import { isCheckRoute, matchRoute, navigate, PATHS, usePathname, type Route } from './lib/router';
+import { useDocumentTitle } from './lib/title';
+import { initialFeed, plainFailure, reduceFeed, type FeedState, type RunnerEvent } from './lib/translate';
+import { displayHost, hostOf } from './lib/url';
 import { ConnectionScreen } from './screens/ConnectionScreen';
-import { KeySetupScreen } from './screens/KeySetupScreen';
-import { UrlFirstScreen, type UrlFirstSubmitOptions } from './screens/UrlFirstScreen';
+import { NewCheckupScreen, type StartFacts } from './screens/NewCheckupScreen';
+import { NotFoundScreen } from './screens/NotFoundScreen';
+import { PastCheckupsScreen } from './screens/PastCheckupsScreen';
+import { PlanReviewScreen, type PlanNotice, type PlanUpdateState } from './screens/PlanReviewScreen';
+import { ReportScreen } from './screens/ReportScreen';
 import { ScanningScreen, type ScanProgress } from './screens/ScanningScreen';
-import { PlanReviewScreen, type PlanUpdateState } from './screens/PlanReviewScreen';
-import { LiveMapScreen } from './screens/LiveMapScreen';
-import { ReportMapScreen } from './screens/ReportMapScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
+import { TestingScreen } from './screens/TestingScreen';
 
-export type WizardStep = 'connect' | 'loading' | 'key' | 'url-first' | 'scanning' | 'plan' | 'live' | 'report';
+/** How often the runner's state is read while a check-up is in progress, besides its events. */
+const POLL_MS = 5000;
 
-interface ActiveRun {
-  id?: string;
-  mode: RunMode;
-  targetUrl: string;
-  startedAt: number;
-  finished: boolean;
+const IN_PROGRESS = new Set(['scanning', 'awaiting-review', 'testing']);
+
+/** Where the runner's phase puts the person, when they're on one of the check-up's addresses. */
+function addressForPhase(status: RunnerStatus): string | null {
+  switch (status.phase) {
+    case 'scanning':
+      return PATHS.scan;
+    case 'awaiting-review':
+      return PATHS.plan;
+    case 'testing':
+      return PATHS.testing;
+    case 'done':
+      return status.reportRunId ? PATHS.report(status.reportRunId) : null;
+    default:
+      return null;
+  }
 }
 
-const RUN_SAFETY_POLL_MS = 5000;
+/** The step bar's position for a screen, when it has one. Scanning is when the plan is made. */
+function stepOf(route: Route): Step | null {
+  switch (route.name) {
+    case 'scan':
+    case 'plan':
+      return 'plan';
+    case 'testing':
+      return 'testing';
+    case 'report':
+      return 'report';
+    default:
+      return null;
+  }
+}
+
+function Loading({ label }: { label: string }) {
+  return (
+    <div className="mx-auto max-w-prose px-4 py-16 text-ink-soft sm:px-6">
+      <Spinner label={label} />
+    </div>
+  );
+}
+
+/** What the runner remembered about a site: who owns it, and whether it was marked as a test copy. */
+async function rememberedFor(targetUrl: string): Promise<SiteFacts['remembered']> {
+  try {
+    return (await checkReachable(targetUrl)).remembered;
+  } catch {
+    return undefined;
+  }
+}
 
 export default function App() {
   const { reachable, checks } = useRunnerConnection();
-  const [step, setStep] = useState<WizardStep>('connect');
-  const [model, setModel] = useState<string | null>(null);
-  const [keyReturnStep, setKeyReturnStep] = useState<WizardStep | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const pathname = usePathname();
+  const route = matchRoute(pathname);
+  const { confirm, dialog } = useConfirm();
 
-  // Stored inputs
-  const [url, setUrl] = useState<string>('');
-  const [isOwner, setIsOwner] = useState(true);
-  const [hasSpecs, setHasSpecs] = useState(false);
-  const [hasDesignNotes, setHasDesignNotes] = useState(false);
-  const [scanningMessage, setScanningMessage] = useState('Crawling routes, identifying interactive forms, and mapping user journeys...');
-
-  // The active run & plan
-  const runRef = useRef<ActiveRun | null>(null);
-  const [run, setRun] = useState<ActiveRun | null>(null);
+  const [status, setStatus] = useState<RunnerStatus | null>(null);
+  const [ai, setAi] = useState<AiSetup | null>(null);
+  // The new check-up form lives here, so changing screens or adding the key never loses it.
+  const [form, setForm] = useState<CheckupForm>(EMPTY_FORM);
   const [plan, setPlan] = useState<ReviewPlan | null>(null);
-  const [feed, setFeed] = useState<FeedState>(initialFeed('product'));
-  const [report, setReport] = useState<ReleaseReport | null>(null);
-  // How the scan is going, and background changes to the plan, from the QA Tool's events.
-  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
-  const planningStartedAt = useRef<number | null>(null);
+  const [planNotice, setPlanNotice] = useState<PlanNotice | null>(null);
   const [planUpdate, setPlanUpdate] = useState<PlanUpdateState>({ running: false });
   const [approveError, setApproveError] = useState<string | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [scan, setScan] = useState<ScanProgress | null>(null);
+  const [feed, setFeed] = useState<FeedState>(() => initialFeed('product'));
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [recent, setRecent] = useState<RunSummary[] | null>(null);
 
-  // Check runner connection and AI setup on mount
-  useEffect(() => {
-    if (!reachable || step !== 'connect') return;
-    setStep('loading');
-    Promise.all([getAiSetup(), getStatus()])
-      .then(([setup, status]) => {
-        setModel(setup.model);
-        if (status?.phase === 'awaiting-review') {
-          getPlan()
-            .then((p) => {
-              setPlan(p);
-              setUrl(p.targetUrl);
-              setStep('plan');
-            })
-            .catch(() => setStep('url-first'));
-        } else if (status?.phase === 'scanning') {
-          setStep('scanning');
-        } else if (status?.phase === 'testing') {
-          setStep('live');
-        } else if (status?.phase === 'done' && status.hasReport) {
-          getReport()
-            .then((r) => {
-              setReport(r);
-              setUrl(r.targetUrl);
-              setStep('report');
-            })
-            .catch(() => setStep('url-first'));
-        } else {
-          setStep('url-first');
-        }
-      })
-      .catch((err) => {
-        setLoadError(err instanceof RunnerError ? err.message : 'The QA Tool didn’t answer. Reload the page.');
-      });
-  }, [reachable, step]);
+  /** Goes up with every start, stop and approval: a status read begun before one is out of date. */
+  const epoch = useRef(0);
+  const planningStartedAt = useRef<number | null>(null);
 
-  const finishRun = useCallback(async () => {
-    const active = runRef.current;
-    if (active) active.finished = true;
-    try {
-      const finished = await getReport();
-      setReport(finished);
-      setStep('report');
-    } catch (err) {
-      setFeed((f) => ({
-        ...f,
-        status: 'failed',
-        failure: err instanceof RunnerError ? err.message : plainFailure('', active?.mode || 'product'),
-      }));
-    }
+  const refreshRecent = useCallback(() => {
+    listRuns()
+      .then(setRecent)
+      .catch(() => {});
   }, []);
 
-  const failRun = useCallback((error: unknown) => {
-    const active = runRef.current;
-    if (active) active.finished = true;
-    setFeed((f) => reduceFeed(f, { type: 'RUN_FAILED', error }, active?.mode || 'product'));
-  }, []);
-
-  // Polls runner status periodically in background
+  /**
+   * Reads the runner's state. On the check-up's own addresses the runner's phase wins: when the
+   * check-up has moved on, the address is replaced with the right one. Anywhere else the phase never
+   * moves the person; the new check-up screen offers a Resume card instead.
+   */
   const reconcile = useCallback(async () => {
-    const status = await getStatus();
-    if (!status) return;
+    const asked = epoch.current;
+    const next = await getStatus();
+    if (!next || asked !== epoch.current) return;
+    setStatus(next);
+    if (!isCheckRoute(matchRoute(window.location.pathname))) return;
+    const target = addressForPhase(next);
+    if (target && target !== window.location.pathname) navigate(target, { replace: true });
+  }, []);
 
-    if (status.phase === 'awaiting-review') {
-      try {
-        const p = await getPlan();
-        setPlan(p);
-        setStep('plan');
-      } catch {
-        // ignore retry
-      }
-    } else if (status.phase === 'scanning') {
-      if (step !== 'scanning') setStep('scanning');
-    } else if (status.phase === 'testing') {
-      if (step !== 'live') setStep('live');
-    } else if (status.phase === 'done' && status.hasReport && step === 'live') {
-      finishRun();
-    } else if (status.phase === 'failed' && status.lastRunError) {
-      failRun(status.lastRunError);
-    }
-  }, [step, finishRun, failRun]);
+  // Once the runner answers: the AI setup, where any check-up is, and the recent check-ups.
+  useEffect(() => {
+    if (!reachable) return;
+    getAiSetup()
+      .then(setAi)
+      .catch(() => setStartError('Release check-up didn’t answer. Reload the page to try again.'));
+    void reconcile();
+    refreshRecent();
+  }, [reachable, reconcile, refreshRecent]);
+
+  const inProgress = !!status?.phase && IN_PROGRESS.has(status.phase);
+
+  // The runner's state is read again on each check-up address, and every few seconds while a
+  // check-up is in progress (the events do most of the work; this catches anything missed).
+  const checkAddress = isCheckRoute(route);
+  useEffect(() => {
+    if (!reachable) return;
+    if (checkAddress) void reconcile();
+    if (!checkAddress && !inProgress) return;
+    const timer = window.setInterval(() => void reconcile(), POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [reachable, pathname, checkAddress, inProgress, reconcile]);
+
+  // The plan waiting for review, fetched whenever the runner has one this page doesn't.
+  useEffect(() => {
+    if (status?.phase !== 'awaiting-review') return;
+    if (plan && plan.runId === status.runId) return;
+    let cancelled = false;
+    getPlan()
+      .then((p) => !cancelled && setPlan(p))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [status?.phase, status?.runId, plan]);
+
+  // A message from starting belongs to the screen it was started from.
+  useEffect(() => setStartError(null), [pathname]);
+  useEffect(() => {
+    if (reachable && route.name === 'new') refreshRecent();
+  }, [reachable, route.name, refreshRecent]);
 
   const onEvent = useCallback(
     (event: RunnerEvent) => {
-      const active = runRef.current;
-      if (typeof event.runId === 'string' && active?.id && event.runId !== active.id) return;
+      // A page that opens or reconnects mid-run is sent the run's events so far, marked `replayed`:
+      // they rebuild the screens, but only live events move the person.
+      const live = event.replayed !== true;
+      const onCheckAddress = () => isCheckRoute(matchRoute(window.location.pathname));
+      const at = typeof event.timestamp === 'number' ? event.timestamp : Date.now();
 
-      if (event.type === 'DISCOVERY_STARTED') {
-        setScanningMessage('Crawling pages, analyzing forms, and mapping user journeys...');
-        return;
-      }
+      switch (event.type) {
+        case 'connected':
+          setFeed(initialFeed('product'));
+          setScan(null);
+          planningStartedAt.current = null;
+          void reconcile();
+          return;
 
-      if (event.type === 'DISCOVERY_COMPLETED') {
-        const flows = typeof event.flowsFound === 'number' ? `${event.flowsFound} flows found` : 'flows mapped';
-        setScanningMessage(`Discovery complete (${flows}). Preparing interactive test plan...`);
-        return;
-      }
-
-      if (event.type === 'DISCOVERY_PROGRESS') {
-        const p = event as unknown as ScanProgress & { stage: ScanProgress['stage'] };
-        if (p.stage === 'crawling') setScanningMessage('Exploring the site: every page and where its links go.');
-        if (p.stage === 'narrow-screens') setScanningMessage('Checking how the menus fold on phones and tablets.');
-        if (p.stage === 'planning') {
-          setScanningMessage('The AI is writing the plan: every page, link and journey.');
-          planningStartedAt.current ??= Date.now();
+        case 'DISCOVERY_PROGRESS': {
+          const p = event as unknown as ScanProgress;
+          if (p.stage === 'planning') planningStartedAt.current ??= at;
+          // Time left, from how long the AI requests so far took.
+          const elapsed = planningStartedAt.current ? (at - planningStartedAt.current) / 1000 : 0;
+          const secondsLeft = p.stage === 'planning' && p.done && p.total ? (elapsed / p.done) * Math.max(0, p.total - p.done) : undefined;
+          setScan((before) => ({ ...before, ...p, pagesFound: p.pagesFound ?? before?.pagesFound, secondsLeft }));
+          return;
         }
-        // Time left, from how long the AI requests so far took.
-        const elapsed = planningStartedAt.current ? (Date.now() - planningStartedAt.current) / 1000 : 0;
-        const secondsLeft =
-          p.stage === 'planning' && p.done && p.total ? (elapsed / p.done) * Math.max(0, p.total - p.done) : undefined;
-        setScanProgress((before) => ({ ...before, ...p, pagesFound: p.pagesFound ?? before?.pagesFound, secondsLeft }));
-        return;
-      }
 
-      if (event.type === 'PLAN_UPDATE_STARTED') {
-        setPlanUpdate({ running: true, what: String(event.what ?? '') });
-        return;
-      }
-      if (event.type === 'PLAN_UPDATE_PROGRESS') {
-        setPlanUpdate((u) => ({ ...u, running: true, step: String(event.what ?? '') }));
-        return;
-      }
-      if (event.type === 'PLAN_UPDATED') {
-        getPlan()
-          .then((p) => setPlan(p))
-          .catch(() => {})
-          .finally(() => setPlanUpdate({ running: false }));
-        return;
-      }
-      if (event.type === 'PLAN_UPDATE_FAILED') {
-        setPlanUpdate({ running: false, error: `The plan couldn’t be updated: ${String(event.error ?? 'something went wrong')}` });
-        return;
-      }
+        case 'PLAN_UPDATE_STARTED':
+          setPlanUpdate({ running: true, what: String(event.what ?? '') });
+          return;
+        case 'PLAN_UPDATE_PROGRESS':
+          setPlanUpdate((u) => ({ ...u, running: true, step: String(event.what ?? '') }));
+          return;
+        case 'PLAN_UPDATED':
+          getPlan()
+            .then(setPlan)
+            .catch(() => {})
+            .finally(() => setPlanUpdate({ running: false }));
+          return;
+        case 'PLAN_UPDATE_FAILED':
+          setPlanUpdate({ running: false, error: 'The plan couldn’t be updated. Try again. If it keeps failing, check your AI key in Settings.' });
+          return;
 
-      if (event.type === 'PLAN_READY') {
-        getPlan()
-          .then((p) => {
-            setPlan(p);
-            setStep('plan');
-          })
-          .catch(() => {});
-        return;
-      }
+        case 'PLAN_READY':
+          getPlan()
+            .then(setPlan)
+            .catch(() => {});
+          if (event.changedSinceApproval) {
+            setPlanNotice({
+              tone: 'warn',
+              title: 'The site has changed since you approved its plan',
+              body: 'What’s new is marked New. Look it over, then approve the plan to test it.',
+            });
+          }
+          if (live) {
+            setStatus((s) => (s ? { ...s, phase: 'awaiting-review', hasPlan: true } : s));
+            if (onCheckAddress()) navigate(PATHS.plan, { replace: true });
+          }
+          return;
 
-      if (event.type === 'TESTING_STARTED') {
-        setStep('live');
-        return;
-      }
+        case 'TESTING_STARTED':
+          // The feed starts again with testing; the time left counts from here.
+          setFeed({ ...initialFeed('product'), testingStartedAt: at });
+          if (live) {
+            setStatus((s) => (s ? { ...s, phase: 'testing' } : s));
+            if (onCheckAddress()) navigate(PATHS.testing, { replace: true });
+          }
+          return;
 
-      if (event.type === 'RUN_FAILED') {
-        failRun(event.error);
-        return;
-      }
+        case 'RUN_COMPLETED': {
+          setFeed((f) => reduceFeed(f, event, 'product'));
+          if (!live) return;
+          const runId = typeof event.runId === 'string' ? event.runId : null;
+          setStatus((s) => (s ? { ...s, phase: 'done', isRunning: false, reportRunId: runId } : s));
+          refreshRecent();
+          if (runId && onCheckAddress()) navigate(PATHS.report(runId), { replace: true });
+          return;
+        }
 
-      setFeed((f) => reduceFeed(f, event, active?.mode || 'product'));
+        case 'RUN_FAILED':
+          setFeed((f) => reduceFeed(f, event, 'product'));
+          if (live) epoch.current++;
+          if (event.planKept) {
+            // Testing failed part-way: the approved plan waits again, with what happened above it.
+            setPlanNotice({
+              tone: 'fail',
+              title: 'Testing stopped before it finished',
+              body: `${plainFailure(event.error, 'product')} Your plan is kept: approve it again when the site is working.`,
+            });
+            if (live) {
+              setStatus((s) => (s ? { ...s, phase: 'awaiting-review' } : s));
+              if (onCheckAddress()) navigate(PATHS.plan, { replace: true });
+            }
+          } else if (live) {
+            setStatus((s) => (s ? { ...s, phase: 'failed', isRunning: false } : s));
+          }
+          return;
 
-      if (event.type === 'RUN_COMPLETED') {
-        finishRun();
+        case 'RUN_ABORTED':
+          setFeed((f) => reduceFeed(f, event, 'product'));
+          // Stopped from another tab: catch up.
+          if (live) void reconcile();
+          return;
+
+        default:
+          setFeed((f) => reduceFeed(f, event, 'product'));
       }
     },
-    [failRun, finishRun]
+    [reconcile, refreshRecent]
   );
 
-  useRunnerStream(STREAM_URL, reachable, onEvent, reconcile);
+  useRunnerStream(STREAM_URL, reachable, onEvent, () => void reconcile());
 
-  useEffect(() => {
-    if (step !== 'live' && step !== 'scanning') return;
-    const timer = setInterval(reconcile, RUN_SAFETY_POLL_MS);
-    return () => clearInterval(timer);
-  }, [step, reconcile]);
+  /** Clears everything of the check-up before, for a new one. */
+  const resetRun = () => {
+    setPlan(null);
+    setPlanNotice(null);
+    setPlanUpdate({ running: false });
+    setApproveError(null);
+    setScan(null);
+    planningStartedAt.current = null;
+    setFeed(initialFeed('product'));
+  };
 
-  // Handler: Start a URL-first check with mandatory plan review gate
-  const handleStartUrlFirst = async ({
-    targetUrl,
-    owner,
-    productContext,
-    designNotes,
-    maxPages,
-  }: UrlFirstSubmitOptions) => {
-    setUrl(targetUrl);
-    setIsOwner(owner);
-    setHasSpecs(!!productContext);
-    setHasDesignNotes(!!designNotes);
-    // The AI writes the plan: without a key set up, that comes first.
-    if (!model) {
-      setKeyReturnStep('url-first');
-      setStep('key');
+  /**
+   * Starts a check-up: from the new check-up screen, Test again or Go deeper, all the same way. A
+   * plan waiting for review is only thrown away once the person says so.
+   */
+  const start = async (request: StartRunRequest): Promise<void> => {
+    setStarting(true);
+    setStartError(null);
+    try {
+      let runId: string;
+      try {
+        runId = await startRun(request);
+      } catch (err) {
+        if (!(err instanceof RunnerError) || err.code !== 'ERR_PLAN_WAITING') throw err;
+        const waiting = (await getStatus())?.targetUrl;
+        const ok = await confirm({
+          title: 'Start a new check-up?',
+          body: <p>The plan for {waiting ? hostOf(waiting) : 'your site'} that’s waiting for your review will be thrown away.</p>,
+          confirmLabel: 'Start a new check-up',
+          cancelLabel: 'Keep the plan',
+          danger: true,
+        });
+        if (!ok) return;
+        runId = await startRun({ ...request, replacePlan: true });
+      }
+      epoch.current++;
+      resetRun();
+      setStatus((s) => ({
+        isRunning: true,
+        hasReport: s?.hasReport ?? false,
+        lastRunError: null,
+        hubConnected: s?.hubConnected,
+        reportRunId: s?.reportRunId,
+        phase: 'scanning',
+        hasPlan: false,
+        runId,
+        targetUrl: request.targetUrl,
+      }));
+      navigate(PATHS.scan);
+    } catch (err) {
+      if (err instanceof RunnerError && err.code === 'ERR_NO_AI_KEY') {
+        setAi((a) => ({ model: a?.model ?? null, configured: false }));
+        setStartError(
+          matchRoute(window.location.pathname).name === 'new'
+            ? 'An AI key is needed first. Add it above, then scan the site.'
+            : 'An AI key is needed first. Add it in Settings, then try again.'
+        );
+      } else {
+        setStartError(err instanceof RunnerError ? err.message : 'The check-up couldn’t be started. Try again.');
+      }
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const startFromForm = (facts: StartFacts) =>
+    void start({
+      targetUrl: facts.url,
+      owner: form.owner,
+      stagingHost: facts.stagingHost,
+      productContext: productContextOf(form),
+      designNotes: form.designNotes.trim() || undefined,
+      maxPages: form.maxPages !== DEFAULT_MAX_PAGES ? form.maxPages : undefined,
+    });
+
+  /** The address as the person typed it for a finished check-up (a report holds the one connected to). */
+  const typedAddressOf = async (runId: string, fallback: string): Promise<string> => {
+    const runs = await listRuns().catch(() => recent ?? []);
+    return runs.find((r) => r.runId === runId)?.targetUrl ?? fallback;
+  };
+
+  /** Scans again and reuses the approved plan: testing starts at once if nothing changed. */
+  const testAgain = async (runId: string, fallbackUrl: string) => {
+    const targetUrl = await typedAddressOf(runId, fallbackUrl);
+    const remembered = await rememberedFor(targetUrl);
+    setForm((f) => ({
+      ...f,
+      address: f.address && hostOf(f.address) === hostOf(targetUrl) ? f.address : displayHost(targetUrl),
+      owner: remembered?.owner ?? f.owner,
+      markedTestCopy: remembered?.markedTestCopy ?? f.markedTestCopy,
+      choicesFor: hostOf(targetUrl),
+    }));
+    // The specs go along, so anything new is planned with them and the next Go deeper has them too.
+    const productContext = await readRunText(runId, 'product-context.md').catch(() => undefined);
+    await start({ targetUrl, owner: remembered?.owner ?? false, stagingHost: remembered?.markedTestCopy, testAgain: true, productContext });
+  };
+
+  /** A new check-up of the same site, signed in, with the first one's specs and page limit. */
+  const goDeeper = async (report: ReleaseReport, signIn: { username: string; password: string }) => {
+    const targetUrl = await typedAddressOf(report.runId, report.targetUrl);
+    const sameSite = form.choicesFor === hostOf(targetUrl);
+    const productContext = (sameSite && productContextOf(form)) || (await readRunText(report.runId, 'product-context.md').catch(() => undefined));
+    const remembered = await rememberedFor(targetUrl);
+    setForm((f) => {
+      let specs = f.specs;
+      if (!sameSite && productContext && !specs) {
+        const match = productContext.match(/# Specs\n\n([\s\S]*?)(?:\n\n---\n\n|$)/);
+        specs = match ? match[1].trim() : productContext.trim();
+      }
+      return {
+        ...f,
+        address: f.address && hostOf(f.address) === hostOf(targetUrl) ? f.address : displayHost(targetUrl),
+        owner: remembered?.owner ?? f.owner,
+        markedTestCopy: remembered?.markedTestCopy ?? f.markedTestCopy,
+        choicesFor: hostOf(targetUrl),
+        specs,
+      };
+    });
+    await start({
+      targetUrl,
+      owner: remembered?.owner ?? false,
+      stagingHost: remembered?.markedTestCopy,
+      roles: [{ role: 'member', username: signIn.username, password: signIn.password }],
+      productContext: productContext || undefined,
+      designNotes: sameSite ? form.designNotes.trim() || undefined : undefined,
+      maxPages: sameSite && form.maxPages !== DEFAULT_MAX_PAGES ? form.maxPages : undefined,
+    });
+  };
+
+  const stopScan = async () => {
+    const ok = await confirm({
+      title: 'Stop scanning?',
+      body: <p>The pages found so far are thrown away. AI requests already used stay used.</p>,
+      confirmLabel: 'Stop scanning',
+      cancelLabel: 'Keep scanning',
+      danger: true,
+    });
+    if (!ok) return;
+    epoch.current++;
+    const result = await abortRun();
+    if (!result.aborted) {
+      void reconcile();
       return;
     }
-    setScanningMessage('Connecting to target site and initializing architectural crawler...');
-    setScanProgress(null);
-    planningStartedAt.current = null;
-    setApproveError(null);
-    setPlanUpdate({ running: false });
+    resetRun();
+    setStatus((s) => (s ? { ...s, phase: 'idle', isRunning: false, runId: null, targetUrl: null } : s));
+    // Back to the new check-up, with everything still filled in.
+    navigate(PATHS.new);
+  };
 
-    const active: ActiveRun = {
-      mode: 'product',
-      targetUrl,
-      startedAt: Date.now(),
-      finished: false,
-    };
-    runRef.current = active;
+  const stopTesting = async () => {
+    const ok = await confirm({
+      title: 'Stop testing?',
+      body: <p>Results so far are thrown away. Your plan is kept, so you can change it and approve it again.</p>,
+      confirmLabel: 'Stop testing',
+      cancelLabel: 'Keep testing',
+      danger: true,
+    });
+    if (!ok) return;
+    epoch.current++;
+    const result = await abortRun();
+    if (!result.aborted) {
+      void reconcile();
+      return;
+    }
     setFeed(initialFeed('product'));
-    setReport(null);
-    setPlan(null);
-
-    // Enter scanning phase immediately; DO NOT jump to live testing!
-    setStep('scanning');
-    try {
-      active.id = await startRun({
-        targetUrl,
-        owner,
-        skipReview: false, // Mandatory review gate: plan must always be approved
-        productContext,
-        designNotes,
-        maxPages,
-      });
-      setRun({ ...active });
-    } catch (err: unknown) {
-      runRef.current = null;
-      if (err instanceof RunnerError && err.code === 'ERR_NO_AI_KEY') {
-        setKeyReturnStep('url-first');
-        setStep('key');
-        return;
-      }
-      failRun(err instanceof Error ? err.message : 'Check couldn’t be started');
+    if (result.planKept) {
+      setStatus((s) => (s ? { ...s, phase: 'awaiting-review' } : s));
+      setPlanNotice({ tone: 'stamp', title: 'Testing stopped. Your plan is kept.', body: 'Change it if you like, then approve it again.' });
+      await getPlan()
+        .then(setPlan)
+        .catch(() => {});
+      navigate(PATHS.plan, { replace: true });
+    } else {
+      setStatus((s) => (s ? { ...s, phase: 'idle', isRunning: false } : s));
+      navigate(PATHS.new);
     }
   };
 
-  // Handler: Approve reviewed plan
-  const handleApprovePlan = async () => {
+  const approve = async () => {
     setApproveError(null);
+    setApproving(true);
+    const asked = epoch.current;
     try {
       await approvePlan();
-      setStep('live');
-    } catch (err: unknown) {
-      setApproveError(err instanceof Error ? err.message : 'The plan couldn’t be approved. Try again.');
+      // Testing can fail before this answer arrives (the site is down): then the plan is back already.
+      if (asked !== epoch.current) return;
+      epoch.current++;
+      setPlanNotice(null);
+      setFeed(initialFeed('product'));
+      setStatus((s) => (s ? { ...s, phase: 'testing' } : s));
+      navigate(PATHS.testing);
+    } catch (err) {
+      setApproveError(err instanceof RunnerError ? err.message : 'The plan couldn’t be approved. Try again.');
+    } finally {
+      setApproving(false);
     }
   };
 
-  // Handler: Go Deeper with credentials
-  const handleGoDeeper = async (credentials?: { username?: string; password?: string }) => {
-    if (!url) return;
-    const roles = credentials?.username
-      ? [{ role: 'member', username: credentials.username, password: credentials.password || '' }]
-      : [];
+  const host = status?.targetUrl ? hostOf(status.targetUrl) : plan ? hostOf(plan.targetUrl) : 'your site';
 
-    setStep('scanning');
-    try {
-      await startRun({
-        targetUrl: url,
-        owner: isOwner,
-        skipReview: false,
-        roles,
-      });
-    } catch (err: unknown) {
-      failRun(err instanceof Error ? err.message : 'Deeper run couldn’t be started');
+  // Screens that know their own subject name the tab themselves.
+  useDocumentTitle(
+    !reachable
+      ? null
+      : route.name === 'new'
+        ? 'New check-up'
+        : route.name === 'scan'
+          ? `Scanning ${host}`
+          : route.name === 'testing'
+            ? `Testing ${host}`
+            : route.name === 'plan' && !(plan && status?.phase === 'awaiting-review')
+              ? 'Plan'
+              : null
+  );
+
+  const scanFailure = feed.failure ?? (status?.phase === 'failed' ? plainFailure(status.lastRunError, 'product') : null);
+
+  let body: ReactNode;
+  if (!reachable) {
+    body = checks > 0 ? <ConnectionScreen checks={checks} /> : <Loading label="Connecting…" />;
+  } else {
+    switch (route.name) {
+      case 'new':
+        body = (
+          <NewCheckupScreen
+            ai={ai}
+            onKeySaved={(model) => setAi({ configured: true, model })}
+            form={form}
+            onFormChange={setForm}
+            onStart={startFromForm}
+            starting={starting}
+            startError={startError}
+            inProgress={inProgress ? status : null}
+            recent={recent}
+          />
+        );
+        break;
+      case 'scan':
+        body = !status ? (
+          <Loading label="Opening the scan…" />
+        ) : status.phase === 'scanning' || (status.phase === 'failed' && scanFailure) ? (
+          <ScanningScreen host={host} progress={scan} failure={status.phase === 'failed' ? scanFailure : null} hasMaterials={!!productContextOf(form)} onStop={() => void stopScan()} />
+        ) : (
+          <NothingInProgress what="Nothing is being scanned" />
+        );
+        break;
+      case 'plan':
+        body =
+          status?.phase === 'awaiting-review' && plan ? (
+            <PlanReviewScreen
+              plan={plan}
+              onApprove={() => void approve()}
+              onPlanUpdated={setPlan}
+              update={planUpdate}
+              approveError={approveError}
+              approving={approving}
+              notice={planNotice}
+            />
+          ) : !status || status.phase === 'awaiting-review' ? (
+            <Loading label="Opening the plan…" />
+          ) : (
+            <NothingInProgress what="No plan is waiting for review" />
+          );
+        break;
+      case 'testing':
+        body = !status ? (
+          <Loading label="Opening the testing…" />
+        ) : status.phase === 'testing' || feed.status === 'failed' ? (
+          <TestingScreen
+            host={host}
+            pages={plan?.pages}
+            flows={plan?.flows}
+            feed={feed}
+            onStop={() => void stopTesting()}
+            onBackToPlan={() => navigate(PATHS.plan)}
+          />
+        ) : (
+          <NothingInProgress what="Nothing is being tested" />
+        );
+        break;
+      case 'reports':
+        body = (
+          <PastCheckupsScreen confirm={confirm} onTestAgain={(run) => void testAgain(run.runId, run.targetUrl)} starting={starting} actionError={startError} />
+        );
+        break;
+      case 'report':
+        body = (
+          <ReportScreen
+            runId={route.runId}
+            actions={{
+              onTestAgain: (report) => void testAgain(report.runId, report.targetUrl),
+              onGoDeeper: (report, signIn) => void goDeeper(report, signIn),
+              starting,
+              actionError: startError,
+            }}
+          />
+        );
+        break;
+      case 'settings':
+        body = <SettingsScreen onKeySaved={(model) => setAi({ configured: true, model })} />;
+        break;
+      default:
+        body = <NotFoundScreen />;
     }
-  };
+  }
 
-  const handleRestart = () => {
-    runRef.current = null;
-    setRun(null);
-    setReport(null);
-    setPlan(null);
-    setStep('url-first');
-  };
-
-  const handleStopScan = async () => {
-    try {
-      await abortRun();
-    } catch {}
-    runRef.current = null;
-    setRun(null);
-    setStep('url-first');
-  };
-
-  const handleStopLive = async () => {
-    try {
-      await abortRun();
-    } catch {}
-    runRef.current = null;
-    setRun(null);
-    if (plan) {
-      setStep('plan');
-    } else {
-      setStep('url-first');
-    }
-  };
-
-  const handleBackToUrl = () => {
-    setStep('url-first');
-  };
-
-  const openKeySetup = () => {
-    setKeyReturnStep(step);
-    setStep('key');
-  };
-
-  // Render Topbar
-  const activeTabIndex =
-    step === 'url-first' || step === 'scanning' ? 0 : step === 'plan' ? 1 : step === 'live' ? 2 : step === 'report' ? 3 : 0;
+  const step = reachable ? stepOf(route) : null;
 
   return (
-    <div className="min-h-screen bg-paper font-sans text-ink">
-      {/* ─── TOPBAR (Direction B: Blueprint) ─── */}
-      <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b border-rule bg-surface/90 px-6 backdrop-blur-md">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <svg aria-hidden="true" width="22" height="22" viewBox="0 0 32 32" className="text-stamp">
-              <rect x="3" y="3" width="26" height="26" rx="3" fill="none" stroke="currentColor" strokeWidth="2.5" transform="rotate(-6 16 16)" />
-              <path d="M10 16.5l4 4 8-9" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span className="font-bold text-sm text-ink">Direction B — Blueprint</span>
-          </div>
-          <span className="hidden sm:inline-block rounded border border-stamp px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-stamp">
-            Dark · Architectural
-          </span>
-        </div>
-
-        {/* Step Tabs Indicator with Back Navigation */}
-        <nav aria-label="Check progress" className="hidden md:flex rounded-md border border-rule bg-panel p-0.5 text-xs font-mono">
-          <button
-            type="button"
-            onClick={() => {
-              if (step === 'scanning') handleStopScan();
-              else if (step === 'live') {
-                if (window.confirm('Stop the live test run and return to URL setup?')) handleStopLive();
-              } else {
-                setStep('url-first');
-              }
-            }}
-            disabled={step === 'connect' || step === 'loading' || step === 'key'}
-            className={`rounded px-3 py-1 transition-colors ${
-              activeTabIndex === 0
-                ? 'bg-stamp text-surface font-bold'
-                : 'text-ink-soft hover:text-ink hover:bg-canvas cursor-pointer'
-            }`}
-            title="Return to URL and Specs input"
-          >
-            1 · Enter URL & Docs
-          </button>
-
-          <button
-            type="button"
-            disabled={!plan || step === 'url-first' || step === 'scanning'}
-            onClick={() => {
-              if (plan) {
-                if (step === 'live') {
-                  if (window.confirm('Stop live testing and return to Plan Review?')) handleStopLive();
-                } else {
-                  setStep('plan');
-                }
-              }
-            }}
-            className={`rounded px-3 py-1 transition-colors ${
-              activeTabIndex === 1
-                ? 'bg-stamp text-surface font-bold'
-                : plan
-                  ? 'text-ink-soft hover:text-ink hover:bg-canvas cursor-pointer'
-                  : 'text-ink-soft/40 cursor-not-allowed'
-            }`}
-            title={plan ? 'Go to reviewed plan' : 'Plan not generated yet'}
-          >
-            2 · Review & Approve Plan
-          </button>
-
-          <span
-            className={`rounded px-3 py-1 transition-colors ${
-              activeTabIndex === 2 ? 'bg-stamp text-surface font-bold' : 'text-ink-soft/50'
-            }`}
-          >
-            3 · Live testing
-          </span>
-
-          <button
-            type="button"
-            disabled={!report}
-            onClick={() => {
-              if (report) setStep('report');
-            }}
-            className={`rounded px-3 py-1 transition-colors ${
-              activeTabIndex === 3
-                ? 'bg-stamp text-surface font-bold'
-                : report
-                  ? 'text-ink-soft hover:text-ink hover:bg-canvas cursor-pointer'
-                  : 'text-ink-soft/40 cursor-not-allowed'
-            }`}
-            title={report ? 'View final test report' : 'Report not ready yet'}
-          >
-            4 · Report
-          </button>
-        </nav>
-
-        <div className="flex items-center gap-4">
-          <a
-            href="/studio/"
-            className="font-mono text-xs text-ink-soft hover:text-stamp transition-colors"
-            title="QA Flow Studio: the detailed view for engineers"
-          >
-            Engineer view
-          </a>
-          {/* Settings button */}
-          <button
-            type="button"
-            onClick={openKeySetup}
-            className="font-mono text-xs text-ink-soft hover:text-stamp transition-colors"
-          >
-            ⚙ AI Settings
-          </button>
-        </div>
-      </header>
-
-      {/* ─── SCREEN CONTENT ─── */}
-      {/* The QA Tool serves this page, so it's normally there at once: the instructions only show after a failed check. */}
-      {step === 'connect' && !reachable && checks > 0 && (
-        <div className="mx-auto max-w-xl p-8 mt-12">
-          <ConnectionScreen checks={checks} />
-        </div>
-      )}
-
-      {(step === 'loading' || (step === 'connect' && (reachable || checks === 0))) && (
-        <div className="flex h-96 flex-col items-center justify-center p-8">
-          <div className="h-8 w-8 rounded-full border-2 border-stamp border-t-transparent animate-spin mb-4" />
-          <p className="font-mono text-xs text-ink-soft">{loadError || 'Connecting to the QA Tool…'}</p>
-        </div>
-      )}
-
-      {step === 'key' && (
-        <div className="mx-auto max-w-xl p-8 mt-10">
-          <KeySetupScreen
-            onDone={(chosen) => {
-              setModel(chosen);
-              setStep(keyReturnStep ?? 'url-first');
-              setKeyReturnStep(null);
-            }}
-            onCancel={keyReturnStep ? () => { setStep(keyReturnStep); setKeyReturnStep(null); } : undefined}
-          />
-        </div>
-      )}
-
-      {step === 'url-first' && (
-        <UrlFirstScreen
-          initialUrl={url}
-          initialOwner={isOwner}
-          onStart={handleStartUrlFirst}
-          onOpenSettings={openKeySetup}
-        />
-      )}
-
-      {step === 'scanning' && (
-        <ScanningScreen
-          targetUrl={url}
-          hasSpecs={hasSpecs}
-          hasDesignNotes={hasDesignNotes}
-          statusMessage={scanningMessage}
-          progress={scanProgress}
-          failure={feed.status === 'failed' ? feed.failure : null}
-          onStop={handleStopScan}
-          onCancel={handleStopScan}
-          onBack={handleBackToUrl}
-        />
-      )}
-
-      {step === 'plan' && plan && (
-        <PlanReviewScreen
-          plan={plan}
-          onApprove={handleApprovePlan}
-          onPlanUpdated={(newPlan) => setPlan(newPlan)}
-          onBack={handleBackToUrl}
-          update={planUpdate}
-          approveError={approveError}
-        />
-      )}
-
-      {step === 'live' && (
-        <LiveMapScreen
-          plan={plan}
-          targetUrl={url}
-          feed={feed}
-          onStop={handleStopLive}
-          onCancel={handleStopLive}
-          onBack={handleStopLive}
-        />
-      )}
-
-      {step === 'report' && report && (
-        <ReportMapScreen
-          report={report}
-          plan={plan}
-          onRestart={handleRestart}
-          onGoDeeper={handleGoDeeper}
-        />
-      )}
+    <div className="min-h-screen bg-paper text-ink">
+      <a href="#main" className="sr-only z-[60] rounded bg-stamp px-4 py-2 font-bold text-surface focus:not-sr-only focus:absolute focus:left-4 focus:top-2">
+        Skip to the content
+      </a>
+      <TopBar route={route} hubConnected={!!status?.hubConnected} checkupInProgress={inProgress} />
+      {step && <StepBar current={step} links={{ address: PATHS.new }} />}
+      <main id="main">{body}</main>
+      {dialog}
     </div>
   );
 }

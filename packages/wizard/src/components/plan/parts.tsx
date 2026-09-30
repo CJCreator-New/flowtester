@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { scrollBehavior } from '../../lib/format';
 
 /** An element id for a Plan Item, so the approval summary can point at it. */
 export function itemDomId(itemId: string): string {
@@ -15,7 +16,7 @@ export function showItem(itemId: string): void {
     if (parent instanceof HTMLDetailsElement) parent.open = true;
     parent = parent.parentElement;
   }
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
   el.classList.add('ring-2', 'ring-stamp');
   window.setTimeout(() => el.classList.remove('ring-2', 'ring-stamp'), 2500);
 }

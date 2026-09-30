@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { initialFeed, looksTechnical, plainFailure, reduceFeed, translateReviewPlan, type FeedState, type RunnerEvent } from '../src/lib/translate';
+import { initialFeed, looksTechnical, plainFailure, reduceFeed, secondsLeft, timeLeft, translateReviewPlan, type FeedState, type RunnerEvent } from '../src/lib/translate';
 import { plainTitle } from '../src/lib/summary';
 
 const run = (events: RunnerEvent[], mode: 'product' | 'website' = 'product'): FeedState =>
@@ -218,3 +218,77 @@ describe('plainTitle (M6 gap fixes)', () => {
   });
 });
 
+describe('live state from the real events (Task 1.6)', () => {
+  const testPoint = (index: number, startPage: string, extra: Record<string, unknown> = {}): RunnerEvent => ({
+    type: 'TEST_POINT_STARTED',
+    testCaseName: 'Open the cart',
+    role: 'visitor',
+    breakpoint: '375px',
+    startPage,
+    index,
+    total: 12,
+    ...extra,
+  });
+
+  it('TEST_POINT_STARTED: the test, its page and size, and the page is marked as reached', () => {
+    const state = run([testPoint(4, 'http://shop.example.com/cart?x=1')]);
+    expect(state.test).toEqual({ name: 'Open the cart', role: 'visitor', size: '375px', index: 4, total: 12 });
+    expect(state.currentPage).toBe('/cart');
+    expect(state.progress).toEqual({ done: 4, total: 12 });
+    expect(state.pages).toEqual({ '/cart': { status: 'pass', issues: 0 } });
+    expect(state.testingStartedAt).toEqual(expect.any(Number));
+    // A technical test name isn't shown; the test is counted instead.
+    expect(run([testPoint(0, '/', { testCaseName: 'PAGE-001_visit' })]).test?.name).toBeUndefined();
+  });
+
+  it('STEP_COMPLETED: the newest screenshot, and the page the browser is on', () => {
+    const state = run([
+      testPoint(0, '/'),
+      { type: 'STEP_COMPLETED', urlPath: '/checkout', screenshotUrl: '/api/evidence/runs/run-1/evidence/TC-1/step-1.png' },
+    ]);
+    expect(state.screenshot).toEqual({ url: '/api/evidence/runs/run-1/evidence/TC-1/step-1.png', page: '/checkout' });
+    expect(state.currentPage).toBe('/checkout');
+    // A step without either changes nothing.
+    expect(reduceFeed(state, { type: 'STEP_COMPLETED', passed: true }, 'product')).toBe(state);
+  });
+
+  it('FINDINGS_UPDATED: each new problem is pinned to its page, serious ones in red', () => {
+    const state = run([
+      testPoint(0, '/'),
+      {
+        type: 'FINDINGS_UPDATED',
+        totalFindings: 3,
+        latest: [
+          { id: 'F-1', title: 'Console Error in step "Save"', severity: 'Minor', urlPath: '/cart', breakpoint: '375px' },
+          { id: 'F-2', title: 'HTTP 500 on POST /api/orders', severity: 'Major', urlPath: '/cart' },
+          { id: 'F-3', title: 'Touch target too small', severity: 'Minor', urlPath: 'http://shop.example.com/about' },
+        ],
+      },
+    ]);
+    expect(state.findings).toBe(3);
+    expect(state.pages).toEqual({ '/': { status: 'pass', issues: 0 }, '/cart': { status: 'fail', issues: 2 }, '/about': { status: 'warn', issues: 1 } });
+    expect(state.found.map((f) => f.id)).toEqual(['F-3', 'F-2', 'F-1']);
+    expect(state.found[2]).toMatchObject({ urlPath: '/cart', breakpoint: '375px', severity: 'Minor' });
+    expect(state.progress).toEqual({ done: 1, total: 12 });
+  });
+
+  it('keeps whether the plan was kept when testing stops or fails', () => {
+    expect(run([{ type: 'RUN_ABORTED', planKept: true }])).toMatchObject({ status: 'failed', planKept: true });
+    expect(run([{ type: 'RUN_FAILED', error: 'page.goto: Timeout 30000ms exceeded', planKept: true }])).toMatchObject({ status: 'failed', planKept: true });
+    expect(run([{ type: 'RUN_FAILED', error: 'x' }]).planKept).toBe(false);
+  });
+
+  it('estimates the time left from how long each test has taken', () => {
+    const state: FeedState = { ...run([testPoint(0, '/')]), progress: { done: 3, total: 12 }, testingStartedAt: 1000 };
+    // 3 tests in 60 s: 20 s each, 9 to go.
+    expect(secondsLeft(state, 61000)).toBe(180);
+    expect(timeLeft(180)).toBe('about 3 minutes left');
+    expect(timeLeft(40)).toBe('under a minute left');
+    expect(timeLeft(undefined)).toBeNull();
+    expect(secondsLeft({ ...state, progress: { done: 0, total: 12 } }, 61000)).toBeUndefined();
+  });
+
+  it('points to Settings when the AI key is the problem', () => {
+    expect(plainFailure('No OpenRouter key is saved.', 'product')).toBe('Your AI key is missing. Add it again in Settings, then try again.');
+  });
+});

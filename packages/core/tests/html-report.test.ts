@@ -85,7 +85,6 @@ describe('Single-File Offline HTML Report (html-report.ts)', () => {
     expect(content).toContain('<!DOCTYPE html>');
     expect(content).toContain('QA Readiness Report');
     expect(content).toContain('run-test-123');
-    expect(content).toContain('Overall Readiness (92/100)');
 
     // Aspect cards present
     expect(content).toContain('Works');
@@ -109,5 +108,33 @@ describe('Single-File Offline HTML Report (html-report.ts)', () => {
     // No external scripts or CDNs (works 100% offline)
     expect(content).not.toContain('<script src="http');
     expect(content).not.toContain('<link rel="stylesheet" href="http');
+  });
+
+  it('leads with the same verdict as the screen, and no overall grade to contradict it', async () => {
+    // One Major finding: not ready, whatever the overall score says.
+    const content = await fs.readFile(await generateSingleFileHtmlReport(mockReport, { outputDir: tempDir }), 'utf8');
+    expect(content).toContain('Not ready yet');
+    expect(content).toContain('1 problem must be fixed first.');
+    expect(content).not.toContain('92/100');
+    expect(content).not.toContain('Overall Readiness');
+    expect(content).not.toContain('Ready to release');
+
+    const clean = await fs.readFile(await generateSingleFileHtmlReport({ ...mockReport, findings: [] }, { outputDir: tempDir }), 'utf8');
+    expect(clean).toContain('Ready to release');
+    expect(clean).toContain('No problems found.');
+  });
+
+  it('says "Not checked" for an aspect none of whose checks ran', async () => {
+    const report: ReleaseReport = {
+      ...mockReport,
+      grades: {
+        ...mockReport.grades!,
+        aspects: { ...mockReport.grades!.aspects, Findable: { grade: 'A', score: 100, findings: [], checked: false } },
+      },
+    };
+    const content = await fs.readFile(await generateSingleFileHtmlReport(report, { outputDir: tempDir }), 'utf8');
+    const findable = content.slice(content.indexOf('>Findable<'), content.indexOf('>Secure<'));
+    expect(findable).toContain('Not checked');
+    expect(findable).not.toContain('Grade A');
   });
 });

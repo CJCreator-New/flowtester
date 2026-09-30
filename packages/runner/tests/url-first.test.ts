@@ -134,10 +134,10 @@ describe('URL-first runs', () => {
     expect(reviewed.readOnlyReason).toContain('live site');
     expect(reviewed.flows.find((f) => f.id === 'FLOW-INVOICE')?.needsTestCopy).toBe(true);
     expect(reviewed.flows.find((f) => f.id === 'FLOW-DASHBOARD')?.needsTestCopy).toBeUndefined();
-    // Every page has a thumbnail the map can show.
+    // Every page has a thumbnail the map can show, in the run's own folder.
     const thumb = reviewed.pages.find((p) => p.urlPath === '/dashboard')?.screenshotPath;
     expect(thumb).toMatch(/^plan-pages\/.+\.jpg$/);
-    expect((await fetch(`${runnerUrl}/api/evidence/${thumb}`)).status).toBe(200);
+    expect((await fetch(`${runnerUrl}/api/evidence/runs/${reviewed.runId}/${thumb}`)).status).toBe(200);
 
     expect((await post('/api/runner/plan/approve')).status).toBe(200);
     await waitForPhase(['done']);
@@ -201,7 +201,8 @@ describe('URL-first runs', () => {
   });
 
   it('plans with fixed rules when there is no AI, and says describing a test needs it', async () => {
-    await post('/api/runner/run', { targetUrl: `http://localhost:${FIXTURE_PORT}/`, owner: true, skipReview: false });
+    // The plan from the test before is still waiting for review: this replaces it.
+    await post('/api/runner/run', { targetUrl: `http://localhost:${FIXTURE_PORT}/`, owner: true, skipReview: false, replacePlan: true });
     await waitForPhase(['awaiting-review']);
     const reviewed = await plan();
     expect(reviewed.aiAvailable).toBe(false);
@@ -221,6 +222,7 @@ describe('URL-first runs', () => {
       aiProvider: 'mock',
       skipReview: false,
       breakpoints: ['1440px'],
+      replacePlan: true,
     });
     await waitForPhase(['awaiting-review']);
     const first = await plan();

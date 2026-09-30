@@ -1,27 +1,33 @@
 /**
- * Drives the real wizard in Chromium, served by the QA Tool itself as people run it: one server, one
- * address, the Wizard at / and QA Flow Studio at /studio/. The site under test is the fixture app.
- * Only the outside world is faked: OpenRouter (key check + model list) and the AI model.
+ * Drives Release check-up in Chromium, served by the QA Tool itself as people run it: one server,
+ * one address, one app. The site under test is the fixture app. Only the outside world is faked:
+ * OpenRouter (key check + model list) and the AI model.
+ *
+ * The tests run in order and follow one site through: the first visit, a scan, the plan, a failed
+ * and a stopped test run, the report, Test again, Past check-ups, Go deeper and Settings. Every
+ * screen is read for words that must not reach people, and opened at phone size while it exists.
  * Set WIZARD_SCREENSHOTS=<dir> to also save a screenshot of every screen.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { promises as fs } from 'fs';
+import { createRequire } from 'module';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { chromium, type Browser, type BrowserContext, type Page, type Request } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { build } from 'vite';
 import { RunnerServer } from '@qa/runner';
 import { KeyResolver, MockAIProvider, OpenRouterClient, type SecretStore } from '@qa/core';
-import type { ReleaseReport, ReviewPlan } from '@qa/types';
+import type { ReleaseReport, ReviewPlan, RunSummary } from '@qa/types';
 import { server as fixtureServer } from '../../../fixtures/test-app/server.js';
-import { summarizeReport } from '../src/lib/summary';
+import { groupProblems, pageResults, summarizeReport } from '../src/lib/summary';
 
 const FIXTURE_PORT = 3485;
 const TOOL_PORT = 3486;
 const fixtureHost = `localhost:${FIXTURE_PORT}`;
+const fixtureUrl = `http://${fixtureHost}/`;
 const toolUrl = `http://localhost:${TOOL_PORT}`;
 const wizardRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const studioRoot = path.resolve(wizardRoot, '..', 'web');
+const repoRoot = path.resolve(wizardRoot, '..', '..');
 const outputDir = path.join(process.cwd(), '.tmp-wizard-e2e');
 const uiDir = `${outputDir}-ui`;
 const screenshotDir = process.env.WIZARD_SCREENSHOTS;
@@ -35,6 +41,7 @@ const FREE_MODEL = {
   architecture: { input_modalities: ['text'], output_modalities: ['text'] },
   supported_parameters: ['response_format'],
 };
+const SPECS = '# Invoices\n- Amount must be positive';
 
 class MemoryStore implements SecretStore {
   secrets = new Map<string, string>();
@@ -54,51 +61,116 @@ const fakeOpenRouterFetch = (async (url: string, init?: RequestInit) => {
   return new Response('', { status: 404 });
 }) as typeof fetch;
 
-/** Internals that must never reach the screen: raw event names and broken values. */
-const LEAKED_INTERNALS = /RUN_STARTED|RUN_COMPLETED|STEP_STARTED|TEST_POINT|FINDINGS_UPDATED|DISCOVERY_|undefined|\[object/;
+/**
+ * What must never reach the plain-language layer (anything outside Details for developers): event
+ * names, error codes, broken values, selectors, checker ids and the prototype's labels.
+ */
+const BANNED: RegExp[] = [
+  /RUN_STARTED|RUN_COMPLETED|RUN_FAILED|RUN_ABORTED|STEP_STARTED|STEP_COMPLETED|TEST_POINT|FINDINGS_UPDATED|DISCOVERY_|PLAN_READY|PLAN_UPDATE|TESTING_STARTED/,
+  /ERR_[A-Z]/,
+  /undefined|\[object/,
+  /data-testid|\[data-|nth-child|xpath=/i,
+  /bug-detection|ux-quality|spec-conformance|design-standards|permission-matrix|ai-review/,
+  /Direction B|Blueprint|Architectural|GRID_LOCK|SCAN_LAYER|EXECUTION INSPECTOR/i,
+];
 
-describe('Wizard end to end, on the one server', () => {
+/** The visible text of a screen, leaving out every Details for developers. */
+function plainText(on: Page): Promise<string> {
+  return on.evaluate(() => {
+    const developerOnly = [...document.querySelectorAll('details')].filter(
+      (d) => d.querySelector('summary')?.textContent?.trim() === 'Details for developers'
+    );
+    const display = developerOnly.map((d) => d.style.display);
+    developerOnly.forEach((d) => (d.style.display = 'none'));
+    const text = document.body.innerText;
+    developerOnly.forEach((d, i) => (d.style.display = display[i]));
+    return text;
+  });
+}
+
+function expectPlain(text: string, where: string): void {
+  for (const banned of BANNED) expect(text, `${where} shows ${banned}`).not.toMatch(banned);
+}
+
+/** The screen's main heading, tidied (textContent: the stamp's capitals are only CSS). */
+async function heading(on: Page): Promise<string> {
+  return ((await on.locator('h1').first().textContent()) || '').replace(/\s+/g, ' ').trim();
+}
+
+const api = async <T>(route: string): Promise<T> => (await fetch(`${toolUrl}${route}`)).json() as Promise<T>;
+const runnerPhase = async () => (await api<{ phase: string }>('/api/runner/status')).phase;
+
+const fixtureUp = () => new Promise<void>((resolve) => fixtureServer.listen(FIXTURE_PORT, () => resolve()));
+const fixtureDown = () =>
+  new Promise<void>((resolve) => {
+    fixtureServer.close(() => resolve());
+    fixtureServer.closeAllConnections();
+  });
+
+describe('Release check-up end to end, on the one server', () => {
   let tool: RunnerServer;
   let browser: Browser;
   let context: BrowserContext;
   let page: Page;
   const runRequests: Array<Record<string, unknown>> = [];
-  const seenText: string[] = [];
   let shot = 0;
+  let firstRunId = '';
+  let secondRunId = '';
 
-  const screenshot = async (name: string) => {
+  const screenshot = async (name: string, on: Page = page) => {
     if (!screenshotDir) return;
     await fs.mkdir(screenshotDir, { recursive: true });
-    await page.screenshot({ path: path.join(screenshotDir, `${String(++shot).padStart(2, '0')}-${name}.png`), fullPage: true });
+    await on.screenshot({ path: path.join(screenshotDir, `${String(++shot).padStart(2, '0')}-${name}.png`), fullPage: true });
   };
-  /** The screen's main heading, with line breaks and spacing tidied. */
-  const heading = async (on: Page = page) => ((await on.locator('h1').first().innerText()) || '').replace(/\s+/g, ' ').trim();
-  const waitForToolIdle = async () => {
-    for (let i = 0; i < 120; i++) {
-      const status = await (await fetch(`${toolUrl}/api/runner/status`)).json();
-      if (!status.isRunning || status.phase === 'awaiting-review') return;
-      await new Promise((r) => setTimeout(r, 500));
+
+  /**
+   * Opens a screen at 375 px while it exists: nothing scrolls sideways, its main control can be
+   * reached, and nothing technical shows.
+   */
+  const checkPhone = async (address: string, name: string, main: { role: 'button' | 'link'; name: string | RegExp }) => {
+    const phone = await context.newPage();
+    try {
+      await phone.setViewportSize({ width: 375, height: 800 });
+      await phone.goto(`${toolUrl}${address}`);
+      const control = phone.getByRole(main.role, { name: main.name }).first();
+      await control.waitFor({ state: 'visible', timeout: 20000 });
+      await control.scrollIntoViewIfNeeded();
+      expect(await control.isVisible(), `${address}: main control`).toBe(true);
+      expect(await phone.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), `${address} scrolls sideways`).toBe(false);
+      expectPlain(await plainText(phone), `${address} on a phone`);
+      await screenshot(`phone-${name}`, phone);
+    } finally {
+      await phone.close();
     }
-    throw new Error('the QA Tool stayed busy');
   };
-  /** Records the visible text every 300 ms while a run is in progress, to check nothing internal leaks. */
-  const watchText = () => {
-    seenText.length = 0;
+
+  /** Everything seen while a check-up runs: its text, and what the testing screen showed. */
+  const watch = () => {
+    const seen = { texts: [] as string[], testCount: false, screenshot: false, found: false, pinned: false };
     const timer = setInterval(async () => {
       try {
-        seenText.push(await page.locator('body').innerText());
+        seen.texts.push(await plainText(page));
+        const now = await page.evaluate(() => ({
+          testCount: /Test \d+ of \d+/.test(document.body.innerText),
+          screenshot: [...document.querySelectorAll<HTMLImageElement>('img[alt^="The latest screen"]')].some((img) => img.complete && img.naturalWidth > 0),
+          found: document.querySelectorAll('section[aria-labelledby="found-title"] li').length > 0,
+          pinned: document.querySelectorAll('button[aria-label*=" problem"]').length > 0,
+        }));
+        seen.testCount ||= now.testCount;
+        seen.screenshot ||= now.screenshot;
+        seen.found ||= now.found;
+        seen.pinned ||= now.pinned;
       } catch {
-        // page navigating
+        // the page is changing screens
       }
     }, 300);
-    return () => clearInterval(timer);
+    return { seen, stop: () => clearInterval(timer) };
   };
 
   beforeAll(async () => {
-    await new Promise<void>((resolve) => fixtureServer.listen(FIXTURE_PORT, () => resolve()));
-    // Both UIs are built and served by the QA Tool, exactly as pnpm start does.
+    await fixtureUp();
+    // The Wizard is built and served by the QA Tool, exactly as pnpm start does. It's the only app.
     await build({ root: wizardRoot, configFile: path.join(wizardRoot, 'vite.config.ts'), logLevel: 'error', build: { outDir: path.join(uiDir, 'wizard'), emptyOutDir: true } });
-    await build({ root: studioRoot, configFile: path.join(studioRoot, 'vite.config.ts'), logLevel: 'error', build: { outDir: path.join(uiDir, 'studio'), emptyOutDir: true } });
     tool = new RunnerServer({
       port: TOOL_PORT,
       outputDir,
@@ -106,120 +178,138 @@ describe('Wizard end to end, on the one server', () => {
       keyResolver: new KeyResolver(outputDir, new MemoryStore()),
       openRouter: new OpenRouterClient(fakeOpenRouterFetch),
       createAIProvider: () => new MockAIProvider(),
-      ui: [
-        { base: '/', dir: path.join(uiDir, 'wizard'), name: 'Wizard' },
-        { base: '/studio/', dir: path.join(uiDir, 'studio'), name: 'QA Flow Studio' },
-      ],
+      ui: [{ base: '/', dir: path.join(uiDir, 'wizard'), name: 'Wizard' }],
     });
     await tool.start();
     browser = await chromium.launch();
     context = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
-    page = await context.newPage();
-    page.on('request', (req: Request) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: toolUrl });
+    context.on('request', (req) => {
       if (req.url() === `${toolUrl}/api/runner/run` && req.method() === 'POST') runRequests.push(req.postDataJSON());
     });
+    page = await context.newPage();
   }, 180000);
 
   afterAll(async () => {
     await browser?.close();
     await tool?.stop();
-    await new Promise<void>((resolve) => fixtureServer.close(() => resolve()));
+    if (fixtureServer.listening) await fixtureDown();
     for (const dir of [outputDir, `${outputDir}-data`, uiDir]) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   });
 
-  it('the QA Tool serves the wizard itself, and it connects at once', async () => {
+  it('opens on a new check-up, with the top bar, and every address answers', async () => {
     await page.goto(`${toolUrl}/`);
-    await expect.poll(() => heading(), { timeout: 10000 }).toBe('Enter the address of the site to check');
+    await expect.poll(() => heading(page), { timeout: 10000 }).toBe('Enter the address of the site to check');
+    await expect.poll(() => page.title()).toBe('New check-up · Release check-up');
+    const topBar = page.getByRole('navigation', { name: 'Main' });
+    for (const name of ['New check-up', 'Past check-ups', 'Settings']) expect(await topBar.getByRole('link', { name }).count(), name).toBe(1);
+    // No Report Hub is set up, so there's no Team Hub link.
+    expect(await page.getByRole('link', { name: 'Team Hub' }).count()).toBe(0);
     // Served by the QA Tool, the page never needs to explain how to start it.
-    expect(await page.getByText('Start the QA Tool first').count()).toBe(0);
-    await screenshot('url-first');
-  }, 30000);
+    expect(await page.getByText('Start Release check-up first').count()).toBe(0);
+    // No key yet: connecting the AI comes first, on this screen.
+    await page.getByRole('heading', { name: 'First, connect the AI' }).waitFor();
+    expectPlain(await plainText(page), 'the new check-up');
+    await screenshot('new-checkup-first-visit');
 
-  it('checks the AI key as it is pasted, handles no free models, then remembers the setup', async () => {
-    await page.getByRole('button', { name: 'Settings & AI Key' }).click();
-    await expect.poll(() => heading()).toBe('Connect an AI helper');
-    const keyInput = page.getByLabel('OpenRouter key');
-    const save = page.getByRole('button', { name: 'Save key and continue' });
+    // Studio's old address leads to Past check-ups, which is empty.
+    await page.goto(`${toolUrl}/studio/`);
+    await page.waitForURL(`${toolUrl}/reports`);
+    await expect.poll(() => heading(page)).toBe('Past check-ups');
+    await page.getByText('No check-ups yet.').waitFor();
+    await checkPhone('/reports', 'past-empty', { role: 'link', name: 'Start a new check-up' });
 
-    await keyInput.fill('sk-or-v1-revoked');
-    await expect.poll(() => page.locator('#ai-key-status').innerText()).toContain('Key invalid or out of credit');
-    expect(await save.isDisabled()).toBe(true);
-    await screenshot('key-invalid');
+    await page.goto(`${toolUrl}/no-such-page`);
+    await expect.poll(() => heading(page)).toBe('Page not found');
+    expect(await topBar.count()).toBe(1);
+    expectPlain(await plainText(page), 'page not found');
+    await checkPhone('/no-such-page', 'not-found', { role: 'link', name: 'Start a new check-up' });
+  }, 60000);
 
-    await keyInput.fill(GOOD_KEY);
-    await expect.poll(() => page.locator('#ai-key-status').innerText(), { timeout: 2000 }).toContain('Key is active');
-    expect(await save.isDisabled()).toBe(false);
+  it('first visit: specs typed before the AI key are kept, and the key is checked on the same screen', async () => {
+    await page.goto(`${toolUrl}/`);
+    const address = page.getByLabel('Site address');
+    await address.fill(fixtureHost);
+    // The address actually used shows once it's checked. A site not checked before starts unticked.
+    await expect.poll(() => page.locator('#url-status').innerText(), { timeout: 15000 }).toContain(`Found ${fixtureUrl}`);
+    const owner = page.getByRole('checkbox', { name: /I own this site/ });
+    expect(await owner.isChecked()).toBe(false);
+    expect(await page.locator('#url-status').innerText()).toContain('Only looked at, nothing is sent or changed.');
+    // A local address is a test copy already: there's nothing to mark.
+    expect(await page.getByRole('checkbox', { name: 'This is a test copy' }).count()).toBe(0);
 
+    await page.getByText('Add specs, design notes or journeys').click();
+    await page.getByLabel('Specs', { exact: true }).fill(SPECS);
+    const scan = page.getByRole('button', { name: 'Scan the site' });
+    expect(await scan.isDisabled()).toBe(true);
+    expect(await page.locator('#start-hint').innerText()).toBe('Connect the AI above first.');
+
+    const key = page.getByLabel('OpenRouter key');
+    await key.fill('sk-or-v1-revoked');
+    await expect.poll(() => page.locator('#ai-key-status').innerText()).toContain('The key doesn’t work, or it’s out of credit.');
+    await key.fill(GOOD_KEY);
+    await expect.poll(() => page.locator('#ai-key-status').innerText(), { timeout: 5000 }).toContain('The key works');
+    const save = page.getByRole('button', { name: 'Save the key' });
     openRouterModels.list = [];
     await save.click();
-    await expect.poll(() => page.getByRole('alert').innerText()).toBe('No free AI models are available right now — please try again later.');
-    expect(await heading()).toBe('Connect an AI helper');
-
+    await expect.poll(() => page.getByRole('alert').first().innerText()).toBe('No free AI models are available right now. Please try again later.');
     openRouterModels.list = [FREE_MODEL];
     await save.click();
-    await expect.poll(() => heading()).toBe('Enter the address of the site to check');
+    await page.getByText('The AI is connected.').waitFor();
+    expect(await page.getByRole('heading', { name: 'First, connect the AI' }).count()).toBe(0);
     // The QA Tool, not this browser, remembers the key and the model it chose.
-    expect(await (await fetch(`${toolUrl}/api/ai/openrouter/key`)).json()).toMatchObject({ configured: true, model: FREE_MODEL.id });
+    expect(await api('/api/ai/openrouter/key')).toMatchObject({ configured: true, model: FREE_MODEL.id });
 
-    // Another browser (nothing stored in it) goes straight to the address too.
+    // Nothing typed was lost.
+    expect(await address.inputValue()).toBe(fixtureHost);
+    expect(await page.getByLabel('Specs', { exact: true }).inputValue()).toBe(SPECS);
+
+    await owner.check();
+    await expect.poll(() => page.locator('#url-status').innerText()).toContain('Test copy: forms can be filled in and sent.');
+    expect(await scan.isDisabled()).toBe(false);
+    expectPlain(await plainText(page), 'the new check-up with its key');
+    await screenshot('new-checkup-ready');
+
+    // Another browser, with nothing stored in it, isn't asked for the key.
     const other = await browser.newContext();
     const otherPage = await other.newPage();
     await otherPage.goto(`${toolUrl}/`);
     await expect.poll(() => heading(otherPage), { timeout: 10000 }).toBe('Enter the address of the site to check');
+    expect(await otherPage.getByRole('heading', { name: 'First, connect the AI' }).count()).toBe(0);
     await other.close();
+  }, 60000);
 
-    await page.getByRole('button', { name: 'Settings & AI Key' }).click();
-    await page.getByRole('button', { name: 'Keep my current key' }).click();
-    await expect.poll(() => heading()).toBe('Enter the address of the site to check');
-  }, 30000);
-
-  it('product path: address, scan, plan review, approval, live run, report and downloads', async () => {
-    const address = page.locator('#url-input');
-
-    // An address nothing answers at: stays put with an explanation (Enter submits)
-    await address.fill('localhost:3499');
-    await address.press('Enter');
-    await expect.poll(() => page.getByRole('alert').innerText()).toContain('Target Connection Failed');
-    expect(await heading()).toBe('Enter the address of the site to check');
-    await screenshot('url-unreachable');
-
-    await address.fill(fixtureHost);
-    await page.getByRole('button', { name: /Add Specs, Design Guidelines & Flow Docs/ }).click();
-    await page.getByPlaceholder(/User Story: Sign In and Invoice Management/).fill('# Invoices\n- Amount must be positive');
-
+  it('scans, shows the plan, and keeps it waiting when you leave it', async () => {
     runRequests.length = 0;
-    const stopWatching = watchText();
-    await page.getByRole('button', { name: 'Scan Site & Build Plan →' }).click();
-    await expect.poll(() => heading()).toBe('Mapping Site Architecture');
-    // Live progress with numbers while the site is explored and planned.
-    await expect.poll(() => page.getByRole('status', { name: 'Scan progress' }).count(), { timeout: 30000 }).toBe(1);
+    await page.getByRole('button', { name: 'Scan the site' }).click();
+    await page.waitForURL(`${toolUrl}/check/scan`);
+    await expect.poll(() => heading(page)).toBe(`Scanning ${fixtureHost}`);
+    const steps = page.getByRole('navigation', { name: 'Check-up steps' });
+    expect(await steps.locator('[aria-current="step"]').innerText()).toContain('Plan');
+    await page.getByRole('region', { name: 'Scan progress' }).getByText('Pages found').waitFor();
+    expectPlain(await plainText(page), 'the scan');
     await screenshot('scanning');
+    await checkPhone('/check/scan', 'scanning', { role: 'button', name: 'Stop scanning' });
 
-    // The plan waits for review: nothing is tested until it is approved.
-    const approve = page.getByRole('button', { name: 'Approve plan & start testing →' });
-    await approve.waitFor({ timeout: 90000 });
-    expect(await heading()).toBe(`Review the plan for ${fixtureHost}`);
-    let plan: ReviewPlan = await (await fetch(`${toolUrl}/api/runner/plan`)).json();
-    await screenshot('plan-review');
+    // The plan waits for review: nothing is tested until it's approved.
+    const approve = page.getByRole('button', { name: 'Approve the plan and start testing' });
+    await approve.waitFor({ timeout: 120000 });
+    expect(page.url()).toBe(`${toolUrl}/check/plan`);
+    expect(await heading(page)).toBe(`Review the plan for ${fixtureHost}`);
+    await expect.poll(() => page.title()).toBe(`Plan for ${fixtureHost} · Release check-up`);
 
     expect(runRequests).toHaveLength(1);
-    expect(runRequests[0]).toMatchObject({
-      targetUrl: `http://${fixtureHost}`,
-      owner: true,
-      skipReview: false,
-      mode: 'product',
-      useAI: true,
-      aiProvider: 'openrouter',
-    });
-    expect(runRequests[0].productContext).toContain('# Invoices\n- Amount must be positive');
+    expect(runRequests[0]).toMatchObject({ targetUrl: fixtureUrl, owner: true, skipReview: false, mode: 'product', useAI: true, aiProvider: 'openrouter' });
+    expect(runRequests[0].productContext).toContain('# Specs\n\n# Invoices\n- Amount must be positive');
+    // The specs pasted before the key reached the plan.
+    expect(await page.getByLabel('Specs, requirements or user stories').inputValue()).toContain('Amount must be positive');
 
-    // The complete plan: every page found, every link, every journey, planned by the AI.
+    // The complete plan: every page found, every link, every journey.
+    const plan = await api<ReviewPlan>('/api/runner/plan');
     expect(plan.planPages!.length).toBe(plan.pages.length);
     expect(plan.planPages!.length).toBeGreaterThan(5);
-    const document = await page.locator('main, #root').first().innerText();
+    const document = await page.locator('main').innerText();
     for (const p of plan.planPages!) expect(document, p.urlPath).toContain(p.urlPath);
-    expect(plan.navigation!.length).toBeGreaterThan(0);
-    expect(plan.navigation!.every((n) => n.source === 'ai')).toBe(true);
     await expect.poll(() => page.getByRole('heading', { name: /^Navigation/ }).innerText()).toBe(`Navigation (${plan.navigation!.length})`);
     await expect.poll(() => page.getByRole('heading', { name: /^Journeys/ }).innerText()).toBe(`Journeys (${plan.flows.length})`);
 
@@ -230,103 +320,337 @@ describe('Wizard end to end, on the one server', () => {
     await expect.poll(async () => (await page.locator('#plan-summary').innerText()).includes('at 1 screen size (1440px)')).toBe(true);
     await page.getByRole('checkbox', { name: 'Test the page /about' }).uncheck();
     await expect.poll(() => page.locator('#plan-wontrun').innerText()).toContain('Page /about');
-    await screenshot('plan-edited');
+    expectPlain(await plainText(page), 'the plan');
+    await screenshot('plan');
 
-    // The whole plan downloads as Markdown for sign-off.
     const [planFile] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download the plan' }).click()]);
     const markdown = await fs.readFile((await planFile.path())!, 'utf8');
-    expect(planFile.suggestedFilename()).toBe(`test-plan-${fixtureHost.replace(':', '_')}.md`);
     expect(markdown).toContain(`# Test plan: ${fixtureHost}`);
-    expect(markdown).toContain('## Navigation');
     expect(markdown).toContain('- Page /about — Switched off in the review.');
 
-    // The map draws the site.
     await page.getByRole('tab', { name: 'Map' }).click();
-    await expect.poll(() => page.locator('body').innerText()).toContain('BLUEPRINT ARCHITECTURE VIEW');
-    await screenshot('plan-map');
+    await page.getByRole('group', { name: 'How to show the map' }).waitFor();
     await page.getByRole('tab', { name: 'Full plan' }).click();
+    await checkPhone('/check/plan', 'plan', { role: 'button', name: 'Approve the plan and start testing' });
 
-    // What's approved is exactly what runs.
-    plan = await (await fetch(`${toolUrl}/api/runner/plan`)).json();
-    expect(plan.screenSizes).toEqual(['1440px']);
-    await approve.click();
-    await expect.poll(() => page.locator('body').innerText(), { timeout: 30000 }).toContain('Testing live journeys');
-    await screenshot('live');
-    const report: ReleaseReport = await (async () => {
-      await expect.poll(async () => (await (await fetch(`${toolUrl}/api/runner/status`)).json()).phase, { timeout: 240000, interval: 1000 }).toBe('done');
-      return (await fetch(`${toolUrl}/api/report`)).json();
-    })();
-    const ran = report.results.map((r) => r.testCaseId);
-    expect(new Set(ran)).toEqual(new Set(plan.testCases!.map((tc) => tc.id)));
-    expect(ran.length).toBe(plan.summary!.tests);
-    // Every link landed where the plan said: a signed-out click on "My account" lands on the sign-in page.
-    expect(report.findings.filter((f) => f.title.startsWith('URL did not match')).map((f) => f.title)).toEqual([]);
-    expect(report.results.some((r) => r.testCaseId.startsWith('PAGE-') && plan.testCases!.find((tc) => tc.id === r.testCaseId)?.startPage === '/about')).toBe(false);
-    await expect.poll(() => heading(), { timeout: 20000 }).toBe(summarizeReport(report).headline);
-    stopWatching();
-    await screenshot('report');
-    for (const text of seenText) expect(text).not.toMatch(LEAKED_INTERNALS);
-
-    // Downloads come from the QA Tool byte for byte
-    const downloads: Array<{ name: string; bytes: Buffer }> = [];
-    page.on('download', async (d) => {
-      const file = await d.path();
-      downloads.push({ name: d.suggestedFilename(), bytes: await fs.readFile(file!) });
-    });
-    await page.getByRole('button', { name: 'Download MD & JSON' }).click();
-    await expect.poll(() => downloads.length, { timeout: 10000 }).toBe(3);
-    for (const name of ['report.html', 'report.md', 'findings.json']) {
-      const downloaded = downloads.find((d) => d.name === name);
-      expect(downloaded?.bytes.equals(await fs.readFile(path.join(outputDir, name))), name).toBe(true);
-    }
-  }, 300000);
-
-  it('QA Flow Studio at /studio/ shows the same run, and the two apps link to each other', async () => {
-    await page.getByRole('link', { name: 'Engineer view' }).click();
-    await page.waitForURL(`${toolUrl}/studio/`);
-    await expect.poll(() => page.getByText('QA Flow Studio').first().isVisible(), { timeout: 10000 }).toBe(true);
-    await expect.poll(() => page.getByRole('option', { name: 'Live Execution Run (localhost)' }).count(), { timeout: 10000 }).toBe(1);
-    await screenshot('studio');
-
-    // No Report Hub is set up: its part of the API says so plainly.
-    const hub = await fetch(`${toolUrl}/api/v1/products/localhost/releases/latest`);
-    expect(hub.status).toBe(503);
-    expect(await hub.json()).toMatchObject({ hubConnected: false });
-
-    // Back to the wizard, which picks up where it was: the finished report.
-    await page.getByRole('link', { name: 'Wizard' }).click();
+    // Leaving the plan keeps it waiting, and the new check-up screen offers it again.
+    await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'New check-up' }).click();
     await page.waitForURL(`${toolUrl}/`);
-    const report: ReleaseReport = await (await fetch(`${toolUrl}/api/report`)).json();
-    await expect.poll(() => heading(), { timeout: 10000 }).toBe(summarizeReport(report).headline);
+    const resume = page.getByRole('complementary', { name: 'Check-up in progress' });
+    await expect.poll(() => resume.innerText()).toContain(`Your check-up of ${fixtureHost} is waiting for your review.`);
+    expect(await runnerPhase()).toBe('awaiting-review');
+    // Everything typed is still there.
+    expect(await page.getByLabel('Site address').inputValue()).toBe(fixtureHost);
+
+    // Starting another check-up asks first, and keeping the plan keeps it.
+    await expect.poll(() => page.locator('#url-status').innerText(), { timeout: 15000 }).toContain('Found');
+    await page.getByRole('button', { name: 'Scan the site' }).click();
+    const ask = page.getByRole('dialog', { name: 'Start a new check-up?' });
+    await ask.waitFor();
+    expect(await ask.innerText()).toContain(`The plan for ${fixtureHost} that’s waiting for your review will be thrown away.`);
+    await ask.getByRole('button', { name: 'Keep the plan' }).click();
+    expect(await ask.count()).toBe(0);
+    expect(page.url()).toBe(`${toolUrl}/`);
+    expect(await runnerPhase()).toBe('awaiting-review');
+    expect(runRequests).toHaveLength(2); // the refused one; nothing was replaced
+
+    await resume.getByRole('link', { name: /Open the plan/ }).click();
+    await page.waitForURL(`${toolUrl}/check/plan`);
+    await approve.waitFor();
+
+    // Back, Forward and refresh land where they were; the plan's changes are still there.
+    await page.goBack();
+    await page.waitForURL(`${toolUrl}/`);
+    await expect.poll(() => heading(page)).toBe('Enter the address of the site to check');
+    await page.goForward();
+    await page.waitForURL(`${toolUrl}/check/plan`);
+    await page.reload();
+    await approve.waitFor({ timeout: 15000 });
+    expect(await page.getByRole('checkbox', { name: 'Phone (375px)' }).isChecked()).toBe(false);
+
+    // The step bar's finished step is a link that stops nothing.
+    await page.getByRole('navigation', { name: 'Check-up steps' }).getByRole('link', { name: /Address/ }).click();
+    await page.waitForURL(`${toolUrl}/`);
+    expect(await runnerPhase()).toBe('awaiting-review');
+    await page.goBack();
+    await approve.waitFor();
+
+    // A check-up address for another step shows the step the check-up is at.
+    await page.goto(`${toolUrl}/check/testing`);
+    await page.waitForURL(`${toolUrl}/check/plan`, { timeout: 15000 });
+  }, 240000);
+
+  it('a test run that fails goes back to the plan and says why; stopping testing keeps the plan too', async () => {
+    const approve = page.getByRole('button', { name: 'Approve the plan and start testing' });
+    // The site goes down: testing can't start.
+    await fixtureDown();
+    await approve.click();
+    const failed = page.getByRole('alert').filter({ hasText: 'Testing stopped before it finished' });
+    await failed.waitFor({ timeout: 60000 });
+    expect(page.url()).toBe(`${toolUrl}/check/plan`);
+    expect(await failed.innerText()).toContain('Your site couldn’t be reached.');
+    expect(await failed.innerText()).toContain('Your plan is kept');
+    expect(await runnerPhase()).toBe('awaiting-review');
+    expectPlain(await plainText(page), 'the plan after a failed run');
+    await screenshot('plan-after-failure');
+
+    // Back up: the same plan is approved again.
+    await fixtureUp();
+    const watching = watch();
+    try {
+      await approve.click();
+      await page.waitForURL(`${toolUrl}/check/testing`);
+      await expect.poll(() => heading(page)).toBe(`Testing ${fixtureHost}`);
+      await expect.poll(() => page.getByRole('status').filter({ hasText: /Test \d+ of \d+/ }).count(), { timeout: 90000 }).toBeGreaterThan(0);
+      await page.locator('img[alt^="The latest screen"]').first().waitFor({ timeout: 60000 });
+      await screenshot('testing');
+      await checkPhone('/check/testing', 'testing', { role: 'button', name: 'Stop testing' });
+
+      // A refresh mid-run picks up where testing is, from the replayed events.
+      await page.reload();
+      await expect.poll(() => page.getByRole('status').filter({ hasText: /Test \d+ of \d+/ }).count(), { timeout: 20000 }).toBeGreaterThan(0);
+
+      // The step bar never stops anything: the check-up is still being tested.
+      await page.getByRole('navigation', { name: 'Check-up steps' }).getByRole('link', { name: /Address/ }).click();
+      await page.waitForURL(`${toolUrl}/`);
+      const resume = page.getByRole('complementary', { name: 'Check-up in progress' });
+      await expect.poll(() => resume.innerText()).toContain(`Your check-up of ${fixtureHost} is being tested.`);
+      expect(await runnerPhase()).toBe('testing');
+      await resume.getByRole('link', { name: /Watch the testing/ }).click();
+      await page.waitForURL(`${toolUrl}/check/testing`);
+
+      // Stopping asks first, says what's lost, and keeps the plan.
+      await page.getByRole('button', { name: 'Stop testing' }).click();
+      const ask = page.getByRole('dialog', { name: 'Stop testing?' });
+      expect(await ask.innerText()).toContain('Results so far are thrown away. Your plan is kept, so you can change it and approve it again.');
+      await ask.getByRole('button', { name: 'Stop testing' }).click();
+      await page.waitForURL(`${toolUrl}/check/plan`, { timeout: 30000 });
+      await page.getByText('Testing stopped. Your plan is kept.').waitFor();
+      expect(await runnerPhase()).toBe('awaiting-review');
+
+      // Approved again, it runs to the end and the report opens at its own address.
+      await approve.click();
+      await page.waitForURL(/\/reports\/run-\d+$/, { timeout: 360000 });
+    } finally {
+      watching.stop();
+    }
+    firstRunId = decodeURIComponent(page.url().split('/').pop()!);
+    for (const text of watching.seen.texts) expectPlain(text, 'the check-up in progress');
+    // The testing screen showed the real test count, a screenshot and problems pinned to their pages.
+    expect(watching.seen).toMatchObject({ testCount: true, screenshot: true, found: true, pinned: true });
+  }, 600000);
+
+  it('the report: one verdict, graded areas, problems by what to fix first, and details for developers', async () => {
+    const report = await api<ReleaseReport>(`/api/runs/${firstRunId}`);
+    const summary = summarizeReport(report);
+    await expect.poll(() => heading(page), { timeout: 20000 }).toBe(summary.stamp);
+    await expect.poll(() => page.title()).toBe(`Report for ${fixtureHost} · Release check-up`);
+    expect(await page.getByText(summary.reason, { exact: true }).count()).toBe(1);
+    // One verdict: no overall letter or score to contradict the stamp.
+    const text = await plainText(page);
+    expect(text).not.toMatch(/\/100|Readiness Grade|Overall/);
+    expectPlain(text, 'the report');
+    expect(await page.getByRole('navigation', { name: 'Check-up steps' }).locator('[aria-current="step"]').innerText()).toContain('Report');
+
+    // Six areas, each graded or "Not checked".
+    const areas = page.getByRole('region', { name: 'How each area did' }).getByRole('listitem');
+    expect(await areas.count()).toBe(6);
+    for (const aspect of Object.keys(report.grades!.aspects) as Array<keyof NonNullable<ReleaseReport['grades']>['aspects']>) {
+      const card = areas.filter({ hasText: aspect });
+      const data = report.grades!.aspects[aspect];
+      expect(await card.innerText(), aspect).toContain(data.checked === false ? 'Not checked' : data.grade);
+    }
+
+    // The planted defects on the dashboard colour it on the map.
+    expect(['warn', 'fail']).toContain(pageResults(report).statuses['/dashboard']?.status);
+    await screenshot('report');
+
+    // Problems open with the keyboard alone.
+    const problems = page.getByRole('region', { name: 'Problems found' });
+    const firstProblem = problems.locator('button[aria-expanded]').first();
+    await firstProblem.focus();
+    await page.keyboard.press('Enter');
+    expect(await firstProblem.getAttribute('aria-expanded')).toBe('true');
+    await page.keyboard.press('Space');
+    expect(await firstProblem.getAttribute('aria-expanded')).toBe('false');
+
+    // Details for developers: the screenshot, and a bug report and a Playwright test to copy.
+    const groups = Object.values(groupProblems(report.findings)).flat();
+    const withScreenshot = groups.find((g) => g.findings[0].evidence.screenshotPath)!;
+    expect(withScreenshot, 'a problem with a screenshot').toBeTruthy();
+    const item = problems.getByRole('listitem').filter({ has: page.getByRole('button', { name: withScreenshot.title }) }).first();
+    await item.getByRole('button', { name: withScreenshot.title }).click();
+    await item.getByText('Details for developers').click();
+    const image = item.getByRole('img').first();
+    await image.waitFor();
+    await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0), { timeout: 10000 }).toBe(true);
+    await item.getByRole('button', { name: 'Copy bug report' }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain(`### ${withScreenshot.title}`);
+    await item.getByRole('button', { name: 'Copy Playwright test' }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toMatch(/from '(@playwright\/test|playwright)'/);
+    // The technical layer is only in there.
+    expectPlain(await plainText(page), 'the report with a problem open');
+    await screenshot('report-details-for-developers');
+
+    // An accessibility scan of the report finds nothing.
+    const axePath = createRequire(createRequire(path.join(repoRoot, 'packages/checkers/package.json')).resolve('@axe-core/playwright')).resolve('axe-core');
+    await page.addScriptTag({ content: await fs.readFile(axePath, 'utf8') });
+    const violations = await page.evaluate(async () => {
+      const result = await (window as unknown as { axe: { run: (context: Document, options: unknown) => Promise<{ violations: Array<{ id: string; nodes: Array<{ target: string[] }> }> }> } }).axe.run(
+        document,
+        { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] } }
+      );
+      return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
+    });
+    expect(violations).toEqual([]);
+
+    // Long reports get filters: by page, and by area.
+    expect(report.findings.length).toBeGreaterThan(10);
+    const shownTitles = () => problems.locator('button[aria-expanded] > span > span:first-child').allInnerTexts();
+    const all = await shownTitles();
+    await page.getByLabel('Page', { exact: true }).selectOption('/dashboard');
+    await page.getByText('Showing the problems on').waitFor();
+    const onDashboard = groupProblems(report.findings.filter((f) => f.where.urlPath === '/dashboard' || f.seenAt?.pages.includes('/dashboard')));
+    await expect.poll(async () => (await shownTitles()).length).toBe(Object.values(onDashboard).flat().length);
+    await page.getByRole('button', { name: 'Show every page' }).click();
+    await page.getByLabel('Area', { exact: true }).selectOption('Accessible');
+    await expect.poll(async () => (await shownTitles()).length).toBeLessThan(all.length);
+    for (const category of await problems.locator('button[aria-expanded] > span > span:nth-child(2)').allInnerTexts()) {
+      expect(category).toMatch(/^(Hard for some people to use|Awkward to use)/);
+    }
+    await page.getByLabel('Area', { exact: true }).selectOption('all');
+
+    // Choosing a page on the map filters the list to it.
+    await page.getByRole('region', { name: 'Map of results' }).getByRole('button', { name: /\/dashboard: \d+ problems?/ }).first().click();
+    await page.getByText('Showing the problems on').waitFor();
+    await page.getByRole('button', { name: 'Show every page' }).click();
+
+    // Downloads are the check-up's own files, byte for byte.
+    const runFolder = path.join(outputDir, 'runs', firstRunId);
+    const [html] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download the report' }).click()]);
+    expect((await fs.readFile((await html.path())!)).equals(await fs.readFile(path.join(runFolder, 'report.html')))).toBe(true);
+    await page.getByText('Details for developers').last().click();
+    for (const file of ['report.md', 'findings.json']) {
+      const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: `Download ${file}` }).click()]);
+      expect((await fs.readFile((await download.path())!)).equals(await fs.readFile(path.join(runFolder, file))), file).toBe(true);
+    }
+
+    await checkPhone(`/reports/${firstRunId}`, 'report', { role: 'button', name: 'Download the report' });
+  }, 180000);
+
+  it('Test again reuses the approved plan: nothing changed, so it tests at once', async () => {
+    runRequests.length = 0;
+    await page.getByRole('button', { name: 'Test again' }).click();
+    await expect.poll(() => runRequests.length, { timeout: 30000 }).toBe(1);
+    expect(runRequests[0]).toMatchObject({ targetUrl: fixtureUrl, owner: true, testAgain: true });
+    // The first check-up's specs go along.
+    expect(runRequests[0].productContext).toContain('Amount must be positive');
+    // No review this time: from the scan straight to testing, then the new report.
+    await page.waitForURL((url) => /^\/reports\/run-\d+$/.test(url.pathname) && !url.pathname.endsWith(firstRunId), { timeout: 360000 });
+    await expect.poll(runnerPhase).toBe('done');
+    secondRunId = decodeURIComponent(page.url().split('/').pop()!);
+    expect(secondRunId).not.toBe(firstRunId);
+    const report = await api<ReleaseReport>(`/api/runs/${secondRunId}`);
+    expect(report.testedWithApprovedPlan).toEqual(expect.any(String));
+    expect(new Set(report.results.map((r) => r.breakpoint))).toEqual(new Set(['1440px']));
+    await page.getByText(/^Tested with the plan you approved on \d+ \w+ \d{4}\.$/).waitFor({ timeout: 20000 });
+  }, 420000);
+
+  it('Past check-ups: an older report opens, survives a reload, and can be deleted', async () => {
+    await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Past check-ups' }).click();
+    await page.waitForURL(`${toolUrl}/reports`);
+    await expect.poll(() => heading(page)).toBe('Past check-ups');
+    await page.getByRole('heading', { name: `${fixtureHost} (2 check-ups)` }).waitFor();
+    expectPlain(await plainText(page), 'past check-ups');
+    await screenshot('past-checkups');
+    await checkPhone('/reports', 'past', { role: 'link', name: /^Open the check-up/ });
+
+    // Newest first: the older one is second.
+    const open = page.getByRole('link', { name: /^Open the check-up/ });
+    await open.nth(1).click();
+    await page.waitForURL(`${toolUrl}/reports/${firstRunId}`);
+    const first = summarizeReport(await api<ReleaseReport>(`/api/runs/${firstRunId}`));
+    await expect.poll(() => heading(page)).toBe(first.stamp);
+    await page.reload();
+    await expect.poll(() => heading(page), { timeout: 15000 }).toBe(first.stamp);
+    await page.goBack();
+    await page.waitForURL(`${toolUrl}/reports`);
+    await page.goForward();
+    await page.waitForURL(`${toolUrl}/reports/${firstRunId}`);
+    await page.goBack();
+
+    await page.getByRole('button', { name: /^Delete the check-up/ }).nth(1).click();
+    const ask = page.getByRole('dialog', { name: 'Delete this check-up?' });
+    expect(await ask.innerText()).toContain('This can’t be undone.');
+    await ask.getByRole('button', { name: 'Delete the check-up' }).click();
+    await page.getByRole('heading', { name: `${fixtureHost} (1 check-up)` }).waitFor();
+    expect((await fetch(`${toolUrl}/api/runs/${firstRunId}`)).status).toBe(404);
+    expect((await api<{ runs: RunSummary[] }>('/api/runs')).runs.map((r) => r.runId)).toEqual([secondRunId]);
   }, 60000);
 
-  it('a site you only look at: the plan is read-only', async () => {
-    await page.getByRole('button', { name: 'Check another site' }).click();
-    await expect.poll(() => heading()).toBe('Enter the address of the site to check');
-    await page.getByRole('checkbox', { name: /I own this site or it’s a test copy/ }).click();
-    await page.locator('#url-input').fill(fixtureHost);
+  it('Go deeper starts a clean signed-in scan with the first check-up’s specs, and stopping keeps the form', async () => {
+    await page.goto(`${toolUrl}/reports/${secondRunId}`);
+    await page.getByRole('button', { name: 'Go deeper: test the signed-in pages' }).click();
+    await page.getByLabel('Email or username').fill('manager@example.com');
+    await page.getByLabel('Password').fill('manager-password');
     runRequests.length = 0;
-    await page.getByRole('button', { name: 'Scan Site & Build Plan →' }).click();
-    await page.getByRole('button', { name: 'Approve plan & start testing →' }).waitFor({ timeout: 90000 });
+    await page.getByRole('button', { name: 'Scan the signed-in pages' }).click();
+    await page.waitForURL(`${toolUrl}/check/scan`, { timeout: 30000 });
+    expect(runRequests[0]).toMatchObject({ targetUrl: fixtureUrl, owner: true, roles: [{ role: 'member', username: 'manager@example.com' }] });
+    expect(runRequests[0].productContext).toContain('Amount must be positive');
+    expect(runRequests[0].testAgain).toBeUndefined();
+    // The new scan's own progress shows, not the last one's.
+    await expect.poll(() => heading(page)).toBe(`Scanning ${fixtureHost}`);
+    await page.getByRole('region', { name: 'Scan progress' }).getByText('Pages found').waitFor({ timeout: 30000 });
 
-    expect(runRequests[0]).toMatchObject({ targetUrl: `http://${fixtureHost}`, owner: false });
-    expect(await page.locator('#plan-summary').innerText()).toContain('You didn’t say you own this site');
-    const plan: ReviewPlan = await (await fetch(`${toolUrl}/api/runner/plan`)).json();
-    expect(plan.readOnly).toBe(true);
-    expect(plan.readOnlyReason).toContain('You didn’t say you own this site');
-    await waitForToolIdle();
-  }, 120000);
+    await page.getByRole('button', { name: 'Stop scanning' }).click();
+    const ask = page.getByRole('dialog', { name: 'Stop scanning?' });
+    expect(await ask.innerText()).toContain('The pages found so far are thrown away. AI requests already used stay used.');
+    await ask.getByRole('button', { name: 'Stop scanning' }).click();
+    await page.waitForURL(`${toolUrl}/`);
+    expect(await page.getByLabel('Site address').inputValue()).toBe(fixtureHost);
+    await expect.poll(runnerPhase).toBe('idle');
+  }, 90000);
 
-  it('stays usable on a phone-sized screen', async () => {
-    await page.setViewportSize({ width: 375, height: 800 });
-    await page.goto(`${toolUrl}/`);
-    // The plan from the previous check is still waiting for review, and fits a phone too.
-    await page.getByRole('button', { name: 'Approve plan & start testing →' }).waitFor({ timeout: 10000 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
-    await page.getByRole('button', { name: /Back to the address/ }).click();
-    await expect.poll(() => heading()).toBe('Enter the address of the site to check');
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-    expect(overflow).toBe(false);
-    await screenshot('mobile-url');
-  }, 30000);
+  it('remembers the owner choice for the site on the next check-up', async () => {
+    // A fresh browser: only the QA Tool can remember it.
+    const other = await browser.newContext();
+    const otherPage = await other.newPage();
+    try {
+      await otherPage.goto(`${toolUrl}/`);
+      await otherPage.getByLabel('Site address').fill(fixtureHost);
+      await expect.poll(() => otherPage.locator('#url-status').innerText(), { timeout: 15000 }).toContain('Found');
+      await expect.poll(() => otherPage.getByRole('checkbox', { name: /I own this site/ }).isChecked()).toBe(true);
+      expect(await otherPage.locator('#url-status').innerText()).toContain('Test copy: forms can be filled in and sent.');
+      await checkPhone('/', 'new-checkup', { role: 'button', name: 'Scan the site' });
+    } finally {
+      await other.close();
+    }
+  }, 60000);
+
+  it('Settings: the key in use, and replacing it', async () => {
+    await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Settings' }).click();
+    await page.waitForURL(`${toolUrl}/settings`);
+    await expect.poll(() => heading(page)).toBe('Settings');
+    await page.getByText('✓ Saved').waitFor();
+    await page.getByText(FREE_MODEL.id).waitFor();
+    expectPlain(await plainText(page), 'settings');
+    await checkPhone('/settings', 'settings', { role: 'button', name: 'Replace the key' });
+
+    await page.getByRole('button', { name: 'Replace the key' }).click();
+    // There's a key to keep, so keeping it is offered.
+    await page.getByRole('button', { name: 'Keep my current key' }).click();
+    await page.getByRole('button', { name: 'Replace the key' }).click();
+    await page.getByLabel('OpenRouter key').fill(GOOD_KEY);
+    await expect.poll(() => page.locator('#ai-key-status').innerText(), { timeout: 5000 }).toContain('The key works');
+    await page.getByRole('button', { name: 'Save the new key' }).click();
+    await page.getByText('The new key is saved and works.').waitFor();
+    await screenshot('settings');
+
+    await page.goBack();
+    await page.waitForURL(`${toolUrl}/`);
+    await page.goForward();
+    await page.waitForURL(`${toolUrl}/settings`);
+    await expect.poll(() => heading(page)).toBe('Settings');
+  }, 60000);
 });

@@ -116,6 +116,11 @@ describe('FlowTestOrchestrator E2E', () => {
     expect(path.isAbsolute(telemetryResult!.videoPath!)).toBe(false);
     expect((await fs.stat(path.join(outputDir, telemetryResult!.videoPath!))).size).toBeGreaterThan(0);
     expect(apiFinding?.evidence.videoPath).toBe(telemetryResult?.videoPath);
+    // Each problem shows the screen it was found on: here, its test's latest screenshot.
+    const lastScreen = [...telemetryResult!.stepEvidence].reverse().find((s) => s.screenshotPath)?.screenshotPath;
+    expect(lastScreen).toBeTruthy();
+    expect(apiFinding?.evidence.screenshotPath).toBe(lastScreen);
+    expect(path.isAbsolute(apiFinding!.evidence.screenshotPath!)).toBe(false);
     const passedPointFiles = await fs.readdir(path.join(outputDir, 'evidence', 'TC-E2E-001-1440px'));
     expect(passedPointFiles.some((f) => f.endsWith('.webm'))).toBe(false);
 

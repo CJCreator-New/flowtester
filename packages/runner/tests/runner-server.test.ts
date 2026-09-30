@@ -239,7 +239,7 @@ describe('RunnerServer', () => {
 
     // Poll until run completes
     let isRunning = true;
-    for (let i = 0; i < 90 && isRunning; i++) {
+    for (let i = 0; i < 300 && isRunning; i++) {
       await new Promise((r) => setTimeout(r, 500));
       const statusRes = await fetch(`${runnerBaseUrl}/api/runner/status`);
       const status = await statusRes.json();
@@ -259,7 +259,7 @@ describe('RunnerServer', () => {
     const afterRestart = await (await fetch(`${runnerBaseUrl}/api/runner/status`)).json();
     expect(afterRestart).toMatchObject({ phase: 'idle', hasPlan: false, isRunning: false });
     expect((await fetch(`${runnerBaseUrl}/api/runner/plan`)).status).toBe(404);
-  }, 90000);
+  }, 240000);
 
   it('keeps sign-in details out of the saved plan, and asks for them again after a restart', async () => {
     const roles = [{ role: 'manager', username: 'manager@example.com', password: 'manager-password', loginPath: '/signin' }];

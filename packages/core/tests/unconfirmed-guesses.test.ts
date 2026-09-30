@@ -149,7 +149,7 @@ describe('Unconfirmed guesses never fail a site', () => {
     expect(report.coverage.couldNotVerify).toBe(2);
 
     const md = await fs.readFile(path.join(outputDir, 'invoice', 'report.md'), 'utf8');
-    expect(md).toContain('READY FOR RELEASE');
+    expect(md).toContain('**Ready to release**');
     expect(md).toContain('❓ Could not verify (AI guesses that need your confirmation)');
   }, 60000);
 
