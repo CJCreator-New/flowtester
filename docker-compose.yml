@@ -80,8 +80,9 @@ services:
       minio-init:
         condition: service_completed_successfully
 
-  # Runs checks for the wizard (and QA Flow Studio). `localhost` in a target address is rewritten to
-  # host.docker.internal, so products running on your own machine can still be reached.
+  # The QA Tool at http://localhost:3001: the Wizard at /, QA Flow Studio at /studio/, and the API
+  # that runs checks. `localhost` in a target address is rewritten to host.docker.internal, so
+  # products running on your own machine can still be reached.
   runner:
     build:
       context: .
@@ -92,6 +93,8 @@ services:
       - "${RUNNER_PORT:-3001}:3001"
     environment:
       RUNNER_LOCALHOST_ALIAS: host.docker.internal
+      # Studio's release history and triage come from the Report Hub, through /api/v1/ on this port
+      HUB_API_URL: http://hub-api:4000
       # Optional: skip the wizard's key step by providing the key here instead
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     extra_hosts:
@@ -99,20 +102,6 @@ services:
     shm_size: 1gb
     volumes:
       - runner_data:/data
-
-  # The non-technical wizard, at http://localhost:3002
-  wizard:
-    build:
-      context: .
-      dockerfile: packages/wizard/Dockerfile
-      args:
-        VITE_RUNNER_URL: http://localhost:${RUNNER_PORT:-3001}
-    container_name: qa-wizard
-    restart: unless-stopped
-    ports:
-      - "${WIZARD_PORT:-3002}:3002"
-    depends_on:
-      - runner
 
 volumes:
   postgres_data:

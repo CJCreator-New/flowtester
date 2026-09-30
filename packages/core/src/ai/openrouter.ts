@@ -69,6 +69,28 @@ export class OpenRouterClient {
   }
 
   /**
+   * The key's free-model requests for the current UTC day, as OpenRouter counts them, or null when
+   * it can't say. The AI Request Budget is checked against `remaining`.
+   */
+  async freeRequestsToday(apiKey: string | undefined): Promise<{ used: number; limit: number; remaining: number } | null> {
+    const key = apiKey?.trim();
+    if (!key) return null;
+    try {
+      const res = await this.fetchImpl(`${OPENROUTER_API}/key`, {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (!res.ok) return null;
+      const body = (await res.json()) as { data?: { free_model_daily_requests?: { used?: number; limit?: number; remaining?: number } } };
+      const today = body.data?.free_model_daily_requests;
+      if (typeof today?.remaining !== 'number' || typeof today.limit !== 'number') return null;
+      return { used: today.used ?? today.limit - today.remaining, limit: today.limit, remaining: today.remaining };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Returns chat-capable models priced at zero. Throws OpenRouterAuthError when the key is rejected,
    * because the model list itself is public and would otherwise hide a bad key.
    */

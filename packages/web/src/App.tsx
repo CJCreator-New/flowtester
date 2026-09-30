@@ -530,7 +530,12 @@ ${activeRun.findings
             </div>
             <div>
               <div className="font-semibold text-sm tracking-wide text-zinc-100">QA Flow Studio</div>
-              <div className="text-xs text-zinc-500 font-mono">v0.2.0 • triage</div>
+              <div className="text-xs text-zinc-500 font-mono">
+                v0.2.0 • triage •{' '}
+                <a href="/" className="text-emerald-400 hover:underline" title="Back to the step-by-step wizard">
+                  Wizard
+                </a>
+              </div>
             </div>
           </div>
 

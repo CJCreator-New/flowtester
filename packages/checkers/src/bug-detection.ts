@@ -141,13 +141,15 @@ export class BugDetectionChecker {
       // not failures of their own: the first failing step already explains them. Nor are
       // optional steps that couldn't be done ("Skipped"), such as a desktop-only button on a phone.
       if (!step.passed && step.error && !/^(Blocked|Skipped):/.test(step.error)) {
+        // A link check that failed is a broken link, not a control that couldn't be used.
+        const brokenLink = step.action === 'check-link';
         findings.push({
           id: `F-STEP-${context.testCaseId || 'GEN'}-${findingCounter++}`,
           testCaseId: context.testCaseId,
           flowId: context.flowId,
-          severity: 'Blocker',
+          severity: brokenLink ? 'Major' : 'Blocker',
           checker: 'bug-detection',
-          title: `Step failed: "${step.stepName}"`,
+          title: brokenLink ? `Broken link: ${step.stepName.replace(/^Check the link to /, '')}` : `Step failed: "${step.stepName}"`,
           where: {
             urlPath: step.urlBefore,
             role: context.role,
@@ -165,7 +167,9 @@ export class BugDetectionChecker {
             screenshotPath: step.screenshotPath,
             domSnapshotPath: step.domSnapshotPath,
           },
-          resolution: `Verify element is present in the DOM and enabled for action "${step.action}".`,
+          resolution: brokenLink
+            ? 'Fix or remove the link: the page it points to doesn’t open.'
+            : `Verify element is present in the DOM and enabled for action "${step.action}".`,
           verifyCommand: `qa-test verify F-STEP-${context.testCaseId || 'GEN'}-${findingCounter - 1}`,
         });
       }

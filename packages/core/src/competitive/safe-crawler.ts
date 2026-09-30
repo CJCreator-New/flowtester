@@ -4,6 +4,7 @@ import { promises as fs } from 'fs';
 import type { Finding, ReferenceFlow, ReferenceFlowStep, StepEvidence, VisitedPage } from '@qa/types';
 import { BugDetectionChecker, UXQualityChecker } from '@qa/checkers';
 import { EvidenceCollector } from '../evidence.js';
+import { isSameSite } from '../same-site.js';
 import { RobotsPolicy } from './robots.js';
 
 export interface SafeCrawlerOptions {
@@ -198,10 +199,10 @@ export class SafePublicCrawler {
       // Block third-party redirects / navigation outside target host
       try {
         const u = new URL(reqUrl);
-        if (request.isNavigationRequest() && u.hostname !== targetHost && !u.hostname.endsWith(`.${targetHost}`)) {
+        if (request.isNavigationRequest() && !isSameSite(u.hostname, targetHost) && !u.hostname.endsWith(`.${targetHost}`)) {
           return block();
         }
-        if (request.isNavigationRequest() && u.hostname === targetHost && !robots.isAllowed(u.pathname + u.search)) {
+        if (request.isNavigationRequest() && isSameSite(u.hostname, targetHost) && !robots.isAllowed(u.pathname + u.search)) {
           return block();
         }
       } catch {
@@ -285,7 +286,7 @@ export class SafePublicCrawler {
           continue;
         }
         u.hash = '';
-        if (u.hostname !== targetHost || !/^https?:$/.test(u.protocol)) continue;
+        if (!isSameSite(u.hostname, targetHost) || !/^https?:$/.test(u.protocol)) continue;
         if (!u.pathname.startsWith(scopePrefix)) continue;
         if (NOT_A_PAGE.test(u.pathname) || SESSION_ENDING.test(u.pathname) || seenPaths.has(u.pathname)) continue;
         seenPaths.add(u.pathname);

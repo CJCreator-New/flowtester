@@ -1,7 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig({
+// The QA Tool serves the built Studio at /studio/; the dev server (pnpm dev:web) stays at /.
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? '/studio/' : '/',
   plugins: [react()],
   server: {
     port: 3000,
@@ -34,4 +36,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

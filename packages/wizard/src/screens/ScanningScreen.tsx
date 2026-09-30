@@ -1,13 +1,40 @@
 import React from 'react';
 
+/** How the scan is going, from the QA Tool's progress events. */
+export interface ScanProgress {
+  stage: 'crawling' | 'narrow-screens' | 'planning';
+  /** The page just explored (crawling). */
+  urlPath?: string;
+  pagesFound?: number;
+  layoutGroups?: number;
+  done?: number;
+  total?: number;
+  requestsUsed?: number;
+  requestsNeeded?: number;
+  requestsLeft?: number;
+  what?: string;
+  /** Seconds left, estimated from how long the AI requests so far took. */
+  secondsLeft?: number;
+}
+
 export interface ScanningScreenProps {
   targetUrl: string;
   hasSpecs?: boolean;
   hasDesignNotes?: boolean;
   statusMessage?: string;
+  progress?: ScanProgress | null;
+  /** Why the scan stopped, in plain words. */
+  failure?: string | null;
   onStop?: () => void;
   onCancel?: () => void;
   onBack?: () => void;
+}
+
+function timeLeft(seconds?: number): string | null {
+  if (seconds === undefined || !Number.isFinite(seconds)) return null;
+  if (seconds < 60) return 'under a minute left';
+  const minutes = Math.round(seconds / 60);
+  return `about ${minutes} ${minutes === 1 ? 'minute' : 'minutes'} left`;
 }
 
 export function ScanningScreen({
@@ -15,6 +42,8 @@ export function ScanningScreen({
   hasSpecs = false,
   hasDesignNotes = false,
   statusMessage = 'Crawling routes, identifying interactive forms, and mapping user journeys...',
+  progress,
+  failure,
   onStop,
   onCancel,
   onBack,
@@ -99,10 +128,57 @@ export function ScanningScreen({
             <span className="font-mono text-[11px] text-ink-soft">host: {hostname}</span>
           </div>
 
-          <p className="text-sm text-ink font-medium leading-relaxed flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-pass animate-pulse shrink-0" />
-            <span>{statusMessage}</span>
-          </p>
+          {failure ? (
+            <div role="alert" className="space-y-3">
+              <p className="text-sm font-bold text-fail">The scan stopped</p>
+              <p className="text-sm text-ink">{failure}</p>
+              {onBack && (
+                <button type="button" onClick={onBack} className="btn-primary px-4 py-2 text-xs">
+                  Back to the address
+                </button>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-ink font-medium leading-relaxed flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-pass animate-pulse shrink-0" />
+              <span>{statusMessage}</span>
+            </p>
+          )}
+
+          {!failure && progress && (
+            <dl role="status" aria-label="Scan progress" className="mt-4 grid grid-cols-2 gap-3 border-t border-rule/40 pt-3 text-xs sm:grid-cols-3">
+              <div>
+                <dt className="text-ink-soft">Pages found</dt>
+                <dd className="font-mono text-base font-bold text-ink">{progress.pagesFound ?? 0}</dd>
+              </div>
+              {progress.stage === 'planning' && (
+                <div>
+                  <dt className="text-ink-soft">Layouts</dt>
+                  <dd className="font-mono text-base font-bold text-ink">{progress.layoutGroups ?? 0}</dd>
+                </div>
+              )}
+              {progress.stage === 'planning' && (
+                <div>
+                  <dt className="text-ink-soft">AI requests</dt>
+                  <dd className="font-mono text-base font-bold text-ink">
+                    {progress.requestsUsed ?? 0} of about {progress.requestsNeeded ?? 0}
+                  </dd>
+                  {progress.requestsLeft !== undefined && <dd className="text-ink-soft">{progress.requestsLeft} free left today</dd>}
+                </div>
+              )}
+              <div className="col-span-2 sm:col-span-3">
+                <dt className="sr-only">Now</dt>
+                <dd className="text-ink">
+                  {progress.stage === 'crawling'
+                    ? `Exploring the site${progress.urlPath ? `: just looked at ${progress.urlPath}` : '…'}`
+                    : progress.stage === 'narrow-screens'
+                      ? 'Looking at the menus on phone and tablet screens'
+                      : `${progress.what ?? 'Planning'}${progress.total ? ` (${Math.min(progress.done ?? 0, progress.total)} of ${progress.total})` : ''}`}
+                  {timeLeft(progress.secondsLeft) && <span className="text-ink-soft"> · {timeLeft(progress.secondsLeft)}</span>}
+                </dd>
+              </div>
+            </dl>
+          )}
 
           {(hasSpecs || hasDesignNotes) && (
             <div className="mt-4 pt-3 border-t border-rule/40 flex flex-wrap gap-2 text-xs">
@@ -131,7 +207,7 @@ export function ScanningScreen({
           </div>
         </div>
 
-        {handleStopOrCancel && (
+        {handleStopOrCancel && !failure && (
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
             <button
               type="button"

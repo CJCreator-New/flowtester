@@ -12,12 +12,13 @@
 - [Monorepo Structure](#monorepo-structure)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
-  - [1. Clone & Install](#1-clone--install)
-  - [2. Environment Configuration](#2-environment-configuration)
-  - [3. Build All Packages](#3-build-all-packages)
+  - [1. Clone and Set Up](#1-clone-and-set-up)
+  - [2. Start the QA Tool](#2-start-the-qa-tool)
+  - [3. Environment Configuration (Optional)](#3-environment-configuration-optional)
 - [Running the Applications](#running-the-applications)
-  - [Option A: Standalone Local Development](#option-a-standalone-local-development)
-  - [Option B: Full Docker Stack (Hub, Runner, Wizard, MinIO, Postgres)](#option-b-full-docker-stack)
+  - [Option A: One Command (`pnpm start`)](#option-a-one-command-pnpm-start)
+  - [Option B: Full Docker Stack (QA Tool, Hub, MinIO, Postgres)](#option-b-full-docker-stack)
+  - [Working on the UIs (Hot Reload)](#working-on-the-uis-hot-reload)
 - [End-to-End (E2E) Testing Guide](#end-to-end-e2e-testing-guide)
   - [Step 1: Start the Built-in Test Application](#step-1-start-the-built-in-test-application)
   - [Step 2: Run Automated Checks with CLI](#step-2-run-automated-checks-with-cli)
@@ -39,15 +40,15 @@ The platform operates across four primary operational layers:
 
 ```mermaid
 flowchart TD
-    subgraph UI ["User Interfaces"]
-        Wizard["Wizard UI (@qa/wizard)\nPort 3002 / Non-technical"]
-        Studio["QA Flow Studio (@qa/web)\nPort 5173 / Technical QA"]
-        LocalDash["Review Dashboard (@qa/dashboard)\nPort 3000 / Review & Confirmation"]
+    subgraph UI ["User Interfaces (served by the QA Tool on port 3001)"]
+        Wizard["Wizard UI (@qa/wizard)\n/ · Non-technical"]
+        Studio["QA Flow Studio (@qa/web)\n/studio/ · Technical QA"]
+        LocalDash["Review Dashboard (@qa/dashboard)\nPort 3000 / CLI runs only"]
     end
 
     subgraph CoreEngine ["Execution & Discovery Core"]
         CLI["CLI: qa-test (@qa/cli)"]
-        Runner["Runner Service (@qa/runner)\nPort 3001 (SSE + HTTP)"]
+        Runner["QA Tool server (@qa/runner)\nPort 3001: API (HTTP + SSE) and both UIs"]
         Orchestrator["Flow Test Orchestrator (@qa/core)"]
         AI["AI Discovery Agent\n(Claude / OpenAI / Gemini / OpenRouter / Mock)"]
         Checkers["Audit Checkers (@qa/checkers)\n(Axe WCAG, Design Tokens, Visual Diff, Console/Network)"]
@@ -65,6 +66,8 @@ flowchart TD
 
     Wizard -->|POST /api/runner/run| Runner
     Studio -->|POST /api/runner/run| Runner
+    Studio -->|/api/v1/* passed on when HUB_API_URL is set| Runner
+    Runner -.->|/api/v1/*| Hub
     Runner --> Orchestrator
     CLI --> Orchestrator
     Orchestrator --> AI
@@ -78,8 +81,8 @@ flowchart TD
 
 ### Core Capabilities
 
-1. **AI Discovery Agent**: Autonomously crawls web applications, maps multi-step user workflows (login, checkout, invoice creation), deduces inferred business rules, and flags ambiguous edge cases.
-2. **Interactive Plan Confirmation**: Review, edit, and approve test cases in a visual review dashboard prior to execution.
+1. **AI Discovery Agent**: Crawls the whole site (up to 200 pages), records which page links to which, and has the AI plan every page, link and journey from what it found (see [ADR 0009](docs/adr/0009-ai-plans-every-plan-item.md)).
+2. **Complete plan review**: The plan lists everything a run will do and what won't run, and is exactly what runs. Review it, change it and approve it before anything is tested.
 3. **Deterministic Checkers**:
    - **Accessibility**: WCAG 2.1 AA audits via `axe-core`.
    - **Design Token Conformance**: Validates live `getComputedStyle()` against committed `design-tokens.json` (colors, radii, typography).
@@ -98,7 +101,7 @@ flowchart TD
 | [`packages/core`](packages/core) | Core test orchestration, AI discovery agent, test planner, crawler, benchmarking engine, and AI providers |
 | [`packages/checkers`](packages/checkers) | Automated checkers (A11y/WCAG, design tokens, visual diffs, console errors, network failures) |
 | [`packages/cli`](packages/cli) | Command line interface providing the `qa-test` executable |
-| [`packages/runner`](packages/runner) | Headless test execution HTTP server with real-time Server-Sent Events (SSE) streaming |
+| [`packages/runner`](packages/runner) | The QA Tool server: runs checks over HTTP with Server-Sent Events (SSE) streaming, and serves the Wizard and QA Flow Studio on the same port |
 | [`packages/hub`](packages/hub) | Central report aggregation service, PostgreSQL database driver, and S3 evidence store |
 | [`packages/dashboard`](packages/dashboard) | Local review server for confirmation of AI discovery drafts and reports |
 | [`packages/web`](packages/web) | "QA Flow Studio" — React + Vite advanced developer & QA dashboard |
@@ -122,20 +125,32 @@ Before starting, ensure you have:
 
 ## ⚡ Quick Start
 
-### 1. Clone & Install
+### 1. Clone and Set Up
 
 ```bash
 git clone https://github.com/CJCreator/qa-flow-tester.git
 cd "qa-flow-tester"
 
-# Install all workspace dependencies
-pnpm install
-
-# Install Playwright browser binaries
-npx playwright install chromium
+# Installs dependencies and Playwright's Chromium, then builds every package
+pnpm bootstrap
 ```
 
-### 2. Environment Configuration
+Run `pnpm bootstrap` again after every `git pull`. (It isn't called `pnpm setup` because that is a built-in pnpm command.)
+
+### 2. Start the QA Tool
+
+```bash
+pnpm start
+```
+
+This builds anything that's missing and opens **`http://localhost:3001/`** in your browser:
+
+- **Wizard** (step-by-step checks): `http://localhost:3001/`
+- **QA Flow Studio** (the detailed view for engineers): `http://localhost:3001/studio/`
+
+Leave the terminal open while you use it. `pnpm start --no-open` starts without opening a browser. To use another port, set `RUNNER_PORT` first (PowerShell: `$env:RUNNER_PORT=3055; pnpm start`). The QA Tool only answers on this computer (`localhost`).
+
+### 3. Environment Configuration (Optional)
 
 Copy the example environment configuration:
 
@@ -160,51 +175,31 @@ S3_BUCKET=qa-evidence
 S3_ACCESS_KEY_ID=minioadmin
 S3_SECRET_ACCESS_KEY=minioadmin
 
-# Runner & Wizard
+# The QA Tool (pnpm start)
 RUNNER_PORT=3001
-WIZARD_PORT=3002
-```
-
-### 3. Build All Packages
-
-Build all TypeScript packages in dependency order:
-
-```bash
-pnpm build
+# Optional: the Report Hub behind Studio's release history and triage (/api/v1/*)
+HUB_API_URL=http://localhost:4000
 ```
 
 ---
 
 ## 🖥️ Running the Applications
 
-### Option A: Standalone Local Development
+### Option A: One Command (`pnpm start`)
 
-You can run individual services directly on your host machine:
+`pnpm start` runs the whole tool as one process on one port: the API that runs checks, the Wizard at `/` and QA Flow Studio at `/studio/`. `qa-test runner` starts the same server from the CLI:
 
-#### 1. Start the Live Test Runner Service (Port 3001)
-The runner service executes Playwright jobs triggered by the web interfaces:
 ```bash
-# Starts runner at http://localhost:3001
-node packages/cli/dist/index.js runner -p 3001
+node packages/cli/dist/index.js runner -p 3001 [--hub http://localhost:4000]
 ```
 
-#### 2. Start the Non-Technical Wizard UI (Port 3002 / 5173)
-```bash
-pnpm dev:wizard
-```
-Open **`http://localhost:3002`** (or the port printed by Vite) in your browser.
-
-#### 3. Start QA Flow Studio (Advanced Dashboard)
-```bash
-pnpm dev:web
-```
-Open **`http://localhost:5173`** in your browser.
+The Report Hub (below) stays a separate, optional service. Without `HUB_API_URL`, Studio's Hub views show an empty state.
 
 ---
 
 ### Option B: Full Docker Stack
 
-To launch the complete production-parity stack (PostgreSQL, MinIO S3, Report Hub, Runner, and Wizard):
+To launch the complete production-parity stack (PostgreSQL, MinIO S3, Report Hub and the QA Tool):
 
 ```bash
 # Start all containers in the background
@@ -212,8 +207,7 @@ docker compose up -d
 ```
 
 Service endpoints:
-- **Wizard UI**: `http://localhost:3002`
-- **Runner Service**: `http://localhost:3001`
+- **QA Tool** (Wizard, QA Flow Studio at `/studio/`, and the API): `http://localhost:3001`
 - **Report Hub API**: `http://localhost:4000`
 - **MinIO Console**: `http://localhost:9001` (User: `minioadmin` / Pass: `minioadmin`)
 - **Postgres Database**: `localhost:5432` (User: `qahub` / Pass: `qahub_secret`)
@@ -221,6 +215,17 @@ Service endpoints:
 To stop the containers:
 ```bash
 docker compose down
+```
+
+---
+
+### Working on the UIs (Hot Reload)
+
+Only needed when you change the Wizard or Studio code. Keep the QA Tool running (`pnpm start`), then:
+
+```bash
+pnpm dev:wizard   # http://localhost:3002, API calls passed on to the QA Tool on 3001
+pnpm dev:web      # http://localhost:3000
 ```
 
 ---
@@ -299,17 +304,30 @@ node packages/cli/dist/index.js plan --draft .qa-report/discovery-draft.json --o
 
 ### Step 4: Use the Non-Technical Wizard UI
 
-1. Make sure the runner service is running:
+1. Start the QA Tool, if it isn't running:
    ```bash
-   node packages/cli/dist/index.js runner -p 3001
+   pnpm start
    ```
-2. Open the Wizard at `http://localhost:3002` (or launch via `pnpm dev:wizard`).
-3. Choose your path:
-   - **Product I Work On**: Input target staging URL, optional credentials, and optional PRD/notes.
-   - **Public Website**: Read-only safe crawl (follows links, respects `robots.txt`, no dangerous clicks).
-4. Enter an OpenRouter API key (or use existing environment key).
-5. Click **Start Check** and watch real-time progress indicators stream directly from the runner.
-6. Review the resulting plain-language readiness scorecard and download the report.
+2. Use the Wizard it opens at `http://localhost:3001/`.
+3. Enter the site's address. Tick **I own this site or it’s a test copy** for full testing; without it the check is read-only. Optionally add specs, design notes or flow docs, or adjust **Explore up to N pages** under Advanced (default 200).
+4. Set up an OpenRouter key under **Settings & AI Key** (the free tier works).
+5. Click **Scan Site & Build Plan**. The scan shows live progress with numbers: pages found, layouts, AI requests used and how many are left today, and about how long is left.
+6. Review the plan, change it if you like, and approve it. Nothing is tested before you approve (see [The plan review](#the-plan-review) below).
+7. Watch the live run, then read the report and download it.
+
+#### The plan review
+
+The AI writes the whole plan from what the crawler found. The **Full plan** tab lists every part of it:
+
+- **Summary**: how many tests will run, on how many pages, at which screen sizes, and every default applied. This covers questions answered with the safe answer, items planned by fixed rules, and what won't run. You can also choose the screen sizes here, and see the AI requests used and how many are left today.
+- **Pages**: every page found, with its click path from the start page, who reaches it, and the tests the AI planned on it. Pages built from one layout at addresses that only differ by the item they show (such as `/products/…`) are tested through three Sample Pages; **Test this page too** tests any other one on its own. **Add page** adds a page no link reaches.
+- **Navigation**: every link, checked once. Shared header, menu and footer links are checked once for the whole site, and each page's own links on that page. A check clicks the link like a person would, and passes when the right page opens and works. Where phones or tablets fold the menu behind a button, the check opens the menu first. Links to other sites are only checked for being broken, with one request each. **Explore this site too** crawls and plans another host the site links to.
+- **Journeys**: multi-step things a person does across pages. You can also add a test by describing it.
+- **Checks on every tested page**, **Won't run** (with reasons), and **Specs and design notes**.
+
+Every item can be switched on or off, or re-planned with the AI (optionally saying what should change). **Download the plan** saves the whole plan as Markdown for sign-off. The **Map** tab draws the pages and the links between them.
+
+The plan needs an AI key: set one up under **Settings & AI Key** (OpenRouter's free tier works). Free models allow 20 requests a minute, and 50 a day until the account has bought 10 credits (then 1,000). The plan asks for about one request per three pages, plus one for the shared menus and one for the journeys. Anything past the day's budget is planned by fixed rules, labelled as such, and can be re-planned later. Free models may occasionally produce malformed JSON or hit output token limits; trailing commas are tolerated, while comments, single quotes or unquoted keys safely trigger the Fixed-Rule Fallback. Any fallback item can be re-planned with one click via **Re-plan**. The next run of the same site reuses the approved plan and only asks the AI about pages and links that changed.
 
 ---
 
@@ -382,9 +400,9 @@ qa-test verify <findingId> -o .qa-report
 ```
 
 ### `qa-test runner`
-Launches the persistent HTTP + SSE runner daemon consumed by Web & Wizard frontends.
+Starts the QA Tool server: the API (HTTP + SSE) plus the Wizard at `/` and QA Flow Studio at `/studio/`, all on one port. `--hub` (or `HUB_API_URL`) passes `/api/v1/*` on to a Report Hub.
 ```bash
-qa-test runner -p 3001
+qa-test runner -p 3001 [--hub http://localhost:4000]
 ```
 
 ---
@@ -485,18 +503,19 @@ This occurs if the local Google Cloud telemetry plugin on Windows has invalid pa
 - If testing locally via Docker, use `host.docker.internal` instead of `localhost`.
 - Check if elements are housed inside an `iframe`.
 
-### 3. `Port 3000 / 3001 / 4000 already in use`
+### 3. `Port 3001 is used by another program`
+`pnpm start` says so when something other than the QA Tool holds the port (if the QA Tool is already running, it just opens it).
 - Identify and stop the occupying process:
   ```powershell
   # Windows PowerShell:
   Get-Process -Id (Get-NetTCPConnection -LocalPort 3001).OwningProcess | Stop-Process
   ```
-- Or pass an alternative port: `--dashboard-port 3055` or `runner -p 3055`.
+- Or use another port: `$env:RUNNER_PORT=3055; pnpm start` (or `qa-test runner -p 3055`).
 
 ### 4. Playwright Browser Launch Errors
-- Ensure browsers are installed:
+- `pnpm start` stops with a message when the browser is missing. `pnpm bootstrap` installs it. On Linux, system libraries may also be needed:
   ```bash
-  npx playwright install chromium --with-deps
+  pnpm --filter @qa/core exec playwright install chromium --with-deps
   ```
 
 ---

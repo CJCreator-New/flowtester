@@ -11,16 +11,16 @@ export function ConnectionScreen({ checks }: { checks: number }) {
         <li>
           Run this command:
           <pre className="mt-2 overflow-x-auto rounded-md border-2 border-edge bg-surface px-4 py-3 font-bold">
-            <code>docker compose up</code>
+            <code>pnpm start</code>
           </pre>
         </li>
         <li>Leave the terminal open while you use this page.</li>
       </ol>
 
       <details className="mb-8">
-        <summary className="btn-link cursor-pointer">Not using Docker?</summary>
+        <summary className="btn-link cursor-pointer">Using Docker?</summary>
         <p className="mt-2">
-          Run <code className="rounded bg-surface px-1.5 py-0.5 font-bold">pnpm qa-test runner</code> in the QA Tool folder instead.
+          Run <code className="rounded bg-surface px-1.5 py-0.5 font-bold">docker compose up</code> in the QA Tool folder instead.
         </p>
       </details>
 

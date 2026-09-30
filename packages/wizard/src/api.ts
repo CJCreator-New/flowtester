@@ -5,9 +5,8 @@ import type { ReleaseReport, RoleCredential, ReviewPlan, DiscoveredFlow, TestCas
  * plain-language sentence safe to show as-is. Raw fetch errors and status codes never reach the UI.
  */
 
-export const RUNNER_URL =
-  ((import.meta.env.VITE_RUNNER_URL as string | undefined) || 'http://localhost:3001').replace(/\/+$/, '');
-export const STREAM_URL = `${RUNNER_URL}/api/runner/stream`;
+/** The QA Tool serves this page, so its API is on the page's own address. */
+export const STREAM_URL = '/api/runner/stream';
 
 export class RunnerError extends Error {
   code?: string;
@@ -24,13 +23,13 @@ const NOT_RESPONDING = 'The QA Tool isn’t responding. Make sure it’s still r
 
 async function call(path: string, init: RequestInit = {}, timeoutMs = 15000): Promise<Response> {
   try {
-    return await fetch(`${RUNNER_URL}${path}`, {
+    return await fetch(path, {
       ...init,
       headers: init.body ? { 'Content-Type': 'application/json', ...init.headers } : init.headers,
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
-    throw new RunnerError(NOT_RESPONDING, 'ERR_SERVER_UNRESPONSIVE', 'Check that the runner process is running and responding on port 3001.');
+    throw new RunnerError(NOT_RESPONDING, 'ERR_SERVER_UNRESPONSIVE', 'Check that the QA Tool is still running in its terminal (start it with pnpm start).');
   }
 }
 
@@ -137,6 +136,8 @@ export type StartRunRequest =
       roles?: RoleCredential[];
       productContext?: string;
       designNotes?: string;
+      /** Pages the crawl explores at most (default 200). */
+      maxPages?: number;
     }
   | { mode: 'safe-public'; targetUrl: string; owner?: boolean; skipReview?: boolean };
 
@@ -166,6 +167,7 @@ export async function startRun(request: StartRunRequest): Promise<string> {
     if (request.roles) body.roles = request.roles;
     if (request.productContext) body.productContext = request.productContext;
     if (request.designNotes) body.designNotes = request.designNotes;
+    if (request.maxPages) body.maxPages = request.maxPages;
   }
 
   interface ApiErrorPayload {
@@ -220,6 +222,46 @@ export interface PatchPlanBody {
   testCases?: TestCase[];
   productContext?: string;
   designNotes?: string;
+  /** Plan Items switched on or off: pages, tests, Navigation Checks, journeys ("journey:<id>"). */
+  items?: Array<{ id: string; skipped: boolean }>;
+  /** The screen sizes the run uses. */
+  screenSizes?: Array<'375px' | '768px' | '1440px'>;
+}
+
+/**
+ * Starts a change to the plan that needs the AI or the crawler. It runs in the background: the
+ * QA Tool reports progress and the result as PLAN_UPDATE_* events, and the plan is fetched again then.
+ */
+async function startPlanUpdate(route: string, body: unknown): Promise<void> {
+  const res = await call(route, { method: 'POST', body: JSON.stringify(body) });
+  if (res.status === 202) return;
+  const err = await json<{ error?: string }>(res).catch((): { error?: string } => ({}));
+  throw new RunnerError(err.error || 'The plan couldn’t be updated. Try again.');
+}
+
+/** The AI plans one Plan Item again, with what the person asked for; `promote` tests a covered page on its own. */
+export const replanItem = (itemId: string, instructions?: string, promote?: boolean) =>
+  startPlanUpdate('/api/runner/plan/replan', { itemId, instructions: instructions?.trim() || undefined, promote });
+/** The AI plans everything again, e.g. with new specs. */
+export const replanEverything = (productContext?: string) => startPlanUpdate('/api/runner/plan/replan', { all: true, productContext });
+/** Adds a page no link reaches, by its address; it's opened and planned like the rest. */
+export const addPageToPlan = (address: string) => startPlanUpdate('/api/runner/plan/add-page', { address });
+/** Explores another host the site links to, and plans its pages. */
+export const includeHostInPlan = (host: string) => startPlanUpdate('/api/runner/plan/include-host', { host });
+
+/** Saves the whole plan as a Markdown file, for reading, sharing and signing off. */
+export async function downloadPlanMarkdown(): Promise<void> {
+  const res = await call('/api/runner/plan/markdown');
+  if (!res.ok) throw new RunnerError('The plan couldn’t be downloaded. Try again.');
+  const name = res.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'test-plan.md';
+  const href = URL.createObjectURL(await res.blob());
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
 }
 
 export async function patchPlan(body: PatchPlanBody): Promise<ReviewPlan> {
@@ -235,8 +277,8 @@ export async function patchPlan(body: PatchPlanBody): Promise<ReviewPlan> {
 export async function approvePlan(options?: { roles?: RoleCredential[]; breakpoints?: string[] }): Promise<void> {
   const res = await call('/api/runner/plan/approve', { method: 'POST', body: JSON.stringify(options || {}) });
   if (res.status === 409) {
-    const err = await json<{ error: string; needsSignIn?: string[] }>(res);
-    throw new RunnerError(err.error);
+    const err = await json<{ error: string; code?: string; needsSignIn?: string[] }>(res);
+    throw new RunnerError(err.error, err.code);
   }
   if (!res.ok) throw new RunnerError('Couldn’t start testing the plan. Try again.');
 }

@@ -1,4 +1,5 @@
 import path from 'path';
+import type { Page } from 'playwright';
 import type {
   TestCase,
   ProductProfile,
@@ -104,10 +105,26 @@ function pathOf(url: string): string {
   }
 }
 
+/**
+ * Opens a link's address with one request and fails only when the link is broken: the page is
+ * gone (404, 410), the server fails (5xx), or nothing answers. Sites that turn automated requests
+ * away (401, 403, 429, 999) can't be judged this way, so they pass.
+ */
+async function checkLink(page: Page, address: string): Promise<void> {
+  let status: number;
+  try {
+    const res = await page.request.get(address, { timeout: 10000, maxRedirects: 10, failOnStatusCode: false });
+    status = res.status();
+  } catch (err) {
+    throw new Error(`The link doesn’t open: ${address} (${(err instanceof Error ? err.message : String(err)).split('\n')[0]})`);
+  }
+  if (status === 404 || status === 410 || status >= 500) throw new Error(`The link is broken: ${address} answered ${status}`);
+}
+
 /** The checks a test point runs, in plain words, and how each went. */
 function checksRun(
   findings: Finding[],
-  ran: { spec: boolean; permissions: boolean; design: boolean }
+  ran: { spec: boolean; permissions: boolean; design: boolean; ux: boolean; pageLevel: boolean }
 ): NonNullable<TestPointResult['checks']> {
   const outcome = (checker: Finding['checker']) => {
     const own = findings.filter((f) => f.checker === checker);
@@ -116,11 +133,15 @@ function checksRun(
   };
   const checks: NonNullable<TestPointResult['checks']> = [
     { checker: 'bug-detection', name: 'Works without errors', outcome: outcome('bug-detection') },
-    { checker: 'ux-quality', name: 'Accessible and easy to use', outcome: outcome('ux-quality') },
-    { checker: 'security', name: 'Secure connections and headers', outcome: outcome('security') },
-    { checker: 'performance', name: 'Fast and mobile-ready', outcome: outcome('performance') },
-    { checker: 'seo', name: 'Search and link health', outcome: outcome('seo') },
   ];
+  if (ran.ux) checks.push({ checker: 'ux-quality', name: 'Accessible and easy to use', outcome: outcome('ux-quality') });
+  if (ran.pageLevel) {
+    checks.push(
+      { checker: 'security', name: 'Secure connections and headers', outcome: outcome('security') },
+      { checker: 'performance', name: 'Fast and mobile-ready', outcome: outcome('performance') },
+      { checker: 'seo', name: 'Search and link health', outcome: outcome('seo') }
+    );
+  }
   if (ran.spec) checks.splice(1, 0, { checker: 'spec-conformance', name: 'Does what was expected', outcome: outcome('spec-conformance') });
   if (ran.permissions) checks.push({ checker: 'permission-matrix', name: 'Only the right people can see it', outcome: outcome('permission-matrix') });
   if (ran.design) checks.push({ checker: 'design-standards', name: 'Matches the design', outcome: outcome('design-standards') });
@@ -260,10 +281,16 @@ export class FlowTestOrchestrator {
     // so UI consumers of STEP_STARTED/STEP_COMPLETED see one continuously advancing sequence
     // for the whole run rather than restarting at 0 for every test point.
     let globalStepIndex = 0;
-    const plannedTestPoints = testCasesToRun.length * breakpoints.length;
+    // A test can be limited to some screen sizes (a link check runs once, at the first).
+    const sizesFor = (tc: TestCase) => (tc.breakpoints ? breakpoints.filter((b) => tc.breakpoints!.includes(b)) : breakpoints);
+    const plannedTestPoints = testCasesToRun.reduce((n, tc) => n + sizesFor(tc).length, 0);
 
     for (const testCase of testCasesToRun) {
-      for (const bp of breakpoints) {
+      // Which checkers run afterwards depends on the kind of Plan Item (see TestCase.kind).
+      const kind = testCase.kind;
+      const lightChecks = kind === 'navigation' || kind === 'link';
+      const pageLevelChecks = !kind || kind === 'page' || kind === 'journey';
+      for (const bp of sizesFor(testCase)) {
         onEvent({
           type: 'TEST_POINT_STARTED',
           testCaseId: testCase.id,
@@ -307,6 +334,8 @@ export class FlowTestOrchestrator {
           // Execute each step with up to 2 retries
           for (let i = 0; i < testCase.steps.length; i++) {
             const step = testCase.steps[i];
+            // A step for other screen sizes, such as opening a phone menu, isn't done at this one.
+            if (step.onlyAt && !step.onlyAt.includes(bp)) continue;
             const urlBefore = page.url();
             let stepSuccess = false;
             let currentStepError: string | undefined;
@@ -323,7 +352,8 @@ export class FlowTestOrchestrator {
             });
 
             // An optional step gets one quick try: if the control isn't there at this width, it isn't.
-            const MAX_RETRIES = step.optional ? 0 : 2;
+            // A link check is one request, never repeated at a site we don't own.
+            const MAX_RETRIES = step.optional || step.action === 'check-link' ? 0 : 2;
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
               try {
                 if (step.action === 'click') {
@@ -346,6 +376,8 @@ export class FlowTestOrchestrator {
                   });
                 } else if (step.action === 'wait') {
                   await page.waitForTimeout(1000);
+                } else if (step.action === 'check-link') {
+                  await checkLink(page, step.value || '');
                 }
 
                 await page.waitForTimeout(300);
@@ -397,6 +429,7 @@ export class FlowTestOrchestrator {
             if (!stepSuccess && !skipped) {
               for (let j = i + 1; j < testCase.steps.length; j++) {
                 const blockedStep = testCase.steps[j];
+                if (blockedStep.onlyAt && !blockedStep.onlyAt.includes(bp)) continue;
                 const blockedStepIndex = globalStepIndex++;
                 onEvent({
                   type: 'STEP_STARTED',
@@ -456,8 +489,9 @@ export class FlowTestOrchestrator {
             onObservation: (o) => observations.push(o),
           });
 
-          // 3. UX Quality
-          const uxFindings = await this.uxChecker.check(page, {
+          // 3. UX Quality (accessibility of the state the steps left): not for a Navigation Check,
+          // whose destination page is checked by its own visit.
+          const uxFindings = lightChecks ? [] : await this.uxChecker.check(page, {
             testCaseId: testCase.id,
             role: testCase.role,
             breakpoint: bp,
@@ -466,9 +500,10 @@ export class FlowTestOrchestrator {
             entryPath: new URL(options.targetUrl).pathname,
           });
 
-          // 3b. Security (passive): passwords in page addresses
+          // 3b. Security (passive): passwords in page addresses. Page-level checks (security, speed,
+          // findability, design) run on page visits and journeys, not on every test on a page.
           const securityFindings =
-            options.enableSecurity === false
+            options.enableSecurity === false || !pageLevelChecks
               ? []
               : [
                   ...this.securityChecker.checkEvidence(stepEvidenceList, {
@@ -489,7 +524,7 @@ export class FlowTestOrchestrator {
 
           // 3c. Performance (Speed, Web Vitals, Mobile Overflow & Overlap)
           const perfFindings =
-            options.enablePerformance === false
+            options.enablePerformance === false || !pageLevelChecks
               ? []
               : await this.performanceChecker.checkPage(
                   page,
@@ -505,7 +540,7 @@ export class FlowTestOrchestrator {
 
           // 3d. SEO & Link Health
           const seoFindings =
-            options.enableSeo === false
+            options.enableSeo === false || !pageLevelChecks
               ? []
               : await this.seoChecker.checkPage(page, {
                   testCaseId: testCase.id,
@@ -535,7 +570,7 @@ export class FlowTestOrchestrator {
           // 5. Design tokens (Tier 1) and visual baseline (Tier 2)
           const designFindings: Finding[] = [];
           const urlPath = new URL(page.url(), options.targetUrl).pathname;
-          if (designTokens) {
+          if (designTokens && pageLevelChecks) {
             designFindings.push(
               ...(await this.designChecker.check(page, designTokens, {
                 testCaseId: testCase.id,
@@ -547,7 +582,7 @@ export class FlowTestOrchestrator {
           }
           // Only a flow that completed reaches the screen the baseline was taken of.
           const baselinePath = path.join(baselineDir, `${testCase.id}-${bp}.png`);
-          if (testPointPassed) {
+          if (testPointPassed && pageLevelChecks) {
             if (options.updateBaselines) {
               await fs.mkdir(baselineDir, { recursive: true });
               await page.screenshot({ path: baselinePath, animations: 'disabled', caret: 'hide' });
@@ -637,9 +672,11 @@ export class FlowTestOrchestrator {
             skipReason: sentData ? NEEDS_TEST_COPY : undefined,
             breakpoint: bp,
             checks: checksRun(keptFindings, {
+              ux: !lightChecks,
+              pageLevel: pageLevelChecks,
               spec: !sentData && Object.keys(testCase.expectations || {}).some((k) => k !== 'origin'),
               permissions: !!permChecker,
-              design: !!designTokens || designFindings.length > 0,
+              design: (!!designTokens && pageLevelChecks) || designFindings.length > 0,
             }),
           };
         } catch (fatalErr: unknown) {

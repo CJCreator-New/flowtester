@@ -30,6 +30,10 @@ export interface SiteMapProps {
   pageStatuses?: Record<string, { status: 'pass' | 'warn' | 'fail'; issuesCount?: number }>;
   onSelectPage?: (urlPath: string) => void;
   onSelectGroup?: (group: PageGroup) => void;
+  /** The site's real links between pages (the App Flow), drawn beneath the journeys. */
+  links?: Array<{ from: string; to: string }>;
+  /** Pages drawn as cards before the rest are grouped. Default 6. */
+  maxCards?: number;
 }
 
 const JOURNEY_COLORS = [
@@ -52,10 +56,13 @@ export function SiteMap({
   pageStatuses,
   onSelectPage,
   onSelectGroup,
+  links,
+  maxCards = 6,
 }: SiteMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewMode, setViewMode] = useState<'blueprint' | 'list'>('blueprint');
   const [connectorPaths, setConnectorPaths] = useState<Array<{ id: string; d: string; color: string; active: boolean }>>([]);
+  const [linkPaths, setLinkPaths] = useState<Array<{ id: string; d: string }>>([]);
 
   // Map flows to assigned journey colors
   const flowColorMap = useMemo(() => {
@@ -93,7 +100,7 @@ export function SiteMap({
     const otherPages: PageInventoryItem[] = [];
 
     pages.forEach((p, idx) => {
-      if (journeyPageSet.has(p.urlPath) || p.urlPath === '/' || nodeList.length < 6) {
+      if (journeyPageSet.has(p.urlPath) || p.urlPath === '/' || nodeList.length < maxCards) {
         let nodeStatus: PageNode['status'] = 'pending';
         let issuesCount = 0;
 
@@ -139,7 +146,7 @@ export function SiteMap({
     });
 
     return { nodes: nodeList, groups: groupList };
-  }, [pages, flows, flowColorMap, runningPagePath, pageStatuses]);
+  }, [pages, flows, flowColorMap, runningPagePath, pageStatuses, maxCards]);
 
   // Compute card positions in a responsive canvas grid
   const nodePositions = useMemo(() => {
@@ -202,7 +209,24 @@ export function SiteMap({
     });
 
     setConnectorPaths(paths);
-  }, [flows, nodePositions, flowColorMap, activeJourneyId, viewMode]);
+
+    // The site's own links between the pages on the canvas, once per pair.
+    const seen = new Set<string>();
+    const drawn: Array<{ id: string; d: string }> = [];
+    for (const link of links || []) {
+      const key = [link.from, link.to].sort().join('↔');
+      const from = nodePositions.get(link.from);
+      const to = nodePositions.get(link.to);
+      if (!from || !to || link.from === link.to || seen.has(key)) continue;
+      seen.add(key);
+      const x1 = from.x + from.width / 2;
+      const y1 = from.y + from.height;
+      const x2 = to.x + to.width / 2;
+      const y2 = to.y;
+      drawn.push({ id: key, d: `M ${x1} ${y1} C ${x1} ${y1 + 40}, ${x2} ${y2 - 40}, ${x2} ${y2}` });
+    }
+    setLinkPaths(drawn);
+  }, [flows, nodePositions, flowColorMap, activeJourneyId, viewMode, links]);
 
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden bg-canvas">
@@ -308,6 +332,9 @@ export function SiteMap({
                 <feDropShadow dx="0" dy="0" stdDeviation="2" floodColor="#5B8DEF" floodOpacity="0.4" />
               </filter>
             </defs>
+            {linkPaths.map((p) => (
+              <path key={p.id} d={p.d} fill="none" stroke="currentColor" strokeWidth={1} className="text-rule" strokeOpacity={0.9} />
+            ))}
             {connectorPaths.map((p) => (
               <path
                 key={p.id}

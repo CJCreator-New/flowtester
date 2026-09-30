@@ -214,6 +214,62 @@
         "fp_37c7b82e8bce8c9a",
         "fp_837434cedd860b6f"
       ]
+    },
+    {
+      "runId": "run-1790685888423",
+      "timestamp": "2026-09-29T12:51:09.411Z",
+      "grades": {
+        "aspects": {
+          "Works": {
+            "grade": "F",
+            "score": 40,
+            "findings": [
+              "F-BUG-TC-FLOW-001-1",
+              "F-BUG-TC-FLOW-002-1",
+              "F-BUG-TC-FLOW-003-1",
+              "F-BUG-SWEEP-001-1"
+            ]
+          },
+          "Accessible": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Fast and mobile": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Findable": {
+            "grade": "B",
+            "score": 83,
+            "findings": [
+              "F-SEO-TC-FLOW-001-H1-MISSING-1",
+              "F-SEO-TC-FLOW-001-OG-2"
+            ]
+          },
+          "Secure": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          },
+          "Looks and reads well": {
+            "grade": "A",
+            "score": 100,
+            "findings": []
+          }
+        },
+        "overallGrade": "C",
+        "overallScore": 87
+      },
+      "findingFingerprints": [
+        "fp_204df26f3d2ebfd1",
+        "fp_a1d4f92233e94568",
+        "fp_37c7b82e8bce8c9a",
+        "fp_190f371873ed8a88",
+        "fp_88e87eada6d6371a",
+        "fp_837434cedd860b6f"
+      ]
     }
   ]
 }

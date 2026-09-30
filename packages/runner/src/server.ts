@@ -1,7 +1,9 @@
 import http from 'http';
+import https from 'https';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { journeyPages } from '@qa/types';
+import { serveUi, type UiApp } from './ui-static.js';
 import type {
   SiteMapSummary,
   ProductProfile,
@@ -15,6 +17,7 @@ import type {
   AmbiguityQuestion,
   DiscoveredFlow,
   DiscoveryDraft,
+  PageInventoryItem,
 } from '@qa/types';
 import {
   FlowTestOrchestrator,
@@ -51,6 +54,24 @@ import {
   calculateSiteAspectGrades,
   generateRankedRecommendations,
   generateSingleFileHtmlReport,
+  expandPlan,
+  GRADED_CHECKS,
+  planToMarkdown,
+  PacedAI,
+  replanPage,
+  replanMenus,
+  replanJourneys,
+  replanAll,
+  addPagesToPlan,
+  onOtherHost,
+  pathOf,
+  isSameSite,
+  isPrivateHost,
+  RobotsPolicy,
+  BrowserManager,
+  DeterministicSpider,
+  blockChanges,
+  type ReplanOptions,
   type VisualReviewItemInput,
   type MemorySummary,
   type RunOptions,
@@ -77,7 +98,25 @@ function isLoopbackOrigin(origin: string): boolean {
 }
 
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+
+/** The Host header names this computer. A page that points a name it controls at this port (DNS rebinding) doesn't. */
+function isLoopbackHost(host: string | undefined): boolean {
+  if (!host) return false;
+  try {
+    return LOOPBACK_HOSTS.includes(new URL(`http://${host}`).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** Headers that describe one connection, not the message: never passed on to or from the Hub. */
+const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'proxy-connection']);
+
 const MAX_RUN_EVENTS = 5000;
+/** AI requests the visual review of a finished run may use: part of the AI Request Budget estimate. */
+const VISUAL_REVIEW_CALLS = 20;
+/** Pages explored on another host the person includes from the review. */
+const INCLUDED_HOST_PAGES = 30;
 const DOWNLOADABLE_REPORT_FILES: Record<string, string> = {
   'report.html': 'text/html; charset=utf-8',
   'report.md': 'text/markdown; charset=utf-8',
@@ -105,6 +144,10 @@ export interface RunnerServerOptions {
   openRouter?: OpenRouterClient;
   /** Test seam: replaces the real AI provider construction. */
   createAIProvider?: (provider: AIProviderType, apiKey: string, model?: string) => AIProvider;
+  /** Built UIs served beside the API: the Wizard at "/" and Studio at "/studio/". None by default. */
+  ui?: UiApp[];
+  /** The Report Hub that /api/v1/* is passed on to. Without one, /api/v1/* answers "Hub not connected". */
+  hubUrl?: string;
 }
 
 export interface TriggerRunBody {
@@ -145,6 +188,10 @@ export interface TriggerRunBody {
   stagingHost?: boolean;
   /** Attached design system tokens or styling guidelines. */
   designNotes?: string;
+  /** Plan everything afresh with the AI instead of reusing the site's last approved Plan. */
+  replanAll?: boolean;
+  /** Pages the crawl explores at most (default 200; 1 to 1000). */
+  maxPages?: number;
 }
 
 interface StoredPlanRecord {
@@ -224,6 +271,8 @@ export class RunnerServer {
   private keyResolver: KeyResolver;
   private openRouter: OpenRouterClient;
   private makeAIProvider: (provider: AIProviderType, apiKey: string, model?: string) => AIProvider;
+  private uiApps: UiApp[];
+  private hubUrl?: string;
 
   private isRunning = false;
   private phase: RunnerPhase = 'idle';
@@ -234,6 +283,8 @@ export class RunnerServer {
   private currentPlanRecord: StoredPlanRecord | null = null;
   /** The run in progress or paused, so a reopened page can pick it up again. */
   private currentRunId: string | null = null;
+  /** A plan update running in the background (re-planning, adding pages): one at a time. */
+  private planUpdate: Promise<void> | null = null;
   /** This run's events, so a page that reopens or reconnects can replay them and show where the run is. */
   private runEvents: Array<Record<string, unknown>> = [];
   /** The chosen free models (not secret), kept beside the key so every browser gets the same setup. */
@@ -252,6 +303,8 @@ export class RunnerServer {
     this.openRouter = options.openRouter || new OpenRouterClient();
     this.makeAIProvider =
       options.createAIProvider || ((provider, apiKey, model) => createAIProvider(provider, apiKey, undefined, model));
+    this.uiApps = options.ui || [];
+    this.hubUrl = options.hubUrl?.replace(/\/+$/, '') || undefined;
   }
 
 
@@ -295,6 +348,14 @@ export class RunnerServer {
           const url = new URL(req.url || '/', `http://${this.host}:${this.port}`);
           const pathname = url.pathname;
 
+          // Only this computer's own names are answered, so a page can't point a name it controls at
+          // this port (DNS rebinding) and read reports and evidence as if it were this computer.
+          if (!isLoopbackHost(req.headers.host)) {
+            res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end(`The QA Tool only answers on this computer. Open http://localhost:${this.port}/ instead.`);
+            return;
+          }
+
           // Only localhost pages may drive the runner; a wildcard would let any website trigger runs.
           const origin = req.headers.origin;
           if (origin && isLoopbackOrigin(origin)) {
@@ -311,6 +372,12 @@ export class RunnerServer {
           if (req.method === 'OPTIONS') {
             res.writeHead(204);
             res.end();
+            return;
+          }
+
+          // /api/v1/* belongs to the Report Hub, a separate service: passed on when one is set up.
+          if (pathname === '/api/v1' || pathname.startsWith('/api/v1/')) {
+            this.forwardToHub(req, res, url);
             return;
           }
 
@@ -395,6 +462,29 @@ export class RunnerServer {
             return;
           }
 
+          // GET /api/runner/plan/markdown — the whole plan as a Markdown document, for sign-off
+          if (pathname === '/api/runner/plan/markdown' && req.method === 'GET') {
+            await this.handlePlanMarkdown(res);
+            return;
+          }
+
+          // Changes that need the AI or the crawler run in the background (202, then PLAN_UPDATE_* events):
+          // POST /api/runner/plan/replan — plan an item, a promoted page, or everything again
+          if (pathname === '/api/runner/plan/replan' && req.method === 'POST') {
+            await this.handleReplan(req, res);
+            return;
+          }
+          // POST /api/runner/plan/add-page — add a page by its address
+          if (pathname === '/api/runner/plan/add-page' && req.method === 'POST') {
+            await this.handleAddPage(req, res);
+            return;
+          }
+          // POST /api/runner/plan/include-host — explore another host the site links to, and plan its pages
+          if (pathname === '/api/runner/plan/include-host' && req.method === 'POST') {
+            await this.handleIncludeHost(req, res);
+            return;
+          }
+
           // POST /api/runner/preflight — is the target URL reachable? (no browser, no run)
           if (pathname === '/api/runner/preflight' && req.method === 'POST') {
             await this.handlePreflight(req, res);
@@ -461,6 +551,9 @@ export class RunnerServer {
             return;
           }
 
+          // Everything that isn't the API is one of the built UIs.
+          if (!pathname.startsWith('/api/') && (await serveUi(this.uiApps, req, res, pathname))) return;
+
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found' }));
         } catch (err: unknown) {
@@ -488,6 +581,39 @@ export class RunnerServer {
         resolve();
       }
     });
+  }
+
+  /** Passes a Report Hub request on unchanged and streams the Hub's answer back. */
+  private forwardToHub(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
+    if (!this.hubUrl) {
+      this.sendJson(res, 503, { error: 'Hub not connected', hubConnected: false });
+      return;
+    }
+    const target = new URL(url.pathname + url.search, this.hubUrl);
+    const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => !HOP_BY_HOP.has(name)));
+    const hubRequest = (target.protocol === 'https:' ? https : http).request(
+      target,
+      { method: req.method, headers: { ...headers, host: target.host } },
+      (hubRes) => {
+        const answer = Object.fromEntries(Object.entries(hubRes.headers).filter(([name]) => !HOP_BY_HOP.has(name)));
+        res.writeHead(hubRes.statusCode || 502, answer);
+        hubRes.pipe(res);
+      }
+    );
+    hubRequest.on('error', () => {
+      if (res.headersSent) res.end();
+      else this.sendJson(res, 502, { error: 'The Report Hub isn’t responding.', hubConnected: false });
+    });
+    req.pipe(hubRequest);
+  }
+
+  /** True when the address is this server, as the request reached it. */
+  private isThisServer(address: string, req: http.IncomingMessage): boolean {
+    try {
+      return new URL(address).host === req.headers.host;
+    } catch {
+      return false;
+    }
   }
 
   private async readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
@@ -599,7 +725,7 @@ export class RunnerServer {
       return;
     }
 
-    const result = await reviewer.reviewScreens(screens, provider, { maxCalls: 20 });
+    const result = await reviewer.reviewScreens(screens, provider, { maxCalls: VISUAL_REVIEW_CALLS });
     this.pendingAiScreens = result.remainingScreens;
 
     if (result.findings.length > 0) {
@@ -747,6 +873,20 @@ export class RunnerServer {
       return;
     }
 
+    // Studio names this server as its Hub, meaning the Hub behind /api/v1: runs go to that Hub directly.
+    if (body.hubUrl && this.isThisServer(body.hubUrl, req)) body.hubUrl = this.hubUrl;
+
+    // The wizard's plan is written by the AI (ADR 0009), so its scans need a working AI key.
+    const wizardScan = body.owner !== undefined && body.mode !== 'safe-public' && !body.specTestCases?.length;
+    if (wizardScan && body.useAI && (body.aiProvider ?? 'openrouter') === 'openrouter' && !body.apiKey && !(await this.storedOpenRouterKey())) {
+      this.sendJson(res, 400, {
+        error: 'An AI key is needed: the AI writes the plan.',
+        code: 'ERR_NO_AI_KEY',
+        suggestion: 'Set up an OpenRouter key under Settings & AI Key (the free tier works), then start the check again.',
+      });
+      return;
+    }
+
     await this.clearPlan();
 
     const productId = body.productId || 'default-product';
@@ -770,11 +910,12 @@ export class RunnerServer {
     this.executeRun(body, productId, runId).catch((err: unknown) => {
       if (this.lastErrorCode === 'ERR_RUN_ABORTED') return;
       const msg = err instanceof Error ? err.message : String(err);
+      const code = (err as { code?: string } | undefined)?.code || 'ERR_DISCOVERY_FAILED';
       this.lastRunError = msg;
-      this.lastErrorCode = 'ERR_DISCOVERY_FAILED';
+      this.lastErrorCode = code;
       this.phase = 'failed';
       this.isRunning = false;
-      this.broadcastRunnerEvent({ type: 'RUN_FAILED', runId, error: msg, code: 'ERR_DISCOVERY_FAILED', timestamp: Date.now() });
+      this.broadcastRunnerEvent({ type: 'RUN_FAILED', runId, error: msg, code, timestamp: Date.now() });
     });
   }
 
@@ -881,9 +1022,10 @@ export class RunnerServer {
         return;
       }
 
-      const ai = await this.prepareAI(body, urlFirst);
+      const ai = await this.prepareAI(body);
       context.aiModels = ai.models;
       context.ai = ai.settings;
+      const aiBudget = ai.provider ? await this.aiBudgetFor(ai.settings, ai.key) : undefined;
 
       let contextFilePath: string | undefined;
       if (body.productContext?.trim()) {
@@ -903,6 +1045,11 @@ export class RunnerServer {
         outputDir: this.outputDir,
         aiProvider: ai.provider,
         readOnly,
+        maxPages: typeof body.maxPages === 'number' && body.maxPages > 0 ? Math.min(Math.floor(body.maxPages), 1000) : undefined,
+        aiBudget,
+        onProgress: (progress) => this.broadcastRunnerEvent({ type: 'DISCOVERY_PROGRESS', runId, ...progress, timestamp: Date.now() }),
+        // The last approved Plan is reused where the site hasn't changed, unless asked to start afresh.
+        remembered: body.replanAll ? undefined : memory?.plan,
       });
       if (this.lastErrorCode === 'ERR_RUN_ABORTED' || this.activeAbortController?.signal.aborted) {
         return;
@@ -933,7 +1080,7 @@ export class RunnerServer {
       // No review: every question gets its safe answer, and only what was there is remembered.
       applySafeAnswers(draft.ambiguityQuestions);
       await saveSiteMemory(this.dataDir, rememberRun(memory, siteHost, draft, { reviewed: false }));
-      const { specTestCases, notRun } = this.testsFor(draft, readOnly);
+      const { specTestCases, notRun } = this.testsFor(record.context);
       context.reportNotes.push(...this.handCheckNotes(draft));
       await this.executeTesting(record, specTestCases, notRun);
     } catch (err) {
@@ -944,21 +1091,21 @@ export class RunnerServer {
   }
 
   /**
-   * The text model for a run. Older callers asking for AI without a key get an error, as before; the
-   * URL-first wizard plans with fixed rules instead (the AI sections then show as skipped).
+   * The text model for a run. Without a key or a free model there's no run: the plan is written by
+   * the AI (ADR 0009). `key` is the key used, for reading its AI Request Budget; it isn't saved.
    */
   private async prepareAI(
-    body: TriggerRunBody,
-    urlFirst: boolean
-  ): Promise<{ provider?: AIProvider; models?: { text?: string; vision?: string }; settings?: StoredPlanRecord['context']['ai'] }> {
+    body: TriggerRunBody
+  ): Promise<{ provider?: AIProvider; models?: { text?: string; vision?: string }; settings?: StoredPlanRecord['context']['ai']; key?: string }> {
     if (!body.useAI) return {};
     const providerType: AIProviderType = body.aiProvider || 'mock';
     let apiKey = body.apiKey;
     if (!apiKey && providerType === 'openrouter') {
       apiKey = await this.storedOpenRouterKey();
       if (!apiKey) {
-        if (urlFirst) return {};
-        throw new Error('No OpenRouter key is saved. Add one before starting an AI run.');
+        throw Object.assign(new Error('No OpenRouter key is saved. Add one under Settings & AI Key, then start the check again.'), {
+          code: 'ERR_NO_AI_KEY',
+        });
       }
     }
     // One fixed free model per role (text, vision) chosen by the runner, so every run of a
@@ -970,15 +1117,21 @@ export class RunnerServer {
       model ??= chosen.text ?? undefined;
       visionModel = chosen.vision;
       if (!model) {
-        if (urlFirst) return {};
-        throw new Error('No free AI models are available right now — please try again later.');
+        throw Object.assign(new Error('No free AI models are available right now — please try again later.'), { code: 'ERR_NO_FREE_MODELS' });
       }
     }
     return {
       provider: this.makeAIProvider(providerType, apiKey || 'mock-key', model),
       models: model ? { text: model, vision: visionModel ?? undefined } : undefined,
       settings: { provider: providerType, model, apiKey: body.apiKey },
+      key: apiKey,
     };
+  }
+
+  /** What the key has left of today's free AI requests, when OpenRouter says (ADR 0009's AI Request Budget). */
+  private async aiBudgetFor(settings: StoredPlanRecord['context']['ai'], key?: string): Promise<{ left?: number; limit?: number; visualReview: number }> {
+    const today = settings?.provider === 'openrouter' ? await this.openRouter.freeRequestsToday(key ?? (await this.storedOpenRouterKey())) : null;
+    return { left: today?.remaining, limit: today?.limit, visualReview: VISUAL_REVIEW_CALLS };
   }
 
   /** The text model again, for turning a sentence into a test during the review. */
@@ -1003,11 +1156,11 @@ export class RunnerServer {
   ): ReviewPlan {
     const { draft, readOnly } = record.context;
     const relative = (file?: string) => this.relativeToOutput(file);
-    const { specTestCases } = this.testsFor(draft, !!readOnly);
+    const { specTestCases, wontRun, summary } = this.testsFor(record.context);
     return {
       runId: record.context.runId,
       targetUrl: record.plan.targetUrl,
-      discoveredAt: new Date().toISOString(),
+      discoveredAt: record.plan.discoveredAt || new Date().toISOString(),
       siteType: draft.siteType,
       pages: draft.pages.map((p) => ({ ...p, screenshotPath: relative(p.screenshotPath) })),
       flows: draft.flows,
@@ -1029,11 +1182,47 @@ export class RunnerServer {
       signedInAs: draft.exploration?.signedInAs,
       productContext: record.context.productContext,
       designNotes: record.context.designNotes,
+      // The complete Plan (ADR 0009): every Plan Item, what won't run, and what approving runs.
+      planPages: draft.plan?.pages.map((p) => ({ ...p, screenshotPath: relative(p.screenshotPath) ?? p.screenshotPath })),
+      navigation: draft.plan?.navigation,
+      gradedChecks: draft.plan ? GRADED_CHECKS : undefined,
+      layoutGroups: draft.plan?.layoutGroups,
+      screenSizes: this.screenSizesOf(record.context),
+      roles: draft.plan ? [...new Set(draft.pages.flatMap((p) => p.reachedBy?.length ? p.reachedBy : ['visitor']))] : undefined,
+      wontRun,
+      budget: draft.plan?.budget,
+      summary,
+      otherHosts: draft.plan?.otherHosts,
     };
   }
 
-  /** The tests a plan runs, and the planned journeys a live site leaves out (they need a test copy). */
-  private testsFor(draft: DiscoveryDraft, readOnly: boolean): { specTestCases: TestCase[]; notRun: RunOptions['notRun'] } {
+  /** The screen sizes a run uses. */
+  private screenSizesOf(context: StoredPlanRecord['context']): Breakpoint[] {
+    return context.breakpoints?.length ? context.breakpoints : ['375px', '768px', '1440px'];
+  }
+
+  /**
+   * The tests a plan runs, and the planned tests a live site leaves out (they need a test copy).
+   * A complete Plan is expanded by expandPlan, the one expansion the approval summary shares; a
+   * draft from before it runs its journeys and the page sweep.
+   */
+  private testsFor(context: StoredPlanRecord['context']): {
+    specTestCases: TestCase[];
+    notRun: RunOptions['notRun'];
+    wontRun?: ReviewPlan['wontRun'];
+    summary?: ReviewPlan['summary'];
+  } {
+    const { draft } = context;
+    const readOnly = !!context.readOnly;
+    if (draft.plan) {
+      const expanded = expandPlan(draft, { readOnly, screenSizes: this.screenSizesOf(context), questions: draft.ambiguityQuestions });
+      return {
+        specTestCases: expanded.testCases.length > 0 ? expanded.testCases : [this.defaultTestCase()],
+        notRun: expanded.notRun,
+        wontRun: expanded.wontRun,
+        summary: expanded.summary,
+      };
+    }
     const specTestCases = [...new TestPlanner().plan(draft, { readOnly }).testCases, ...buildPageSweep(draft)];
     const notRun = readOnly
       ? draft.flows
@@ -1227,6 +1416,10 @@ export class RunnerServer {
       testCases?: TestCase[];
       productContext?: string;
       designNotes?: string;
+      /** Plan Items switched on or off: pages, tests on pages, Navigation Checks, journeys ("journey:<id>"). */
+      items?: Array<{ id: string; skipped: boolean }>;
+      /** The screen sizes the run uses. */
+      screenSizes?: Breakpoint[];
     }
 
     let body: PatchPlanBody;
@@ -1286,7 +1479,7 @@ export class RunnerServer {
       record.plan.testCases = body.testCases;
       record.context.customTestCases = true;
     } else if (record.context.draft) {
-      record.plan.testCases = this.testsFor(record.context.draft, !!record.context.readOnly).specTestCases;
+      record.plan.testCases = this.testsFor(record.context).specTestCases;
       record.context.customTestCases = undefined;
     }
 
@@ -1306,8 +1499,265 @@ export class RunnerServer {
       record.plan.designNotes = body.designNotes;
     }
 
+    // Plan Items switched on or off.
+    const draft = record.context.draft;
+    for (const item of Array.isArray(body.items) ? body.items : []) {
+      const skipped = item.skipped ? true : undefined;
+      if (item.id.startsWith('journey:')) {
+        const flow = draft?.flows.find((f) => `journey:${f.id}` === item.id);
+        if (flow) flow.outOfScope = skipped;
+        continue;
+      }
+      const plan = draft?.plan;
+      const found =
+        plan?.pages.find((p) => p.id === item.id) ??
+        plan?.navigation.find((n) => n.id === item.id) ??
+        plan?.pages.flatMap((p) => p.tests).find((t) => t.id === item.id);
+      if (found) found.skipped = skipped;
+    }
+    const sizes = (body.screenSizes || []).filter((s): s is Breakpoint => ['375px', '768px', '1440px'].includes(s));
+    if (sizes.length > 0) record.context.breakpoints = sizes;
+
+    if (draft) this.refreshPlan(record);
     await this.savePlan(record);
     this.sendJson(res, 200, record.plan);
+  }
+
+  private async handlePlanMarkdown(res: http.ServerResponse): Promise<void> {
+    const record = await this.ensurePlanLoaded();
+    if (!record || this.phase !== 'awaiting-review') {
+      this.sendJson(res, 404, { error: 'No plan awaiting review' });
+      return;
+    }
+    let host = 'site';
+    try {
+      host = new URL(record.plan.targetUrl).host.replace(/[^a-z0-9.-]/gi, '_');
+    } catch {
+      // keep "site"
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Disposition': `attachment; filename="test-plan-${host}.md"`,
+    });
+    res.end(planToMarkdown(record.plan));
+  }
+
+  /** How re-planning should go for this plan: its site, the owner's notes, and what they asked for. */
+  private replanOptions(record: StoredPlanRecord, instructions: string | undefined, report: (what: string) => void): ReplanOptions {
+    const roles = record.context.profile?.roles || [];
+    const redactor = new Redactor(roles);
+    return {
+      readOnly: !!record.context.readOnly,
+      productContext: record.context.productContext,
+      instructions: instructions?.trim() || undefined,
+      roles,
+      forbiddenActions: record.context.profile?.forbiddenActions,
+      redact: (text) => redactor.text(text),
+      onProgress: report,
+    };
+  }
+
+  /**
+   * Runs a change to the plan that needs the AI or the crawler in the background: answers 202 at
+   * once, reports progress as PLAN_UPDATE_PROGRESS events, and ends with PLAN_UPDATED (the plan is
+   * saved) or PLAN_UPDATE_FAILED. One at a time; approving waits until it's done.
+   */
+  private async startPlanUpdate(
+    res: http.ServerResponse,
+    what: string,
+    work: (record: StoredPlanRecord, ai: PacedAI | undefined, report: (step: string) => void) => Promise<string[]>
+  ): Promise<void> {
+    const record = await this.ensurePlanLoaded();
+    if (!record || this.phase !== 'awaiting-review' || !record.context.draft?.plan) {
+      this.sendJson(res, 404, { error: 'No plan awaiting review' });
+      return;
+    }
+    if (this.planUpdate) {
+      this.sendJson(res, 409, { error: 'The plan is already being updated. Wait for it to finish.', code: 'ERR_PLAN_UPDATING' });
+      return;
+    }
+    const runId = record.plan.runId;
+    this.sendJson(res, 202, { updating: true, what });
+    this.broadcastRunnerEvent({ type: 'PLAN_UPDATE_STARTED', runId, what, timestamp: Date.now() });
+    this.planUpdate = (async () => {
+      try {
+        const provider = await this.aiFor(record.context);
+        const budget = provider ? await this.aiBudgetFor(record.context.ai) : undefined;
+        const paced = provider ? new PacedAI(provider, budget?.left ?? Infinity) : undefined;
+        const notes = await work(record, paced, (step) =>
+          this.broadcastRunnerEvent({ type: 'PLAN_UPDATE_PROGRESS', runId, what: step, requestsUsed: paced?.used ?? 0, timestamp: Date.now() })
+        );
+        const draft = record.context.draft;
+        const plan = draft.plan!;
+        const used = paced?.used ?? 0;
+        plan.budget = {
+          needed: plan.budget?.needed ?? 0,
+          ...plan.budget,
+          used: (plan.budget?.used ?? 0) + used,
+          left: budget?.left !== undefined ? Math.max(0, budget.left - used) : plan.budget?.left,
+          limit: budget?.limit ?? plan.budget?.limit,
+        };
+        if (draft.exploration) draft.exploration.notes = [...new Set([...draft.exploration.notes, ...notes])];
+        this.refreshPlan(record);
+        await this.savePlan(record);
+        this.broadcastRunnerEvent({ type: 'PLAN_UPDATED', runId, what, timestamp: Date.now() });
+      } catch (err) {
+        this.broadcastRunnerEvent({ type: 'PLAN_UPDATE_FAILED', runId, what, error: err instanceof Error ? err.message : String(err), timestamp: Date.now() });
+      } finally {
+        this.planUpdate = null;
+      }
+    })();
+  }
+
+  /** { itemId, instructions?, promote? } plans one Plan Item again; { all: true, productContext? } plans everything again. */
+  private async handleReplan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    let body: { itemId?: string; all?: boolean; instructions?: string; productContext?: string; promote?: boolean };
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+    const id = body.itemId || '';
+    const what = body.all ? 'Re-planning everything' : body.promote ? `Testing ${id.replace(/^page:/, '')} on its own` : 'Re-planning with the AI';
+    await this.startPlanUpdate(res, what, async (record, ai, report) => {
+      const draft = record.context.draft;
+      if (body.productContext !== undefined) {
+        record.context.productContext = body.productContext;
+        record.plan.productContext = body.productContext;
+      }
+      const options = this.replanOptions(record, body.instructions, report);
+      const productId = record.context.productId;
+      if (body.all) return replanAll(draft, ai, { ...options, productId });
+      if (id.startsWith('journey:')) {
+        const flow = draft.flows.find((f) => `journey:${f.id}` === id);
+        const asked = `Re-plan the journey “${flow?.name ?? id}”${options.instructions ? `: ${options.instructions}` : ''}. Keep the other journeys as they are.`;
+        return replanJourneys(draft, ai, { ...options, productId, instructions: asked });
+      }
+      if (id.startsWith('page:')) return replanPage(draft, id.slice('page:'.length), ai, { ...options, promote: body.promote });
+      if (id.startsWith('pagetest:')) return replanPage(draft, id.slice('pagetest:'.length, id.lastIndexOf(':')), ai, options);
+      const nav = draft.plan!.navigation.find((n) => n.id === id);
+      if (nav?.shared) return replanMenus(draft, ai, options);
+      if (nav) return replanPage(draft, nav.startPage, ai, options);
+      throw new Error('That item isn’t in the plan any more.');
+    });
+  }
+
+  /** { address }: a page no link reaches, added by the person; it's opened and planned like the rest. */
+  private async handleAddPage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const record = await this.ensurePlanLoaded();
+    let body: { address?: string };
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+    if (!record?.context.draft) {
+      this.sendJson(res, 404, { error: 'No plan awaiting review' });
+      return;
+    }
+    let target: URL;
+    try {
+      target = new URL((body.address || '').trim(), record.context.targetUrl);
+    } catch {
+      this.sendJson(res, 400, { error: 'That doesn’t look like an address on this site.' });
+      return;
+    }
+    if (!isSameSite(target.host, new URL(record.context.targetUrl).host)) {
+      this.sendJson(res, 400, { error: 'That address isn’t on this site. Links to other sites are listed under Navigation.' });
+      return;
+    }
+    const address = target.pathname + target.search;
+    if (record.context.draft.pages.some((p) => pathOf(p.urlPath) === target.pathname)) {
+      this.sendJson(res, 400, { error: 'That page is already in the plan.' });
+      return;
+    }
+    await this.startPlanUpdate(res, `Adding ${address}`, async (rec, ai, report) => {
+      report(`Opening ${address}`);
+      const found = await this.crawlMore(rec, rec.context.targetUrl, { startPaths: [address], maxPages: 1, exploreClicks: false });
+      if (found.pages.length === 0) throw new Error(`${address} couldn’t be opened, or it asks for a sign-in.`);
+      return (await addPagesToPlan(rec.context.draft, found, ai, { ...this.replanOptions(rec, undefined, report), added: true })).notes;
+    });
+  }
+
+  /** { host }: another host the site links to, explored and planned like the site's own pages. */
+  private async handleIncludeHost(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const record = await this.ensurePlanLoaded();
+    let body: { host?: string };
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+    const draft = record?.context.draft;
+    const other = draft?.plan?.otherHosts.find((h) => h.host === body.host);
+    const link = draft?.pages.flatMap((p) => p.links || []).find((l) => l.leavesSite && new URL(l.to).host === body.host);
+    if (!record || !draft || !other || !link) {
+      this.sendJson(res, 400, { error: 'That host isn’t linked from this site.' });
+      return;
+    }
+    if (other.included) {
+      this.sendJson(res, 400, { error: 'That host is already in the plan.' });
+      return;
+    }
+    const origin = new URL(link.to).origin;
+    await this.startPlanUpdate(res, `Adding ${other.host}`, async (rec, ai, report) => {
+      report(`Exploring ${other.host}`);
+      const crawled = await this.crawlMore(rec, `${origin}/`, {
+        maxPages: INCLUDED_HOST_PAGES,
+        exploreClicks: true,
+        onPage: (_page, n) => report(`Exploring ${other.host}: ${n} ${n === 1 ? 'page' : 'pages'} found`),
+      });
+      if (crawled.pages.length === 0) throw new Error(`${other.host} couldn’t be explored.`);
+      const out = await addPagesToPlan(rec.context.draft, onOtherHost(crawled, origin), ai, this.replanOptions(rec, undefined, report));
+      const included = rec.context.draft.plan!.otherHosts.find((h) => h.host === other.host);
+      if (included) included.included = true;
+      return out.notes;
+    });
+  }
+
+  /**
+   * Crawls more for the review, signed out: a page added by its address, or another host's pages.
+   * It goes as easy on the site as the scan did: robots.txt and a pause between pages on sites we don't own.
+   */
+  private async crawlMore(
+    record: StoredPlanRecord,
+    target: string,
+    options: { startPaths?: string[]; maxPages: number; exploreClicks: boolean; onPage?: (page: PageInventoryItem, n: number) => void }
+  ): Promise<{ pages: PageInventoryItem[]; forms: NonNullable<DiscoveryDraft['forms']> }> {
+    const browser = new BrowserManager();
+    const origin = new URL(target);
+    const ownMachine = isPrivateHost(origin.hostname);
+    try {
+      const context = await browser.createContext({ baseUrl: target });
+      if (record.context.readOnly) await blockChanges(context);
+      const result = await new DeterministicSpider(record.context.profile?.forbiddenActions || [], options.maxPages).crawl(context, target, {
+        startPaths: options.startPaths,
+        exploreClicks: options.exploreClicks,
+        robots: ownMachine ? undefined : await RobotsPolicy.fetch(origin.origin, 'QA-Benchmarking-Bot'),
+        pageDelayMs: ownMachine ? 0 : 2000,
+        screenshotDir: path.join(this.outputDir, 'plan-pages'),
+        screenshotPrefix: `more-${Date.now()}`,
+        onPage: options.onPage,
+      });
+      return {
+        pages: result.pages.map((p) => ({ ...p, reachedBy: ['visitor'], links: p.links?.map((l) => ({ ...l, seenBy: ['visitor'] })) })),
+        forms: result.forms.map((f) => ({ urlPath: f.urlPath, inputs: f.inputs.map((i) => ({ selector: i.selector })), submitButtonSelector: f.submitButtonSelector, method: f.method })),
+      };
+    } finally {
+      await browser.close();
+    }
+  }
+
+  /** Rebuilds the reviewed plan from the draft after a change: the summary, what won't run and the tests follow. */
+  private refreshPlan(record: StoredPlanRecord): void {
+    const before = record.plan;
+    const since: MemorySummary | undefined = before.sinceLastRun ? { seenBefore: true, ...before.sinceLastRun } : undefined;
+    const custom = record.context.customTestCases ? before.testCases : undefined;
+    record.plan = this.buildPlan(record, since, before.aiAvailable ?? true, before.readOnlyReason || '');
+    if (custom) record.plan.testCases = custom;
   }
 
   /**
@@ -1359,6 +1809,10 @@ export class RunnerServer {
       this.sendJson(res, 404, { error: 'No plan awaiting review' });
       return;
     }
+    if (this.planUpdate) {
+      this.sendJson(res, 409, { error: 'The plan is still being updated. Approve it when that’s done.', code: 'ERR_PLAN_UPDATING' });
+      return;
+    }
 
     const body: { breakpoints?: string[]; roles?: RoleCredential[]; hubToken?: string } = await this.readJsonBody<{
       breakpoints?: string[];
@@ -1399,7 +1853,7 @@ export class RunnerServer {
     if (record.context.customTestCases && record.plan.testCases?.length) {
       specTestCases = record.plan.testCases;
     } else if (draft) {
-      ({ specTestCases, notRun } = this.testsFor(draft, !!record.context.readOnly));
+      ({ specTestCases, notRun } = this.testsFor(record.context));
       record.plan.testCases = specTestCases;
     } else {
       specTestCases = [this.defaultTestCase()];

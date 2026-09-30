@@ -4,13 +4,18 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { AIMessage, AICompletionOptions, AIProviderType } from '@qa/types';
 import type { AIProvider } from '../src/ai/ai-provider.js';
+import { MockAIProvider } from '../src/ai/providers/mock.js';
 import { DiscoveryAgent } from '../src/discovery/discovery-agent.js';
 
+/** Plans no journeys; the page and menu planner gets the mock's plan, so only exploration is under test. */
 class EmptyPlanAI implements AIProvider {
   readonly providerType: AIProviderType = 'mock';
   readonly prompts: string[] = [];
-  async generateText(messages: AIMessage[], _options?: AICompletionOptions): Promise<string> {
-    this.prompts.push(messages.map((m) => m.content).join('\n'));
+  private planner = new MockAIProvider();
+  async generateText(messages: AIMessage[], options?: AICompletionOptions): Promise<string> {
+    const prompt = messages.map((m) => m.content).join('\n');
+    this.prompts.push(prompt);
+    if (!prompt.includes('synthesizing application flows')) return this.planner.generateText(messages, options);
     return JSON.stringify({ flows: [] });
   }
 }
@@ -152,7 +157,7 @@ describe('Discovery explores signed in', () => {
     expect(reachedBy['/logout']).toBeUndefined();
     expect(reachedBy['/deleted']).toBeUndefined();
     expect(draft.exploration).toMatchObject({ signedInAs: ['member', 'admin'], signInFailed: [], notReached: [], notes: [] });
-    expect(ai.prompts[0]).toContain('Page /admin — "Admin" (reached by: admin)');
+    expect(ai.prompts.find((p) => p.includes('synthesizing application flows'))).toContain('Page /admin — "Admin" (reached by: admin)');
   }, 90000);
 
   it('says so when a role cannot sign in', async () => {

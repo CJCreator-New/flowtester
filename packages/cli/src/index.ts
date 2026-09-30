@@ -21,7 +21,7 @@ import {
 
 import { DashboardServer } from '@qa/dashboard';
 import { HubServer, PostgresHubDatabase } from '@qa/hub';
-import { RunnerServer } from '@qa/runner';
+import { RunnerServer, defaultUiApps } from '@qa/runner';
 import crypto from 'crypto';
 import type { SpecFile, ProductProfile, ReleaseReport, DiscoveryDraft, AIProviderType } from '@qa/types';
 import { chromium } from 'playwright';
@@ -606,16 +606,18 @@ program
   .option('-p, --port <port>', 'Port to serve the Runner on', '3001')
   .option('-h, --host <host>', 'Host to bind Runner to', 'localhost')
   .option('-o, --output <dir>', 'Output directory for run evidence/reports', '.qa-runner-report')
+  .option('--hub <url>', 'Report Hub that /api/v1/* is passed on to (default: HUB_API_URL)')
   .action(async (options) => {
     const port = parseInt(options.port, 10) || 3001;
     const host = options.host || 'localhost';
-    console.log(pc.cyan(`\n🚀 Starting QA Runner Service...`));
+    const hubUrl = options.hub || process.env.HUB_API_URL || undefined;
+    console.log(pc.cyan(`\n🚀 Starting the QA Tool...`));
     try {
-      const server = new RunnerServer({ port, host, outputDir: options.output });
-      const url = await server.start();
-      console.log(pc.green(`✔ Runner is LIVE at:`), pc.bold(pc.underline(url)));
-      console.log(pc.gray(`SSE stream:  ${url}/api/runner/stream`));
-      console.log(pc.gray(`Trigger run: POST ${url}/api/runner/run`));
+      const server = new RunnerServer({ port, host, outputDir: options.output, hubUrl, ui: defaultUiApps() });
+      const url = (await server.start()).replace('://0.0.0.0', '://localhost');
+      console.log(pc.green(`✔ Open in your browser:`), pc.bold(pc.underline(`${url}/`)));
+      console.log(pc.gray(`QA Flow Studio: ${url}/studio/`));
+      console.log(pc.gray(`Report Hub:     ${hubUrl ?? 'not connected'}`));
       console.log(pc.gray(`Press Ctrl+C to terminate.\n`));
     } catch (err: unknown) {
       console.error(pc.red(`Failed to start Runner:`), err instanceof Error ? err.message : err);

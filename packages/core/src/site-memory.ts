@@ -1,7 +1,41 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { DiscoveredFlow, DiscoveryDraft, ReleaseReport, TestCaseExpectations } from '@qa/types';
+import type { DiscoveredFlow, DiscoveryDraft, PageInventoryItem, PlanItemSource, PlanPageTest, ReleaseReport, TestCaseExpectations } from '@qa/types';
 import { PlanValidator } from './discovery/plan-validator.js';
+
+/**
+ * The last approved Plan (ADR 0009), kept so the next run reuses it where the site hasn't changed:
+ * a page whose controls are the same keeps its tests, a link keeps its Navigation Check, and the
+ * journeys stay while no page changed. Only what changed goes to the AI.
+ */
+export interface RememberedPlan {
+  pages: Record<
+    string,
+    {
+      /** The page's fingerprint when it was planned: the tests are reused while it's the same. */
+      contentKey?: string;
+      tests: PlanPageTest[];
+      source: PlanItemSource;
+      skipped?: boolean;
+      /** The person promoted it from its Layout Group. */
+      promoted?: boolean;
+      /** The person added it by its address. */
+      added?: boolean;
+    }
+  >;
+  navigation: Record<string, { name: string; expectation?: string; source: PlanItemSource; skipped?: boolean }>;
+  /** The journeys, reused while every page is as it was (`journeysFrom`). */
+  flows?: DiscoveredFlow[];
+  journeysFrom?: string;
+}
+
+/** A fingerprint of every page's controls: the same while no page changed. */
+export function siteContentKey(pages: PageInventoryItem[]): string {
+  const text = pages.map((p) => `${p.urlPath}:${p.contentKey ?? ''}`).sort().join('\n');
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
+  return hash.toString(36);
+}
 
 /**
  * What the tool remembers about one site between runs: the review's decisions and answers, checks
@@ -28,6 +62,8 @@ export interface SiteMemory {
   addedJourneys: DiscoveredFlow[];
   /** What the site was seen doing that confirms a guessed rule, by journey key. */
   observed: Record<string, Array<{ field: string; message: string }>>;
+  /** The last approved Plan, reused where the site hasn't changed. */
+  plan?: RememberedPlan;
 }
 
 /** The same journey on another run: same start page and name. */
@@ -134,6 +170,19 @@ export function applySiteMemory(draft: DiscoveryDraft, memory: SiteMemory | null
     q.isNew = (!q.key || !knownQuestions.has(q.key)) || undefined;
     if (q.isNew) summary.newQuestions++;
   }
+
+  // The complete Plan: what's new since the last reviewed run, and what the owner switched off then.
+  if (draft.plan) {
+    for (const page of draft.plan.pages) {
+      page.isNew = !knownPages.has(page.urlPath) || undefined;
+      if (memory.plan?.pages[page.urlPath]?.skipped) page.skipped = true;
+    }
+    for (const nav of draft.plan.navigation) {
+      const before = memory.plan?.navigation[nav.id];
+      nav.isNew = (!!memory.plan && !before) || undefined;
+      if (before?.skipped) nav.skipped = true;
+    }
+  }
   return summary;
 }
 
@@ -177,6 +226,33 @@ export function rememberRun(
     next.addedJourneys = draft.flows
       .filter((f) => f.source === 'user' && !f.outOfScope)
       .map(({ isNew: _isNew, needsHelp: _needsHelp, ...flow }) => flow);
+
+    // The approved Plan, reused next time where the site hasn't changed.
+    if (draft.plan) {
+      const keys = new Map(draft.pages.map((p) => [p.urlPath, p.contentKey]));
+      next.plan = {
+        pages: Object.fromEntries(
+          draft.plan.pages.map((p) => [
+            p.urlPath,
+            {
+              contentKey: keys.get(p.urlPath),
+              tests: p.tests,
+              source: p.source,
+              skipped: p.skipped || undefined,
+              promoted: p.coverage === 'promoted' || undefined,
+              added: p.added || undefined,
+            },
+          ])
+        ),
+        navigation: Object.fromEntries(
+          draft.plan.navigation.map((n) => [n.id, { name: n.name, expectation: n.expectation, source: n.source, skipped: n.skipped || undefined }])
+        ),
+        flows: draft.flows
+          .filter((f) => f.source !== 'user')
+          .map(({ isNew: _isNew, needsHelp: _needsHelp, outOfScope: _off, ...flow }) => flow),
+        journeysFrom: siteContentKey(draft.pages),
+      };
+    }
   }
   return next;
 }

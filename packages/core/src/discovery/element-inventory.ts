@@ -114,6 +114,17 @@ export async function collectElementInventory(page: Page): Promise<ElementInvent
 
       const humanize = (s: string) => s.replace(/[-_]+/g, ' ').trim();
 
+      // The header, menu or footer an element sits in: links there are usually the site's shared menus.
+      const landmarkOf = (el: Element): 'header' | 'nav' | 'footer' | undefined => {
+        const holder = el.closest('header, nav, footer, [role="banner"], [role="navigation"], [role="contentinfo"]');
+        if (!holder) return undefined;
+        const role = holder.getAttribute('role');
+        const tag = holder.tagName.toLowerCase();
+        if (tag === 'nav' || role === 'navigation') return 'nav';
+        if (tag === 'footer' || role === 'contentinfo') return 'footer';
+        return 'header';
+      };
+
       const items: ElementInventoryItem[] = [];
       const seen = new Set<Element>();
       for (const el of Array.from(document.querySelectorAll(selector))) {
@@ -155,6 +166,8 @@ export async function collectElementInventory(page: Page): Promise<ElementInvent
           insideForm: !!el.closest('form') || undefined,
           visible,
           enabled,
+          landmark: landmarkOf(el),
+          toggles: el.hasAttribute('aria-expanded') || el.hasAttribute('aria-haspopup') || el.hasAttribute('aria-controls') || undefined,
         });
       }
       return items;

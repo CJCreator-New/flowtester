@@ -128,12 +128,19 @@ describe('PlanValidator', () => {
   });
 });
 
+/** Scripts the journey requests; the page and menu planner gets an empty answer and falls back to fixed rules. */
 class ScriptedAIProvider implements AIProvider {
   readonly providerType: AIProviderType = 'mock';
+  /** Journey prompts, in order. */
   readonly prompts: string[] = [];
+  /** Every prompt, the page and menu planner's included. */
+  readonly allPrompts: string[] = [];
   constructor(private responses: string[]) {}
   async generateText(messages: AIMessage[], _options?: AICompletionOptions): Promise<string> {
-    this.prompts.push(messages.map((m) => m.content).join('\n'));
+    const prompt = messages.map((m) => m.content).join('\n');
+    this.allPrompts.push(prompt);
+    if (!prompt.includes('synthesizing application flows')) return '{}';
+    this.prompts.push(prompt);
     return this.responses[Math.min(this.prompts.length - 1, this.responses.length - 1)];
   }
 }
@@ -227,6 +234,6 @@ describe('Discovery grounds the AI plan in the real page', () => {
         roles: [{ role: 'manager', username: 'manager@example.com', password: 'manager-password', loginPath: '/login' }],
       },
     });
-    expect(ai.prompts.join('\n')).not.toContain('manager-password');
+    expect(ai.allPrompts.join('\n')).not.toContain('manager-password');
   }, 60000);
 });

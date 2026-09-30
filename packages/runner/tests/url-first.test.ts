@@ -8,6 +8,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type http from 'http';
 import type { AIMessage, AIProviderType, DiscoveredFlow, ReleaseReport, ReviewPlan } from '@qa/types';
+import { KeyResolver } from '@qa/core';
 import { RunnerServer } from '../src/server.js';
 import { server as fixtureServer } from '../../../fixtures/test-app/server.js';
 
@@ -173,6 +174,31 @@ describe('URL-first runs', () => {
     expect(reviewed.readOnly).toBe(true);
     expect(reviewed.readOnlyReason).toContain('didn’t say you own');
   }, 120000);
+
+  it('refuses a wizard scan until an AI key is set up: the AI writes the plan', async () => {
+    // Its own runner, with an empty key store, so a key saved on this machine can't count.
+    const keyless = new RunnerServer({
+      port: RUNNER_PORT + 10,
+      outputDir: `${outputDir}-keyless`,
+      dataDir: `${dataDir}-keyless`,
+      keyResolver: new KeyResolver(`${dataDir}-keyless`, { get: async () => null, set: async () => {} }),
+    });
+    await keyless.start();
+    try {
+      const res = await fetch(`http://localhost:${RUNNER_PORT + 10}/api/runner/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUrl: `http://localhost:${FIXTURE_PORT}/`, owner: true, useAI: true, aiProvider: 'openrouter', mode: 'product', skipReview: false }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: 'ERR_NO_AI_KEY' });
+      expect((await (await fetch(`http://localhost:${RUNNER_PORT + 10}/api/runner/status`)).json()).phase).toBe('idle');
+    } finally {
+      await keyless.stop();
+      await fs.rm(`${outputDir}-keyless`, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(`${dataDir}-keyless`, { recursive: true, force: true }).catch(() => {});
+    }
+  });
 
   it('plans with fixed rules when there is no AI, and says describing a test needs it', async () => {
     await post('/api/runner/run', { targetUrl: `http://localhost:${FIXTURE_PORT}/`, owner: true, skipReview: false });

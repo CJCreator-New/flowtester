@@ -17,8 +17,8 @@ import { initialFeed, plainFailure, reduceFeed, type FeedState, type RunMode, ty
 import { ConnectionScreen } from './screens/ConnectionScreen';
 import { KeySetupScreen } from './screens/KeySetupScreen';
 import { UrlFirstScreen, type UrlFirstSubmitOptions } from './screens/UrlFirstScreen';
-import { ScanningScreen } from './screens/ScanningScreen';
-import { PlanReviewScreen } from './screens/PlanReviewScreen';
+import { ScanningScreen, type ScanProgress } from './screens/ScanningScreen';
+import { PlanReviewScreen, type PlanUpdateState } from './screens/PlanReviewScreen';
 import { LiveMapScreen } from './screens/LiveMapScreen';
 import { ReportMapScreen } from './screens/ReportMapScreen';
 
@@ -54,6 +54,11 @@ export default function App() {
   const [plan, setPlan] = useState<ReviewPlan | null>(null);
   const [feed, setFeed] = useState<FeedState>(initialFeed('product'));
   const [report, setReport] = useState<ReleaseReport | null>(null);
+  // How the scan is going, and background changes to the plan, from the QA Tool's events.
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const planningStartedAt = useRef<number | null>(null);
+  const [planUpdate, setPlanUpdate] = useState<PlanUpdateState>({ running: false });
+  const [approveError, setApproveError] = useState<string | null>(null);
 
   // Check runner connection and AI setup on mount
   useEffect(() => {
@@ -153,6 +158,42 @@ export default function App() {
         return;
       }
 
+      if (event.type === 'DISCOVERY_PROGRESS') {
+        const p = event as unknown as ScanProgress & { stage: ScanProgress['stage'] };
+        if (p.stage === 'crawling') setScanningMessage('Exploring the site: every page and where its links go.');
+        if (p.stage === 'narrow-screens') setScanningMessage('Checking how the menus fold on phones and tablets.');
+        if (p.stage === 'planning') {
+          setScanningMessage('The AI is writing the plan: every page, link and journey.');
+          planningStartedAt.current ??= Date.now();
+        }
+        // Time left, from how long the AI requests so far took.
+        const elapsed = planningStartedAt.current ? (Date.now() - planningStartedAt.current) / 1000 : 0;
+        const secondsLeft =
+          p.stage === 'planning' && p.done && p.total ? (elapsed / p.done) * Math.max(0, p.total - p.done) : undefined;
+        setScanProgress((before) => ({ ...before, ...p, pagesFound: p.pagesFound ?? before?.pagesFound, secondsLeft }));
+        return;
+      }
+
+      if (event.type === 'PLAN_UPDATE_STARTED') {
+        setPlanUpdate({ running: true, what: String(event.what ?? '') });
+        return;
+      }
+      if (event.type === 'PLAN_UPDATE_PROGRESS') {
+        setPlanUpdate((u) => ({ ...u, running: true, step: String(event.what ?? '') }));
+        return;
+      }
+      if (event.type === 'PLAN_UPDATED') {
+        getPlan()
+          .then((p) => setPlan(p))
+          .catch(() => {})
+          .finally(() => setPlanUpdate({ running: false }));
+        return;
+      }
+      if (event.type === 'PLAN_UPDATE_FAILED') {
+        setPlanUpdate({ running: false, error: `The plan couldn’t be updated: ${String(event.error ?? 'something went wrong')}` });
+        return;
+      }
+
       if (event.type === 'PLAN_READY') {
         getPlan()
           .then((p) => {
@@ -196,12 +237,23 @@ export default function App() {
     owner,
     productContext,
     designNotes,
+    maxPages,
   }: UrlFirstSubmitOptions) => {
     setUrl(targetUrl);
     setIsOwner(owner);
     setHasSpecs(!!productContext);
     setHasDesignNotes(!!designNotes);
+    // The AI writes the plan: without a key set up, that comes first.
+    if (!model) {
+      setKeyReturnStep('url-first');
+      setStep('key');
+      return;
+    }
     setScanningMessage('Connecting to target site and initializing architectural crawler...');
+    setScanProgress(null);
+    planningStartedAt.current = null;
+    setApproveError(null);
+    setPlanUpdate({ running: false });
 
     const active: ActiveRun = {
       mode: 'product',
@@ -223,21 +275,28 @@ export default function App() {
         skipReview: false, // Mandatory review gate: plan must always be approved
         productContext,
         designNotes,
+        maxPages,
       });
       setRun({ ...active });
     } catch (err: unknown) {
       runRef.current = null;
+      if (err instanceof RunnerError && err.code === 'ERR_NO_AI_KEY') {
+        setKeyReturnStep('url-first');
+        setStep('key');
+        return;
+      }
       failRun(err instanceof Error ? err.message : 'Check couldn’t be started');
     }
   };
 
   // Handler: Approve reviewed plan
   const handleApprovePlan = async () => {
+    setApproveError(null);
     try {
       await approvePlan();
       setStep('live');
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to approve plan');
+      setApproveError(err instanceof Error ? err.message : 'The plan couldn’t be approved. Try again.');
     }
   };
 
@@ -395,27 +454,37 @@ export default function App() {
           </button>
         </nav>
 
-        {/* Settings button */}
-        <button
-          type="button"
-          onClick={openKeySetup}
-          className="font-mono text-xs text-ink-soft hover:text-stamp transition-colors"
-        >
-          ⚙ AI Settings
-        </button>
+        <div className="flex items-center gap-4">
+          <a
+            href="/studio/"
+            className="font-mono text-xs text-ink-soft hover:text-stamp transition-colors"
+            title="QA Flow Studio: the detailed view for engineers"
+          >
+            Engineer view
+          </a>
+          {/* Settings button */}
+          <button
+            type="button"
+            onClick={openKeySetup}
+            className="font-mono text-xs text-ink-soft hover:text-stamp transition-colors"
+          >
+            ⚙ AI Settings
+          </button>
+        </div>
       </header>
 
       {/* ─── SCREEN CONTENT ─── */}
-      {step === 'connect' && (
+      {/* The QA Tool serves this page, so it's normally there at once: the instructions only show after a failed check. */}
+      {step === 'connect' && !reachable && checks > 0 && (
         <div className="mx-auto max-w-xl p-8 mt-12">
           <ConnectionScreen checks={checks} />
         </div>
       )}
 
-      {step === 'loading' && (
+      {(step === 'loading' || (step === 'connect' && (reachable || checks === 0))) && (
         <div className="flex h-96 flex-col items-center justify-center p-8">
           <div className="h-8 w-8 rounded-full border-2 border-stamp border-t-transparent animate-spin mb-4" />
-          <p className="font-mono text-xs text-ink-soft">{loadError || 'Connecting to QA Runner...'}</p>
+          <p className="font-mono text-xs text-ink-soft">{loadError || 'Connecting to the QA Tool…'}</p>
         </div>
       )}
 
@@ -447,6 +516,8 @@ export default function App() {
           hasSpecs={hasSpecs}
           hasDesignNotes={hasDesignNotes}
           statusMessage={scanningMessage}
+          progress={scanProgress}
+          failure={feed.status === 'failed' ? feed.failure : null}
           onStop={handleStopScan}
           onCancel={handleStopScan}
           onBack={handleBackToUrl}
@@ -459,6 +530,8 @@ export default function App() {
           onApprove={handleApprovePlan}
           onPlanUpdated={(newPlan) => setPlan(newPlan)}
           onBack={handleBackToUrl}
+          update={planUpdate}
+          approveError={approveError}
         />
       )}
 

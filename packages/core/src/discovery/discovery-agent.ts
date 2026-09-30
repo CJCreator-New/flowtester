@@ -1,22 +1,22 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import type {
-  ProductProfile,
-  DiscoveryDraft,
-  DiscoveredFlow,
-  AmbiguityQuestion,
-  AIMessage,
-  PageInventoryItem,
-} from '@qa/types';
-import { BrowserManager } from '../browser.js';
-import { PreFlightChecker } from '../preflight.js';
-import { DeterministicSpider, type SpiderResult } from './deterministic-spider.js';
-import { ContextParser } from './context-parser.js';
+import type { ProductProfile, DiscoveryDraft, DiscoveredFlow, AmbiguityQuestion, PageInventoryItem } from '@qa/types';
 import { PlanValidator } from './plan-validator.js';
+import { BrowserManager, BREAKPOINT_VIEWPORTS } from '../browser.js';
+import { PreFlightChecker } from '../preflight.js';
+import { DeterministicSpider, DEFAULT_MAX_PAGES, type SpiderResult } from './deterministic-spider.js';
+import { buildSiteGraph, pathOf } from '../plan/site-graph.js';
+import { sampleLayoutGroups } from '../plan/sampling.js';
+import { lookAtNarrowScreens } from '../plan/narrow-look.js';
+import { estimatePageRequests, planPagesAndMenus, testedPages } from '../plan/ai-planner.js';
+import { PacedAI } from '../plan/ai-budget.js';
+import { planJourneys } from '../plan/journeys.js';
+import { ContextParser } from './context-parser.js';
 import { Redactor } from '../redact.js';
-import { CREDENTIAL_PLACEHOLDERS, replaceCredentialsWithPlaceholders } from '../credentials.js';
-import { detectSiteType, generateFallbackJourneys, type SiteType } from './site-type.js';
-import { formQuestion, stepQuestion } from './questions.js';
+import { replaceCredentialsWithPlaceholders } from '../credentials.js';
+import { detectSiteType, type SiteType } from './site-type.js';
+import { formQuestion } from './questions.js';
+import { siteContentKey, type RememberedPlan } from '../site-memory.js';
 import type { CrawlOptions } from './deterministic-spider.js';
 import { RobotsPolicy } from '../competitive/robots.js';
 import { isPrivateHost } from '../competitive/safe-crawler.js';
@@ -37,9 +37,40 @@ export interface DiscoveryOptions {
    * with the roles' own details is still allowed.
    */
   readOnly?: boolean;
-  /** Pages to explore per crawl. Default 25. */
+  /** Pages to explore per crawl. Default 200 (DEFAULT_MAX_PAGES). */
   maxPages?: number;
+  /**
+   * The AI key's free requests today, when the AI service says: planning stops asking the AI
+   * past `left`, and the rest is planned by fixed rules.
+   */
+  aiBudget?: { left?: number; limit?: number; visualReview?: number };
+  /** Told how the scan is going, for the progress screen. */
+  onProgress?: (progress: DiscoveryProgress) => void;
+  /**
+   * The site's last approved Plan (site memory): reused where the site hasn't changed, so only new
+   * or changed pages and links go to the AI. Leave it out to plan everything afresh.
+   */
+  remembered?: RememberedPlan;
 }
+
+/** How a scan is going. */
+export type DiscoveryProgress =
+  | { stage: 'crawling'; pagesFound: number; urlPath: string; who: string }
+  | { stage: 'narrow-screens' }
+  | {
+      stage: 'planning';
+      done: number;
+      total: number;
+      requestsUsed: number;
+      requestsNeeded: number;
+      requestsLeft?: number;
+      pagesFound: number;
+      layoutGroups: number;
+      what: string;
+    };
+
+/** Pages described to the AI when it plans journeys: enough to see the site, not so many a small model loses track. */
+const JOURNEY_PROMPT_PAGES = 40;
 
 /** Waits between page loads on sites we don't own. */
 const PUBLIC_SITE_PAGE_DELAY_MS = 2000;
@@ -58,8 +89,23 @@ export function mergeCrawls(crawls: Array<{ who: string; result: SpiderResult }>
   for (const { who, result } of crawls) {
     for (const page of result.pages) {
       const key = new URL(page.urlPath, 'http://x').pathname;
-      const reachedBy = [...(pages.get(key)?.reachedBy || []), who];
-      pages.set(key, { ...page, reachedBy });
+      const earlier = pages.get(key);
+      const reachedBy = [...(earlier?.reachedBy || []), who];
+      // Every explorer's links are kept, with who saw each (signed-in menus differ) and where each
+      // explorer landed when it wasn't where the link points (a sign-in page for a visitor).
+      const links = new Map((earlier?.links || []).map((l) => [`${l.selector}|${l.to}`, l]));
+      for (const link of page.links || []) {
+        const id = `${link.selector}|${link.to}`;
+        const before = links.get(id);
+        const landsOnBy = { ...(before?.landsOnBy || {}), ...(link.landsOn ? { [who]: link.landsOn } : {}) };
+        links.set(id, {
+          ...link,
+          landsOn: before?.landsOn ?? link.landsOn,
+          landsOnBy: Object.keys(landsOnBy).length > 0 ? landsOnBy : undefined,
+          seenBy: [...(before?.seenBy || []), who],
+        });
+      }
+      pages.set(key, { ...page, reachedBy, links: page.links || earlier?.links ? [...links.values()] : undefined });
     }
     for (const form of result.forms) forms.set(`${form.urlPath}|${form.action}|${form.submitButtonSelector}`, form);
     for (const action of result.sensitiveActions) sensitive.set(`${action.urlPath}|${action.elementSelector}`, action);
@@ -118,7 +164,7 @@ export class DiscoveryAgent {
     const parsedContext = await this.contextParser.parseFile(options.contextFilePath);
 
     // 2. Explore: signed out first, then once per role that can sign in, starting where it landed.
-    const spider = new DeterministicSpider(options.profile?.forbiddenActions || [], options.maxPages ?? 25);
+    const spider = new DeterministicSpider(options.profile?.forbiddenActions || [], options.maxPages ?? DEFAULT_MAX_PAGES);
     const roles = options.profile?.roles || [];
     const redactor = new Redactor(roles);
     // Signing in with the roles' own details is allowed on any site; it happens here, before the guard.
@@ -146,10 +192,23 @@ export class DiscoveryAgent {
 
     console.log(`[DiscoveryAgent] Crawling routes and interactive forms on ${options.targetUrl}...`);
     const crawls: Array<{ who: string; result: SpiderResult }> = [];
+    // Pages found so far across every explorer, for the progress screen.
+    let pagesFound = 0;
+    const onPage = (who: string) => (page: PageInventoryItem) =>
+      options.onProgress?.({ stage: 'crawling', pagesFound: ++pagesFound, urlPath: page.urlPath, who });
+    // Pages the person added by address last time: no link leads there, so they're visited directly.
+    const addedBefore = Object.entries(options.remembered?.pages || {})
+      .filter(([, page]) => page.added)
+      .map(([urlPath]) => urlPath);
     const visitorContext = await newContext();
     crawls.push({
       who: 'visitor',
-      result: await spider.crawl(visitorContext, options.targetUrl, { ...crawlOptions, screenshotPrefix: 'visitor' }),
+      result: await spider.crawl(visitorContext, options.targetUrl, {
+        ...crawlOptions,
+        startPaths: addedBefore,
+        screenshotPrefix: 'visitor',
+        onPage: onPage('visitor'),
+      }),
     });
     await visitorContext.close();
 
@@ -169,14 +228,37 @@ export class DiscoveryAgent {
           ...crawlOptions,
           startPaths: landing ? [landing] : [],
           screenshotPrefix: `role-${crawls.length}`,
+          onPage: onPage(role.role),
         }),
       });
       await roleContext.close();
     }
-    await this.browserManager.close();
 
     const spiderResult = mergeCrawls(crawls);
     const exploration = describeExploration(crawls, spiderResult, signInFailed);
+
+    // Narrow screens: which menu links fold behind a button there, and which button shows them.
+    options.onProgress?.({ stage: 'narrow-screens' });
+    let lastNarrowLoad = 0;
+    await lookAtNarrowScreens(spiderResult.pages, {
+      baseUrl: options.targetUrl,
+      openContext: async (size, page) => {
+        const signedIn = page.reachedBy?.includes('visitor') ? undefined : page.reachedBy?.[0];
+        const context = await this.browserManager.createContext({
+          baseUrl: options.targetUrl,
+          viewport: BREAKPOINT_VIEWPORTS[size],
+          storageState: signedIn ? preflight?.roleStorageStates?.[signedIn] : undefined,
+        });
+        if (options.readOnly) await blockChanges(context);
+        return context;
+      },
+      pause: async () => {
+        const wait = lastNarrowLoad + (crawlOptions.pageDelayMs ?? 0) - Date.now();
+        if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+        lastNarrowLoad = Date.now();
+      },
+    });
+    await this.browserManager.close();
 
     console.log(
       `[DiscoveryAgent] Spider found ${spiderResult.pages.length} pages, ${spiderResult.forms.length} forms, ${spiderResult.sensitiveActions.length} sensitive actions.`
@@ -192,240 +274,94 @@ export class DiscoveryAgent {
       ambiguityQuestions.push(formQuestion(form, qCounter++));
     }
 
-    // 4. Synthesize flows using AI Provider. The AI sees every page's real elements and may only
-    // use their selectors; the plan validator checks that before anything runs.
+    // 4. The site's shape: the App Flow (which page links where) and the Layout Groups.
     const detectedSiteType: SiteType = detectSiteType(spiderResult.pages, options.targetUrl);
     let siteType: SiteType = detectedSiteType;
+    const startPath = spiderResult.pages.some((p) => pathOf(p.urlPath) === targetOrigin.pathname)
+      ? targetOrigin.pathname
+      : spiderResult.pages[0]?.urlPath || '/';
+    const graph = buildSiteGraph(spiderResult.pages, startPath);
+    const { groups: layoutGroups, coverage } = sampleLayoutGroups(spiderResult.pages);
+    // Pages the person promoted or added last time are still tested on their own.
+    for (const [urlPath, before] of Object.entries(options.remembered?.pages || {})) {
+      const info = coverage.get(urlPath);
+      if (info && (before.promoted || before.added)) coverage.set(urlPath, { ...info, coverage: 'promoted', coveredBy: undefined });
+    }
+    const tested = testedPages({ pages: spiderResult.pages, coverage });
 
-    const validator = new PlanValidator(spiderResult.pages, spiderResult.forms);
-    const pagesForPrompt = spiderResult.pages.map((p) => PlanValidator.describePageForPrompt(p)).join('\n\n');
-    const formsForPrompt = spiderResult.forms.map((f) => ({
-      page: f.urlPath,
-      method: f.method,
-      action: f.action,
-      fields: f.inputs.map((i) => ({ label: i.label, type: i.type, required: i.required || undefined, selector: i.selector })),
-      submitSelector: f.submitButtonSelector,
-    }));
-    const promptMessage: AIMessage = {
-      role: 'user',
-      content: `
-You are an expert QA Engineer synthesizing application flows for pre-release testing.
-Target Application: ${options.targetUrl}
-Product ID: ${options.productId}
+    // 5. The AI plans every Plan Item, within the AI Request Budget: pages a few at a time, the
+    // shared menus, then the journeys. Past the budget, fixed rules plan the rest. What the last
+    // approved Plan already has for an unchanged site is reused, not asked again.
+    const journeysFrom = siteContentKey(spiderResult.pages);
+    const remembered = options.remembered;
+    const reuseJourneys =
+      !!remembered?.flows && remembered.journeysFrom === journeysFrom && remembered.flows.every((f) => f.source !== 'fallback');
+    const requestsNeeded =
+      estimatePageRequests({ pages: spiderResult.pages, coverage, graph, remembered: options.remembered }) + (reuseJourneys ? 0 : 1);
+    const requestsLeft = options.aiBudget?.left;
+    const paced = options.aiProvider ? new PacedAI(options.aiProvider, requestsLeft ?? Infinity) : undefined;
+    const planningProgress = (done: number, what: string) =>
+      options.onProgress?.({
+        stage: 'planning',
+        done,
+        total: requestsNeeded,
+        requestsUsed: paced?.used ?? 0,
+        requestsNeeded,
+        requestsLeft,
+        pagesFound: spiderResult.pages.length,
+        layoutGroups: layoutGroups.length,
+        what,
+      });
+    planningProgress(0, `Found ${spiderResult.pages.length} pages; planning them`);
+    const pagePlan = await planPagesAndMenus(
+      {
+        pages: spiderResult.pages,
+        forms: spiderResult.forms,
+        coverage,
+        graph,
+        targetUrl: options.targetUrl,
+        siteType,
+        productContext: parsedContext.rawContent,
+        readOnly: !!options.readOnly,
+        forbiddenActions: options.profile?.forbiddenActions,
+        redact: (text) => redactor.text(text),
+        remembered: options.remembered,
+      },
+      paced,
+      (p) => planningProgress(p.done, p.what)
+    );
+    exploration.notes.push(...pagePlan.notes);
+    for (const page of pagePlan.pages) if (options.remembered?.pages[page.urlPath]?.added) page.added = true;
 
-Product Context:
-${parsedContext.rawContent || 'No written PRD provided. Rely on discovered pages.'}
-
-Discovered Pages and the interactive elements on each (nothing else exists):
-${pagesForPrompt}
-
-Discovered Forms:
-${JSON.stringify(formsForPrompt, null, 2)}
-
-Roles:
-${JSON.stringify((options.profile?.roles || [{ role: 'member' }]).map((r) => ({ role: r.role })), null, 2)}
-
-Rules:
-- Every step "selector" MUST be copied exactly from the element or form lists above, from the page the step runs on. Never invent a selector.
-- Each flow runs already signed in as its role (pages list who reached them), so only include sign-in steps in a flow that is about signing in.
-- To type a role's sign-in details, use the values ${CREDENTIAL_PLACEHOLDERS.username} and ${CREDENTIAL_PLACEHOLDERS.password}; the runner fills in the real ones.
-- Only give expected text or error messages that appear in the Product Context or on a listed page. If you don't know the exact wording, leave it out.
-
-Generate a JSON object with:
-1. "siteType": classify this site into exactly one of: "shop" | "SaaS" | "content" | "booking" | "app" | "other"
-2. "flows": an array of 3 to 5 DiscoveredFlow items. Each flow MUST have:
-   - "id": e.g. "FLOW-001"
-   - "name": flow name
-   - "role": assigned role
-   - "description": a one-line reason why this journey was chosen
-   - "startPage": starting URL path
-   - "steps": array of { action: "click"|"fill"|"navigate"|"wait", selector?: string, value?: string, name: string }
-   - "inferredRules": list of validation or business constraints
-   - "candidateExpectations": { url?: { pattern: string }, text?: { contains: string } }
-   - "candidateValidationRules": [ { field: string, selector?: string, min?: number, max?: number, expectedError: string } ]
-3. "inferredRules": list of global inferred application business rules
-
-Respond with ONLY the JSON object.
-`,
-    };
-    // Belt and braces: nothing secret leaves for the AI provider, even from product notes.
-    promptMessage.content = redactor.text(promptMessage.content);
-
-    const NON_FILLABLE_TYPES = new Set(['submit', 'button', 'reset', 'checkbox', 'radio', 'file', 'image', 'hidden']);
-
-    const parseFlowsFromResponse = (responseText: string): DiscoveredFlow[] => {
-      const cleanJson = responseText
-        .replace(/```json/gi, '')
-        .replace(/```/g, '')
-        .trim();
-      const parsed = JSON.parse(cleanJson);
-      if (
-        parsed.siteType &&
-        ['shop', 'SaaS', 'content', 'booking', 'app', 'other'].includes(parsed.siteType)
-      ) {
-        siteType = parsed.siteType as SiteType;
-      }
-      return parsed.flows || [];
-    };
-
-
-    // Some models (esp. smaller/free ones) omit "value" on fill steps entirely, which
-    // otherwise silently no-ops the action (e.g. a login form submitted with blank fields
-    // that still "succeeds" because no exception is thrown). Detect this before accepting
-    // a parse as usable so it triggers the same repair retry as malformed JSON.
-    const findMissingFillValue = (flows: DiscoveredFlow[]): string | null => {
-      for (const flow of flows) {
-        for (const step of flow.steps || []) {
-          if (step.action === 'fill' && (!step.value || String(step.value).trim() === '')) {
-            return `Flow "${flow.id}" step "${step.name}" has action "fill" but no non-empty "value".`;
-          }
-        }
-      }
-      return null;
-    };
-
-    // Best-effort heuristic value for a fill step that still has no value after a repair
-    // attempt, so we never silently execute a no-op fill. Better an obviously-fake value
-    // that produces a visible finding than a blank field that passes silently.
-    const guessFillValue = (step: { selector?: string; name: string }): string => {
-      const hint = `${step.selector || ''} ${step.name}`.toLowerCase();
-      if (hint.includes('email')) return 'test.user@example.com';
-      if (hint.includes('password') || hint.includes('pass')) return 'TestPassword123!';
-      if (hint.includes('phone') || hint.includes('tel')) return '5555550123';
-      if (hint.includes('name')) return 'Test User';
-      if (hint.includes('number') || hint.includes('amount') || hint.includes('qty')) return '1';
-      return 'Test Value';
-    };
-
-    const backfillMissingFillValues = (flows: DiscoveredFlow[]): void => {
-      for (const flow of flows) {
-        for (const step of flow.steps || []) {
-          if (step.action === 'fill' && (!step.value || String(step.value).trim() === '')) {
-            const guessed = guessFillValue(step);
-            console.warn(
-              `[DiscoveryAgent] AI-generated fill step "${step.name}" in flow "${flow.id}" had no value; backfilling with a placeholder ("${guessed}") to avoid a silent no-op.`
-            );
-            step.value = guessed;
-          }
-        }
-      }
-    };
-
-    // Everything that makes a parsed plan unusable: missing fill values and steps aimed at
-    // elements the crawler never found.
-    const problemsIn = (flows: DiscoveredFlow[]): string[] => {
-      const problems: string[] = [];
-      const missingValue = findMissingFillValue(flows);
-      if (missingValue) problems.push(missingValue);
-      problems.push(...validator.check(flows).map((i) => i.message));
-      return problems;
-    };
-
-    let synthesizedFlows: DiscoveredFlow[] = [];
-    let usedFallbackSynthesis = false;
-    const ai = options.aiProvider;
-    if (!ai) {
-      usedFallbackSynthesis = true;
-      synthesizedFlows = generateFallbackJourneys(siteType, spiderResult, options.profile?.roles || []);
-      exploration.notes.push('No AI key is set up, so the journeys were chosen by fixed rules. The AI review sections were skipped.');
-    } else try {
-      const responseText = await ai.generateText(
-        [
+    // Journeys across pages, from the tested pages closest to the start page. While no page has
+    // changed since the last approved Plan, its journeys are reused.
+    const byClicks = (p: PageInventoryItem) => graph.clickPaths.get(p.urlPath)?.length ?? Number.MAX_SAFE_INTEGER;
+    const journeyPlan = reuseJourneys
+      ? (() => {
+          const flows: DiscoveredFlow[] = JSON.parse(JSON.stringify(options.remembered!.flows));
+          new PlanValidator(spiderResult.pages, spiderResult.forms).markFlowsNeedingHelp(flows);
+          return { flows, siteType, usedFallback: false, overBudget: false, notes: [] as string[], questions: [] as AmbiguityQuestion[] };
+        })()
+      : await planJourneys(
           {
-            role: 'system',
-            content: 'You are an autonomous QA flow extraction agent. Output strictly valid JSON.',
+            targetUrl: options.targetUrl,
+            productId: options.productId,
+            productContext: parsedContext.rawContent,
+            promptPages: [...tested].sort((a, b) => byClicks(a) - byClicks(b)).slice(0, JOURNEY_PROMPT_PAGES),
+            spider: spiderResult,
+            roles: options.profile?.roles || [],
+            siteType,
+            redact: (text) => redactor.text(text),
           },
-          promptMessage,
-        ],
-        { responseFormat: 'json', temperature: 0.2 }
-      );
-
-      let firstParse: DiscoveredFlow[] | null = null;
-      let problems: string[];
-      try {
-        firstParse = parseFlowsFromResponse(responseText);
-        problems = problemsIn(firstParse);
-      } catch (parseErr) {
-        problems = [`The response was not valid JSON (${parseErr instanceof Error ? parseErr.message : parseErr}).`];
-      }
-
-      if (problems.length === 0 && firstParse) {
-        synthesizedFlows = firstParse;
-      } else {
-        // Give the model one chance to repair its own output, telling it exactly what was wrong,
-        // before giving up on AI synthesis or backfilling a placeholder.
-        console.warn(`[DiscoveryAgent] AI response needs repair (${problems[0]}); retrying with a repair prompt...`);
-        const repairText = await ai.generateText(
-          [
-            {
-              role: 'system',
-              content: 'You are an autonomous QA flow extraction agent. Output strictly valid JSON.',
-            },
-            promptMessage,
-            { role: 'assistant', content: responseText },
-            {
-              role: 'user',
-              content: `That response was not usable:\n${problems
-                .slice(0, 20)
-                .map((p) => `- ${p}`)
-                .join(
-                  '\n'
-                )}\n\nReply again with ONLY a single valid JSON object matching the requested schema — no markdown fences, no commentary, no truncation. Copy every selector exactly from the element lists, and every "fill" step MUST include a concrete non-empty "value".`,
-            },
-          ],
-          { responseFormat: 'json', temperature: 0 }
+          paced
         );
-        try {
-          synthesizedFlows = parseFlowsFromResponse(repairText);
-        } catch (repairErr) {
-          // A usable first answer beats none: its bad steps are caught below.
-          if (!firstParse) throw repairErr;
-          synthesizedFlows = firstParse;
-        }
-        // If the repair attempt still didn't produce a value, don't silently no-op the
-        // step — backfill a placeholder so the step actually does something observable.
-        backfillMissingFillValues(synthesizedFlows);
-      }
-    } catch (aiErr) {
-      console.warn(`[DiscoveryAgent] AI flow synthesis fallback triggered: ${aiErr instanceof Error ? aiErr.message : aiErr}`);
-      usedFallbackSynthesis = true;
-      synthesizedFlows = generateFallbackJourneys(siteType, spiderResult, options.profile?.roles || []);
-      exploration.notes.push('The AI couldn’t plan this site, so the journeys were chosen by fixed rules.');
-    }
-    for (const flow of synthesizedFlows) flow.source ??= 'ai';
-
-    // What the AI expects is a guess unless the user's own notes say it, and a guess can never fail
-    // a site on its own: it's reported as "Could not verify" until someone confirms it.
-    const notes = parsedContext.rawContent || '';
-    const inNotes = (text: string) => {
-      const wording = text.replace(/^\^|\$$/g, '').replace(/\*/g, '').trim();
-      // Too short to be a meaningful quote ("/" matches almost any notes).
-      return wording.length >= 3 && notes.includes(wording);
-    };
-    for (const flow of synthesizedFlows) {
-      if (!flow.description || flow.description.trim() === '') {
-        flow.description = `Primary ${siteType} journey: ${flow.name}`;
-      }
-      const expectations = flow.candidateExpectations;
-      if (expectations) {
-        const wording = [expectations.text?.contains, expectations.text?.notContains, expectations.url?.pattern].filter(
-          (w): w is string => !!w
-        );
-        expectations.origin = wording.length > 0 && wording.every(inNotes) ? 'user' : 'ai-guess';
-      }
-      for (const rule of flow.candidateValidationRules || []) {
-        rule.origin = inNotes(rule.expectedError) ? 'user' : 'ai-guess';
-      }
-    }
-
-    // Whatever is still wrong after the repair: the flow isn't run, and the plan review asks about it.
-    validator.markFlowsNeedingHelp(synthesizedFlows);
-    let stepQuestionCounter = 1;
-    for (const flow of synthesizedFlows) {
-      if (!flow.needsHelp?.length) continue;
-      console.warn(`[DiscoveryAgent] Flow "${flow.id}" can't run as planned: ${flow.needsHelp[0]}`);
-      ambiguityQuestions.push(stepQuestion(flow, stepQuestionCounter++));
-    }
+    siteType = journeyPlan.siteType;
+    const synthesizedFlows = journeyPlan.flows;
+    const usedFallbackSynthesis = journeyPlan.usedFallback;
+    const journeysOverBudget = journeyPlan.overBudget;
+    exploration.notes.push(...journeyPlan.notes);
+    ambiguityQuestions.push(...journeyPlan.questions);
+    planningProgress(requestsNeeded, 'Planned the journeys');
 
     const draft: DiscoveryDraft = {
       version: '1.0',
@@ -447,6 +383,20 @@ Respond with ONLY the JSON object.
       usedFallbackSynthesis,
       exploration,
       readOnly: options.readOnly || undefined,
+      plan: {
+        pages: pagePlan.pages,
+        navigation: pagePlan.navigation,
+        layoutGroups,
+        otherHosts: graph.otherHosts,
+        budget: {
+          needed: requestsNeeded,
+          used: paced?.used ?? 0,
+          left: requestsLeft !== undefined ? (paced ? paced.left : requestsLeft) : undefined,
+          limit: options.aiBudget?.limit,
+          visualReview: options.aiBudget?.visualReview,
+          overBudget: pagePlan.overBudget + (journeysOverBudget ? synthesizedFlows.length : 0) || undefined,
+        },
+      },
     };
     // Journeys that send a form are marked on every site; on a live one they're kept but not run.
     markJourneysNeedingTestCopy(draft);

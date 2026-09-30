@@ -14,18 +14,21 @@ import path from 'path';
  * a repair prompt, and if the repair still comes back empty, backfill an
  * obviously-fake placeholder rather than leaving the field blank.
  */
+/** Scripts the journey requests; the page and menu planner gets an empty answer and falls back to fixed rules. */
 class ScriptedAIProvider implements AIProvider {
   readonly providerType: AIProviderType = 'mock';
   private callCount = 0;
 
   constructor(private responses: string[]) {}
 
-  async generateText(_messages: AIMessage[], _options?: AICompletionOptions): Promise<string> {
+  async generateText(messages: AIMessage[], _options?: AICompletionOptions): Promise<string> {
+    if (!messages.some((m) => m.content.includes('synthesizing application flows'))) return '{}';
     const response = this.responses[Math.min(this.callCount, this.responses.length - 1)];
     this.callCount++;
     return response;
   }
 
+  /** Journey requests made. */
   get calls(): number {
     return this.callCount;
   }

@@ -288,11 +288,15 @@ const server = http.createServer((req, res) => {
       <head>
         <meta charset="utf-8">
         <title>Invoice Details</title>
+        <meta name="description" content="Details of invoice INV-101 for Acme Corp, including the customer, the amount and the current status.">
+        <meta property="og:title" content="Invoice Details">
+        <meta property="og:description" content="Details of invoice INV-101 for Acme Corp.">
+        <meta property="og:image" content="https://example.com/invoice-preview.png">
       </head>
       <body>
         <header><nav><a href="/dashboard">Dashboard</a></nav></header>
         <main>
-          <h2>Invoice INV-101</h2>
+          <h1>Invoice INV-101</h1>
           <div data-testid="status-message">Invoice created successfully</div>
           <p>Customer: Acme Corp | Amount: $1200</p>
         </main>

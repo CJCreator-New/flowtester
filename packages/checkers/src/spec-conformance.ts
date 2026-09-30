@@ -110,13 +110,13 @@ export class SpecConformanceChecker {
     // 1. URL Pattern Check
     if (testCase.expectations.url) {
       const pattern = testCase.expectations.url.pattern;
-      // Convert glob-like pattern /invoices/* to regex
-      const regex = new RegExp(
-        '^' + pattern.replace(/\*/g, '.*').replace(/\//g, '\\/') + '$'
-      );
+      // Convert glob-like pattern /invoices/* to regex; anything else in an address is taken literally.
+      const regex = new RegExp('^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
       const urlPath = new URL(currentUrl, context.baseUrl).pathname;
+      // "/docs" and "/docs/" are the same page.
+      const otherSlash = urlPath.length > 1 && urlPath.endsWith('/') ? urlPath.slice(0, -1) : `${urlPath}/`;
 
-      if (!regex.test(urlPath) && !regex.test(currentUrl)) {
+      if (!regex.test(urlPath) && !regex.test(otherSlash) && !regex.test(currentUrl)) {
         findings.push(asGuess({
           id: `F-SPEC-${testCase.id}-${counter++}`,
           testCaseId: testCase.id,
@@ -302,6 +302,56 @@ export class SpecConformanceChecker {
             'Could not verify: expected a success message after sending the form.'
           )
         );
+      }
+    }
+
+    // 2d. The page opened and works: no error status, not blank, not a "not found" page.
+    if (testCase.expectations.pageWorks) {
+      const urlPath = new URL(currentUrl, context.baseUrl).pathname;
+      const seen = await page
+        .evaluate(() => {
+          const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming & { responseStatus?: number };
+          const heading = (document.querySelector('h1') as HTMLElement | null)?.innerText || '';
+          return {
+            status: navigation?.responseStatus ?? 0,
+            text: (document.body?.innerText || '').replace(/\s+/g, ' ').trim(),
+            title: document.title,
+            heading: heading.replace(/\s+/g, ' ').trim(),
+            media: document.querySelectorAll('img, svg, canvas, video').length,
+          };
+        })
+        .catch(() => null);
+      const notFoundWords = /^(404\b|page not found|not found\b|this page (could not|couldn’t|can't|cannot) be found)/i;
+      const problem = !seen
+        ? null
+        : seen.status >= 400
+          ? { title: `${urlPath} answered with an error (${seen.status})`, actual: `The page answered with HTTP ${seen.status}` }
+          : !seen.text && seen.media === 0
+            ? { title: `${urlPath} opened blank`, actual: 'The page showed nothing' }
+            : notFoundWords.test(seen.heading) || notFoundWords.test(seen.title)
+              ? { title: `${urlPath} says the page wasn’t found`, actual: `The page says: “${seen.heading || seen.title}”` }
+              : null;
+      if (problem) {
+        findings.push({
+          id: `F-SPEC-${testCase.id}-${counter++}`,
+          testCaseId: testCase.id,
+          flowId: testCase.flowId,
+          severity: 'Major',
+          checker: 'spec-conformance',
+          title: problem.title,
+          where: { urlPath, role: context.role, breakpoint: context.breakpoint },
+          expectedVsActual: {
+            expected: testCase.expectations.pageWorks.description || 'The page opens and shows its content',
+            actual: problem.actual,
+          },
+          stepsToReproduce: [`Navigate to ${testCase.startPage}`, ...testCase.steps.map((s) => `Execute "${s.name}"`), `Look at the page`],
+          evidence: {
+            screenshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.screenshotPath,
+            domSnapshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.domSnapshotPath,
+          },
+          resolution: 'Make sure the link goes to a page that exists and loads.',
+          verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
+        });
       }
     }
 

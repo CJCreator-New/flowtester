@@ -91,7 +91,9 @@ export async function locateElement(page: Page, selector: string): Promise<Locat
   // Try standard locator. Plain prose ("Email address") is not valid CSS and makes count() throw.
   const standardLocator = page.locator(selector);
   if ((await standardLocator.count().catch(() => 0)) > 0) {
-    return standardLocator.first();
+    // Sites often have the same link twice (a wide-screen menu and a phone menu): use the one on screen.
+    const onScreen = standardLocator.filter({ visible: true });
+    return (await onScreen.count().catch(() => 0)) > 0 ? onScreen.first() : standardLocator.first();
   }
 
   // Fallback: form control by its <label> / aria-label

@@ -27,7 +27,8 @@ export type TestPointStatus =
   | 'Could not verify';
 
 export interface TestCaseStep {
-  action: 'click' | 'fill' | 'select' | 'check' | 'navigate' | 'wait';
+  /** 'check-link' fetches `value` (a link's address) once and fails only if the link is broken; nothing is clicked. */
+  action: 'click' | 'fill' | 'select' | 'check' | 'navigate' | 'wait' | 'check-link';
   selector?: string; // e.g. "[data-testid=new-invoice-btn]"
   value?: string;
   name: string;
@@ -36,6 +37,8 @@ export interface TestCaseStep {
    * be done it is recorded as skipped, not as a failure, and the next steps still run.
    */
   optional?: boolean;
+  /** Only done at these screen sizes, e.g. opening the menu that narrow screens hide their links behind. */
+  onlyAt?: Breakpoint[];
 }
 
 /**
@@ -80,6 +83,8 @@ export interface TestCaseExpectations {
   navigatesAway?: { fromPath: string; description?: string };
   /** After the steps, a success message shows on the page and no error does. */
   successMessage?: { description?: string };
+  /** After the steps, the page opened and works: no error status, not blank, not a "not found" page. */
+  pageWorks?: { description?: string };
 }
 
 export interface ValidationRule {
@@ -107,6 +112,17 @@ export interface TestCase {
     testRefresh?: boolean;
     testEmptyInputs?: boolean;
   };
+  /**
+   * The kind of Plan Item this test runs. It decides which checkers run afterwards: a page visit or
+   * a journey gets them all; a test on a page gets the ones about what it did (errors, what it
+   * expected, accessibility of the state it left); a Navigation Check gets errors and whether it
+   * landed; a link check only its own result. Absent means all of them, as for hand-written specs.
+   */
+  kind?: 'page' | 'page-test' | 'navigation' | 'link' | 'journey';
+  /** Only run at these screen sizes. Absent means every size the run uses. */
+  breakpoints?: Breakpoint[];
+  /** The Plan Item this test runs, so a report can be matched back to the plan. */
+  planItemId?: string;
 }
 
 export interface SpecFile {
@@ -477,6 +493,10 @@ export interface ElementInventoryItem {
   insideForm?: boolean;
   visible: boolean;
   enabled: boolean;
+  /** The part of the page it sits in, when that's a header, menu or footer. */
+  landmark?: 'header' | 'nav' | 'footer';
+  /** It opens or closes something (aria-expanded, aria-haspopup or aria-controls), like a menu button. */
+  toggles?: boolean;
 }
 
 export interface PageInventoryItem {
@@ -497,6 +517,12 @@ export interface PageInventoryItem {
   screenshotPath?: string;
   /** Not found in this site's last reviewed run. */
   isNew?: boolean;
+  /** Where the page's links and navigation buttons go (absent in drafts written before this was recorded). */
+  links?: PageLink[];
+  /** Menu buttons that narrow screens hide this page's links behind. */
+  narrowMenus?: NarrowMenu[];
+  /** A fingerprint of the page's controls: the same on the next run when the page hasn't changed. */
+  contentKey?: string;
 }
 
 export interface DiscoveredFlow {
@@ -566,6 +592,8 @@ export interface DiscoveryDraft {
   }>;
   /** True when this plan runs read-only because the site isn't a test copy. */
   readOnly?: boolean;
+  /** The complete Plan's pages and Navigation Checks (ADR 0009). Journeys stay in `flows`. */
+  plan?: DraftPlan;
 }
 
 
@@ -573,6 +601,20 @@ export interface DiscoveryDraft {
 
 export * from './fingerprint.js';
 export * from './site-map.js';
+export * from './plan.js';
+import type {
+  AIRequestBudget,
+  DraftPlan,
+  NarrowMenu,
+  NavigationCheck,
+  PageLink,
+  PlanGradedCheck,
+  PlanLayoutGroup,
+  PlanOtherHost,
+  PlanPage,
+  PlanSummary,
+  PlanWontRun,
+} from './plan.js';
 
 export type FindingLifecycleStatus = 'OPEN' | 'VERIFIED_FIXED' | 'REGRESSED' | 'ACCEPTED_RISK';
 
@@ -867,5 +909,25 @@ export interface ReviewPlan {
   productContext?: string;
   /** Attached design system tokens or styling guidelines. */
   designNotes?: string;
+
+  // The complete Plan (ADR 0009). Absent on plans made before it.
+  /** Every page found, and how each is covered. */
+  planPages?: PlanPage[];
+  /** Every Navigation Check. */
+  navigation?: NavigationCheck[];
+  /** The graded aspects every tested page gets. */
+  gradedChecks?: PlanGradedCheck[];
+  layoutGroups?: PlanLayoutGroup[];
+  /** Screen sizes the run uses. */
+  screenSizes?: Breakpoint[];
+  /** Who the run tests as: 'visitor' and the roles that signed in. */
+  roles?: string[];
+  /** What won't run, and why. */
+  wontRun?: PlanWontRun[];
+  budget?: AIRequestBudget;
+  /** What approving runs, and every default applied. */
+  summary?: PlanSummary;
+  /** Other hosts the site links to. */
+  otherHosts?: PlanOtherHost[];
 }
 

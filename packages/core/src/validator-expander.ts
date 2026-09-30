@@ -2,9 +2,18 @@ import type { TestCase, TestCaseStep } from '@qa/types';
 
 /**
  * Expands test cases containing validationRules into synthetic boundary & invalid test cases.
+ * Expanding an already expanded list changes nothing, so the plan's expansion (expandPlan) and the
+ * orchestrator can both call it and the plan still lists exactly what runs.
  */
 export function expandValidationTestCases(testCases: TestCase[]): TestCase[] {
+  const present = new Set(testCases.map((tc) => tc.id));
   const expanded: TestCase[] = [];
+  const add = (tc: TestCase, synthetic: TestCase) => {
+    if (present.has(synthetic.id)) return;
+    present.add(synthetic.id);
+    // A synthetic test belongs to the same Plan Item as the journey it comes from.
+    expanded.push({ ...synthetic, kind: tc.kind, planItemId: tc.planItemId, breakpoints: tc.breakpoints });
+  };
 
   for (const tc of testCases) {
     // Add base test case
@@ -37,7 +46,7 @@ export function expandValidationTestCases(testCases: TestCase[]): TestCase[] {
       // empty shows some error, and only when the flow actually fills that field.
       if (rule.origin === 'ai-guess') {
         if (!tc.steps.some((step) => step.action === 'fill' && isTargetStep(step))) continue;
-        expanded.push({
+        add(tc, {
           id: `${tc.id}-val-${rule.field}-empty`,
           flowId: tc.flowId,
           name: `${tc.name || tc.id} [Validation: ${rule.field} empty]`,
@@ -59,7 +68,7 @@ export function expandValidationTestCases(testCases: TestCase[]): TestCase[] {
       // 1. Min boundary (min - 1)
       if (typeof rule.min === 'number') {
         const boundaryVal = (rule.min - 1).toString();
-        expanded.push({
+        add(tc, {
           id: `${tc.id}-val-${rule.field}-min`,
           flowId: tc.flowId,
           name: `${tc.name || tc.id} [Validation: ${rule.field} min-1]`,
@@ -78,7 +87,7 @@ export function expandValidationTestCases(testCases: TestCase[]): TestCase[] {
       // 2. Max boundary (max + 1)
       if (typeof rule.max === 'number') {
         const boundaryVal = (rule.max + 1).toString();
-        expanded.push({
+        add(tc, {
           id: `${tc.id}-val-${rule.field}-max`,
           flowId: tc.flowId,
           name: `${tc.name || tc.id} [Validation: ${rule.field} max+1]`,
@@ -95,7 +104,7 @@ export function expandValidationTestCases(testCases: TestCase[]): TestCase[] {
       }
 
       // 3. Empty input
-      expanded.push({
+      add(tc, {
         id: `${tc.id}-val-${rule.field}-empty`,
         flowId: tc.flowId,
         name: `${tc.name || tc.id} [Validation: ${rule.field} empty]`,

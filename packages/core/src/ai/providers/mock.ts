@@ -19,6 +19,39 @@ export class MockAIProvider implements AIProvider {
       }
     }
 
+    // The AI Planner's page requests: one test per page on its first safe button or tab, and a
+    // check for every link listed, all built from the facts in the prompt.
+    const pagesBlock = fullText.match(/Pages:\n(\[[\s\S]*?\])\n\nAnswer with ONLY/);
+    if (pagesBlock) {
+      const pages = JSON.parse(pagesBlock[1]) as Array<{
+        urlPath: string;
+        controls?: Array<{ role: string; name: string; selector: string; inForm?: boolean; disabled?: boolean }>;
+        links?: Array<{ selector: string; name: string; to: string }>;
+      }>;
+      return JSON.stringify({
+        pages: pages.map((p) => {
+          const control = (p.controls || []).find(
+            (c) => ['button', 'tab', 'switch'].includes(c.role) && !c.inForm && !c.disabled && !/delete|remove|pay|buy|sign ?out|log ?out|reset|trigger/i.test(c.name)
+          );
+          return {
+            urlPath: p.urlPath,
+            tests: control
+              ? [{ name: `Pressing “${control.name}” keeps the page working`, steps: [{ action: 'click', selector: control.selector, name: `Press “${control.name}”` }], expect: {} }]
+              : [],
+            links: (p.links || []).map((l) => ({ selector: l.selector, name: `“${l.name}” opens ${l.to}`, expect: 'The page opens' })),
+          };
+        }),
+      });
+    }
+    // The AI Planner's shared-menu request.
+    const linksBlock = fullText.match(/Links:\n(\[[\s\S]*?\])\n\nAnswer with ONLY/);
+    if (linksBlock) {
+      const links = JSON.parse(linksBlock[1]) as Array<{ selector: string; name: string; to: string; destination?: string }>;
+      return JSON.stringify({
+        links: links.map((l) => ({ selector: l.selector, name: `Menu: “${l.name}” opens ${l.to}`, expect: l.destination ? `The “${l.destination}” page` : 'The page opens' })),
+      });
+    }
+
     // Default mock response when analyzing pages or generating flows
     if (
       fullText.includes('discover_flows') ||

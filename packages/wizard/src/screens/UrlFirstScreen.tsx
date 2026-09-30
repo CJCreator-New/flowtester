@@ -7,7 +7,12 @@ export interface UrlFirstSubmitOptions {
   skipReview: boolean;
   productContext?: string;
   designNotes?: string;
+  /** Pages the crawl explores at most. */
+  maxPages?: number;
 }
+
+/** Pages a scan explores unless the person asks for another number. */
+const DEFAULT_MAX_PAGES = 200;
 
 export function UrlFirstScreen({
   initialUrl = '',
@@ -22,6 +27,7 @@ export function UrlFirstScreen({
 }) {
   const [url, setUrl] = useState(initialUrl);
   const [owner, setOwner] = useState(initialOwner);
+  const [maxPages, setMaxPages] = useState(DEFAULT_MAX_PAGES);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<{ message: string; code?: string; suggestion?: string } | null>(null);
 
@@ -108,6 +114,7 @@ export function UrlFirstScreen({
         skipReview: false, // Plan verification is ALWAYS required
         productContext: combinedContext,
         designNotes: designContent.trim() || undefined,
+        maxPages: maxPages !== DEFAULT_MAX_PAGES ? maxPages : undefined,
       });
     } catch (err: unknown) {
       setError({
@@ -222,6 +229,22 @@ export function UrlFirstScreen({
             strictly read-only.
           </span>
         </div>
+      </div>
+
+      {/* How much of the site to explore: every page it finds, up to this many */}
+      <div className="mb-6 flex flex-wrap items-center gap-2 text-sm text-ink">
+        <label htmlFor="max-pages">Explore up to</label>
+        <input
+          id="max-pages"
+          type="number"
+          min={1}
+          max={1000}
+          value={maxPages}
+          onChange={(e) => setMaxPages(Math.min(1000, Math.max(1, Number(e.target.value) || DEFAULT_MAX_PAGES)))}
+          className="field w-24 py-1 text-sm"
+        />
+        <span>pages</span>
+        <span className="text-xs text-ink-soft">Pages that share a layout are tested through a few samples, so big sites stay quick.</span>
       </div>
 
       {/* Collapsible Specs & Design Docs Card */}

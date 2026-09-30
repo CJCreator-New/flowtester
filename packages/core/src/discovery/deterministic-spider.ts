@@ -1,10 +1,11 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import type { BrowserContext } from 'playwright';
-import type { PageInventoryItem, SensitiveAction, AmbiguityQuestion, ElementInventoryItem } from '@qa/types';
+import type { PageInventoryItem, SensitiveAction, AmbiguityQuestion, ElementInventoryItem, PageLink } from '@qa/types';
 import { SafetyFilter } from './safety-filter.js';
 import { collectElementInventory, TEST_ID_ATTRIBUTES } from './element-inventory.js';
 import { redactUrl } from '../redact.js';
+import { isSameSite } from '../same-site.js';
 import { readLayoutFingerprint } from '../competitive/safe-crawler.js';
 import type { RobotsPolicy } from '../competitive/robots.js';
 
@@ -52,6 +53,8 @@ export interface CrawlOptions {
   screenshotDir?: string;
   /** Start of each screenshot's file name, so crawls as different roles don't overwrite each other. */
   screenshotPrefix?: string;
+  /** Told about each page as it's recorded, for progress. */
+  onPage?: (page: PageInventoryItem, pagesSoFar: number) => void;
 }
 
 /** Links and buttons that would end a signed-in session. */
@@ -63,20 +66,69 @@ export const RISKY_TO_CLICK =
 const NAVIGATION_WORDS =
   /checkout|cart|basket|bag|view|details|more|next|continue|back|browse|shop|start|explore|profile|account|settings|dashboard|home|open/i;
 const MAX_CLICKS_PER_PAGE = 8;
-const MAX_EXPLORATION_CLICKS = 40;
+const MAX_EXPLORATION_CLICKS = 100;
+/** Pages a crawl visits at most: enough to list a whole site, not so many that a shop's catalogue runs for hours. */
+export const DEFAULT_MAX_PAGES = 200;
+
+/**
+ * The page's visible links and where each goes, from its element inventory: the facts Navigation
+ * Checks are planned from. Links that end a session, open mail or phone apps, or point at the same
+ * page from its content are left out. A link on the site keeps only its path, the way pages are told apart.
+ */
+export function pageLinks(elements: ElementInventoryItem[], pageUrl: string, onSite: (u: URL) => boolean): PageLink[] {
+  const here = new URL(pageUrl);
+  const links: PageLink[] = [];
+  const seen = new Set<string>();
+  for (const el of elements) {
+    if (el.role !== 'link' || !el.href || !el.visible) continue;
+    if (el.href.startsWith('#') || /^(javascript|mailto|tel|sms):/i.test(el.href)) continue;
+    if (SESSION_ENDING.test(el.name) || SESSION_ENDING.test(el.href)) continue;
+    let target: URL;
+    try {
+      target = new URL(el.href, pageUrl);
+    } catch {
+      continue;
+    }
+    if (!/^https?:$/.test(target.protocol) || seen.has(el.selector)) continue;
+    const leavesSite = !onSite(target);
+    // A link to this same page is kept in a menu (the menu is the same on every page) but not in the content.
+    if (!leavesSite && target.pathname === here.pathname && !el.landmark) continue;
+    seen.add(el.selector);
+    links.push({
+      name: el.name,
+      selector: el.selector,
+      to: leavesSite ? redactUrl(target.origin + target.pathname + target.search) : target.pathname,
+      leavesSite: leavesSite || undefined,
+      landmark: el.landmark,
+    });
+  }
+  return links;
+}
+
+/** A short fingerprint of a page's controls and forms: the same on the next run when the page hasn't changed. */
+export function contentKeyOf(elements: ElementInventoryItem[], formCount: number): string {
+  const text = [...elements.map((el) => `${el.role}|${el.name}|${el.selector}`).sort(), `forms:${formCount}`].join('\n');
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
+  return hash.toString(36);
+}
 
 export class DeterministicSpider {
   private safetyFilter: SafetyFilter;
   private maxPages: number;
 
-  constructor(forbiddenActions: string[] = [], maxPages = 30) {
+  constructor(forbiddenActions: string[] = [], maxPages = DEFAULT_MAX_PAGES) {
     this.safetyFilter = new SafetyFilter(forbiddenActions);
     this.maxPages = maxPages;
   }
 
   async crawl(context: BrowserContext, targetUrl: string, options: CrawlOptions = {}): Promise<SpiderResult> {
     const baseUrlObj = new URL(targetUrl);
-    const targetHost = baseUrlObj.host;
+    // The site is where the start address lands: example.com that redirects to www.example.com is
+    // crawled as www.example.com. Until a page has opened, it's the address as typed.
+    let site = new URL(baseUrlObj.origin);
+    let landedOnce = false;
+    const onSite = (u: URL) => isSameSite(u.host, site.host);
     const exploreClicks = options.exploreClicks ?? true;
 
     // Pages are told apart by path; the first query string seen for a path is kept so the page
@@ -98,6 +150,8 @@ export class DeterministicSpider {
     const ambiguityQuestions: AmbiguityQuestion[] = [];
     const signInWalls: string[] = [];
     const skippedByRobots: string[] = [];
+    /** Addresses the site redirected elsewhere on the site, so a link to one is expected to land on the other. */
+    const redirects = new Map<string, string>();
     let questionCounter = 1;
     let clickBudget = MAX_EXPLORATION_CLICKS;
     let lastLoadAt = 0;
@@ -111,7 +165,7 @@ export class DeterministicSpider {
       if (visited.has(requestedPath)) continue;
       visited.add(requestedPath);
 
-      const fullUrl = new URL(requested, targetUrl).toString();
+      const fullUrl = new URL(requested, site).toString();
       if (options.robots && !options.robots.isAllowed(requested)) {
         skippedByRobots.push(requestedPath);
         continue;
@@ -125,14 +179,32 @@ export class DeterministicSpider {
         const landed = new URL(page.url());
         const hasSignInForm = (await page.locator('input[type="password"]').count()) > 0;
 
-        // Sent somewhere else to sign in: the requested page is behind a sign-in.
+        // Sent somewhere else to sign in: the requested page is behind a sign-in. A start address
+        // that lands on another host's sign-in form (a company sign-in service) doesn't move the site.
         if (landed.pathname !== requestedPath && hasSignInForm) {
           signInWalls.push(requestedPath);
-          if (landed.host === targetHost) enqueue(landed.pathname + landed.search);
+          if (onSite(landed)) {
+            // A link there lands on the sign-in page for whoever is exploring.
+            redirects.set(requestedPath, landed.pathname);
+            enqueue(landed.pathname + landed.search);
+          }
           continue;
         }
+        if (!landedOnce) {
+          landedOnce = true;
+          if (/^https?:$/.test(landed.protocol)) site = new URL(landed.origin);
+        }
+        // Redirected off the site: not one of its pages.
+        if (!onSite(landed)) continue;
+        // Redirected within the site: the page is recorded once, under the address it really has.
+        if (landed.pathname !== requestedPath) {
+          redirects.set(requestedPath, landed.pathname);
+          if (visited.has(landed.pathname)) continue;
+          visited.add(landed.pathname);
+        }
+        const pageUrl = page.url();
         // Recorded without secrets: some sign-in forms put the password in the address.
-        const currentPath = redactUrl(requestedPath + (landed.pathname === requestedPath ? landed.search : ''));
+        const currentPath = redactUrl(landed.pathname + landed.search);
         const title = await page.title().catch(() => currentPath);
 
         // 1. Discover links (never the ones that would end a signed-in session)
@@ -144,8 +216,8 @@ export class DeterministicSpider {
           try {
             if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
             if (SESSION_ENDING.test(href) || SESSION_ENDING.test(text)) continue;
-            const resolved = new URL(href, fullUrl);
-            if (resolved.host === targetHost) enqueue(resolved.pathname + resolved.search);
+            const resolved = new URL(href, pageUrl);
+            if (onSite(resolved)) enqueue(resolved.pathname + resolved.search);
           } catch {
             // invalid URL ignored
           }
@@ -153,6 +225,7 @@ export class DeterministicSpider {
 
         // 2. Discover interactive elements and check safety
         const elements = await collectElementInventory(page);
+        const links = pageLinks(elements, pageUrl, onSite);
 
         for (const el of elements) {
           if (el.role !== 'button' && el.role !== 'link' && el.inputType !== 'submit') continue;
@@ -244,7 +317,10 @@ export class DeterministicSpider {
           hasSignInForm: hasSignInForm || undefined,
           layoutGroup: fingerprint ? `layout-${fingerprint}` : undefined,
           screenshotPath,
+          links,
+          contentKey: contentKeyOf(elements, pageForms.length),
         });
+        options.onPage?.(pages[pages.length - 1], pages.length);
 
         // 4. Single-page apps navigate by script: try the controls that look like navigation.
         if (exploreClicks && clickBudget > 0) {
@@ -258,15 +334,21 @@ export class DeterministicSpider {
           for (const el of candidates.slice(0, MAX_CLICKS_PER_PAGE)) {
             if (clickBudget-- <= 0) break;
             try {
-              if (page.url() !== fullUrl) {
+              if (page.url() !== pageUrl) {
                 if (options.pageDelayMs) await page.waitForTimeout(Math.max(0, lastLoadAt + options.pageDelayMs - Date.now()));
                 lastLoadAt = Date.now();
-                await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+                await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
               }
               await page.locator(el.selector).first().click({ timeout: 3000 });
               await page.waitForTimeout(600);
               const after = new URL(page.url());
-              if (after.host === targetHost && after.pathname !== requestedPath) enqueue(after.pathname + after.search);
+              if (onSite(after) && after.pathname !== landed.pathname) {
+                enqueue(after.pathname + after.search);
+                // A button or script link that moved to another page is navigation too.
+                if (!links.some((l) => l.selector === el.selector)) {
+                  links.push({ name: el.name, selector: el.selector, to: after.pathname, scripted: true, landmark: el.landmark });
+                }
+              }
             } catch {
               // Not clickable after all; move on.
             }
@@ -278,6 +360,14 @@ export class DeterministicSpider {
     }
 
     await page.close();
+
+    // A link to an address the site redirects is expected to land where the redirect goes.
+    for (const recorded of pages) {
+      for (const link of recorded.links || []) {
+        const lands = link.leavesSite ? undefined : redirects.get(link.to);
+        if (lands && lands !== link.to) link.landsOn = lands;
+      }
+    }
 
     return {
       pages,

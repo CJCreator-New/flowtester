@@ -1,13 +1,21 @@
 {
   "host": "dev.mysleepreport.com",
-  "updatedAt": "2026-09-29T11:57:57.928Z",
+  "updatedAt": "2026-09-29T12:51:10.098Z",
   "pages": [
     "/"
   ],
   "journeys": {
-    "/|visit the main pages": {
-      "name": "Visit the main pages",
-      "steps": "navigate:/"
+    "/|landing page load validation": {
+      "name": "Landing Page Load Validation",
+      "steps": "navigate:/>wait:"
+    },
+    "/|homepage content and structure check": {
+      "name": "Homepage Content and Structure Check",
+      "steps": "navigate:/>wait:"
+    },
+    "/|member homepage navigation check": {
+      "name": "Member Homepage Navigation Check",
+      "steps": "navigate:/>wait:"
     }
   },
   "questions": [],

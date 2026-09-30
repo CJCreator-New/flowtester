@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node scripts/start.mjs",
+    "bootstrap": "pnpm install && pnpm --filter @qa/core exec playwright install chromium && pnpm -r run build",
+    "smoke": "node scripts/smoke.mjs",
     "dev": "pnpm --filter @qa/web dev",
     "dev:web": "pnpm --filter @qa/web dev",
     "dev:wizard": "pnpm --filter @qa/wizard dev",
