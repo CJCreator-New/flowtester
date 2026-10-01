@@ -18,6 +18,7 @@ import {
   replanItem,
   type PlanDelta,
 } from '../api';
+import { Link, PATHS } from '../lib/router';
 import type { ConfirmOptions } from '../components/ConfirmDialog';
 
 /** A background change to the plan (re-planning, adding pages), as the QA Tool reports it. */
@@ -73,7 +74,24 @@ const TABS = [
  * there's no Back here that could throw it away.
  */
 export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, approveError, approving = false, notice, confirm }: PlanReviewScreenProps) {
-  const [tab, setTab] = useState<'plan' | 'map'>('plan');
+  const [tab, setTab] = useState<'plan' | 'map'>(() => {
+    try {
+      const saved = sessionStorage.getItem('qa-plan-view-tab');
+      return saved === 'map' ? 'map' : 'plan';
+    } catch {
+      return 'plan';
+    }
+  });
+
+  const selectTab = (next: 'plan' | 'map') => {
+    setTab(next);
+    try {
+      sessionStorage.setItem('qa-plan-view-tab', next);
+    } catch {
+      // Ignore
+    }
+  };
+
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [switched, setSwitched] = useState<Record<string, boolean>>({});
@@ -85,19 +103,25 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
   const latest = useRef(plan);
   latest.current = plan;
 
+  // Pending batched toggles
+  const pendingTogglesRef = useRef<Map<string, boolean>>(new Map());
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // A background change started here waits until the QA Tool says it has finished or failed.
   useEffect(() => {
     if (!update.running) setPending(false);
   }, [update.running]);
   const busy = pending || update.running;
 
-  const edit = async (change: () => Promise<ReviewPlan | PlanDelta>) => {
+  const edit = async (change: () => Promise<ReviewPlan | PlanDelta>): Promise<boolean> => {
     setError(null);
     try {
       const result = await change();
       onPlanUpdated(applyPlanChange(latest.current, result));
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The plan couldn’t be changed. Try again.');
+      return false;
     }
   };
   const inBackground = async (start: () => Promise<void>) => {
@@ -110,12 +134,41 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
       setError(err instanceof Error ? err.message : 'The plan couldn’t be updated. Try again.');
     }
   };
-  const switchItems = (ids: string[], skipped: boolean) => {
-    setSwitched((s) => ({ ...s, ...Object.fromEntries(ids.map((id) => [id, skipped])) }));
-    void edit(() => patchPlan({ items: ids.map((id) => ({ id, skipped })) })).finally(() =>
-      setSwitched((s) => Object.fromEntries(Object.entries(s).filter(([id]) => !ids.includes(id))))
-    );
+
+  const flushToggles = async () => {
+    if (pendingTogglesRef.current.size === 0) return;
+    const items = Array.from(pendingTogglesRef.current.entries()).map(([id, skipped]) => ({ id, skipped }));
+    pendingTogglesRef.current.clear();
+    const affectedIds = items.map((i) => i.id);
+    const ok = await edit(() => patchPlan({ items }));
+    if (!ok) {
+      setError('Failed to update selection on the server. Your changes have been rolled back.');
+    }
+    setSwitched((s) => Object.fromEntries(Object.entries(s).filter(([id]) => !affectedIds.includes(id))));
   };
+
+  const switchItems = (ids: string[], skipped: boolean) => {
+    // 1. Optimistic UI update immediately
+    setSwitched((s) => ({ ...s, ...Object.fromEntries(ids.map((id) => [id, skipped])) }));
+
+    // 2. Add to batch queue
+    ids.forEach((id) => pendingTogglesRef.current.set(id, skipped));
+
+    // 3. Clear existing debounce timer and schedule flush
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      void flushToggles();
+    }, 300);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        void flushToggles();
+      }
+    };
+  }, []);
 
   const budget = plan.budget;
   const actions: PlanActions = {
@@ -164,7 +217,22 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
       await inBackground(() => replanEverything(productContext));
     },
     describeTest: (sentence, urlPath) => interpretSentence({ sentence, urlPath }),
-    addJourney: (flow) => edit(() => patchPlan({ flows: [...plan.flows, flow] })),
+    addJourney: async (flow) => {
+      await edit(() => patchPlan({ flows: [...plan.flows, flow] }));
+    },
+    reorderJourneys: async (fromIndex: number, toIndex: number) => {
+      const currentFlows = latest.current.flows;
+      if (fromIndex < 0 || fromIndex >= currentFlows.length || toIndex < 0 || toIndex >= currentFlows.length) return;
+      const reordered = [...currentFlows];
+      const [removed] = reordered.splice(fromIndex, 1);
+      reordered.splice(toIndex, 0, removed);
+      await edit(() => patchPlan({ flows: reordered }));
+    },
+    renameJourney: async (flowId: string, newName: string) => {
+      const currentFlows = latest.current.flows;
+      const updated = currentFlows.map((f) => (f.id === flowId ? { ...f, name: newName } : f));
+      await edit(() => patchPlan({ flows: updated }));
+    },
     setExpectation: (itemId, text) => void edit(() => patchPlan({ expectations: [{ id: itemId, text }] })),
     addSignIn: async (signIn) => {
       setError(null);
@@ -204,7 +272,7 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
   const moveTab = (from: 'plan' | 'map', by: number) => {
     const i = TABS.findIndex(([id]) => id === from);
     const next = TABS[(i + by + TABS.length) % TABS.length][0];
-    setTab(next);
+    selectTab(next);
     tabRefs.current[next]?.focus();
   };
 
@@ -220,7 +288,7 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
           links={links}
           maxCards={12}
           onSelectPage={(urlPath) => {
-            setTab('plan');
+            selectTab('plan');
             window.setTimeout(() => showItem(`page:${urlPath}`), 60);
           }}
         />
@@ -232,6 +300,15 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
       <div className="border-b border-rule bg-surface px-4 py-4 sm:px-6">
         <div className="mx-auto flex max-w-6xl flex-wrap items-end justify-between gap-3">
           <div className="min-w-0">
+            <nav aria-label="Breadcrumbs" className="mb-2 flex flex-wrap items-center gap-2 text-sm text-ink-soft">
+              <Link to={PATHS.new} className="hover:text-ink transition-colors">
+                New check-up
+              </Link>
+              <span aria-hidden="true" className="text-rule">/</span>
+              <span className="font-semibold text-ink">{host}</span>
+              <span aria-hidden="true" className="text-rule">/</span>
+              <span className="text-ink-soft">Plan review</span>
+            </nav>
             <FocusHeading className="break-words text-2xl font-bold text-ink sm:text-3xl">Review the plan for {host}</FocusHeading>
             <p className="text-sm text-ink-soft">
               {plan.siteType ? `${plan.siteType} · ` : ''}
@@ -253,7 +330,7 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
                   aria-controls="plan-tabpanel"
                   aria-selected={tab === id}
                   tabIndex={tab === id ? 0 : -1}
-                  onClick={() => setTab(id)}
+                  onClick={() => selectTab(id)}
                   onKeyDown={(e) => {
                     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
                       e.preventDefault();

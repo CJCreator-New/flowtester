@@ -1,23 +1,32 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  addSchedule,
+  deleteSchedule,
   getAiSetup,
   getAiUsage,
   getDefaults,
+  getStoredReleaseGates,
   listFreeModels,
+  listSchedules,
   listSites,
   RunnerError,
   saveAiSettings,
   saveDefaults,
+  saveStoredReleaseGates,
   testModel,
+  toggleSchedule,
   updateSite,
   type AiProviderId,
   type AiSetup,
+  type CheckupSchedule,
   type FreeModel,
   type RememberedSite,
   type ScreenSize,
 } from '../api';
+import { DEFAULT_RELEASE_GATES, type ReleaseGateCriteria } from '@qa/types';
 import { KeyField } from '../components/KeyField';
 import { ErrorMessage, Notice, Question, Spinner } from '../components/text';
+import { formatWhen } from '../lib/format';
 import { useDocumentTitle } from '../lib/title';
 
 const PROVIDERS: Array<{ id: AiProviderId; name: string; hint: string }> = [
@@ -150,6 +159,8 @@ export function SettingsScreen({ onKeySaved }: { onKeySaved: (model: string) => 
       </section>
 
       <Defaults />
+      <ReleaseGates />
+      <CheckupSchedules />
       <Sites />
     </div>
   );
@@ -425,6 +436,433 @@ function Defaults() {
         <p role="status" className={`mt-2 text-sm ${message.ok ? 'text-pass' : 'text-fail'}`}>
           {message.text}
         </p>
+      )}
+    </section>
+  );
+}
+
+const PRESET_META: Record<'strict' | 'standard' | 'lenient', { name: string; description: string }> = {
+  strict: { name: 'Strict', description: 'Zero tolerance: 0 blockers, 0 majors, strict accessibility' },
+  standard: { name: 'Standard', description: 'Balanced release bar: 0 blockers, up to 2 majors' },
+  lenient: { name: 'Lenient', description: 'Permissive dev/staging bar: up to 1 blocker, up to 5 majors' },
+};
+
+/** Release readiness criteria: configure thresholds for blockers, major defects, WCAG compliance, and test coverage. */
+function ReleaseGates() {
+  const [gate, setGate] = useState<ReleaseGateCriteria>(() => getStoredReleaseGates());
+  const [preset, setPreset] = useState<'strict' | 'standard' | 'lenient' | 'custom'>(() => {
+    const current = getStoredReleaseGates();
+    if (current.strictAccessibility && current.maxBlockers === 0 && current.maxMajors === 0) return 'strict';
+    if (!current.strictAccessibility && current.maxBlockers === 0 && current.maxMajors === 2) return 'standard';
+    if (!current.strictAccessibility && current.maxBlockers === 1 && current.maxMajors === 5) return 'lenient';
+    return 'custom';
+  });
+  const [message, setMessage] = useState<string | null>(null);
+
+  const applyPreset = (key: 'strict' | 'standard' | 'lenient') => {
+    const next = { ...DEFAULT_RELEASE_GATES[key] };
+    setPreset(key);
+    setGate(next);
+    saveStoredReleaseGates(next);
+    setMessage(`Quality gate set to ${PRESET_META[key].name} (${PRESET_META[key].description}).`);
+  };
+
+  const updateGate = <K extends keyof ReleaseGateCriteria>(key: K, val: ReleaseGateCriteria[K]) => {
+    setPreset('custom');
+    const next: ReleaseGateCriteria = {
+      ...gate,
+      [key]: val,
+    };
+    setGate(next);
+    saveStoredReleaseGates(next);
+    setMessage('Custom release gate thresholds saved.');
+  };
+
+  return (
+    <section aria-labelledby="gates-title" className="mt-8 rounded-lg border-2 border-edge bg-surface p-5">
+      <h2 id="gates-title" className="mb-1 text-xl font-bold">
+        Release Readiness Gates
+      </h2>
+      <p className="mb-4 text-sm text-ink-soft">
+        Configure the quality standards that decide whether a build or website passes as READY FOR RELEASE.
+      </p>
+
+      {/* Preset cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+        {(['strict', 'standard', 'lenient'] as const).map((key) => {
+          const p = DEFAULT_RELEASE_GATES[key];
+          const meta = PRESET_META[key];
+          const isSelected = preset === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => applyPreset(key)}
+              className={`rounded-card border p-3 text-left transition-all ${
+                isSelected
+                  ? 'border-stamp bg-stamp/10 shadow-level-1 ring-1 ring-stamp'
+                  : 'border-edge/70 bg-panel hover:border-ink-soft/40'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-sm text-ink">{meta.name}</span>
+                {isSelected && <span className="font-bold text-xs text-stamp">Active</span>}
+              </div>
+              <p className="text-xs text-ink-soft mt-1">{meta.description}</p>
+              <div className="mt-2 text-[11px] font-mono text-ink-soft space-y-0.5">
+                <div>Max blockers: {p.maxBlockers}</div>
+                <div>Max majors: {p.maxMajors}</div>
+                {p.strictAccessibility && <div>A11y: Required</div>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Threshold sliders / inputs */}
+      <div className="border-t border-rule pt-4 space-y-4">
+        <h3 className="text-sm font-bold uppercase tracking-wider text-ink-soft">
+          Gate Criteria {preset === 'custom' && '(Custom)'}
+        </h3>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label htmlFor="gate-max-blockers" className="label">
+              Max Blockers Permitted
+            </label>
+            <input
+              id="gate-max-blockers"
+              type="number"
+              min="0"
+              max="20"
+              value={gate.maxBlockers ?? 0}
+              onChange={(e) => updateGate('maxBlockers', Math.max(0, parseInt(e.target.value, 10) || 0))}
+              className="field"
+            />
+            <p className="mt-1 text-xs text-ink-soft">Critical failures that prevent key user tasks.</p>
+          </div>
+
+          <div>
+            <label htmlFor="gate-max-majors" className="label">
+              Max Major Defects Permitted
+            </label>
+            <input
+              id="gate-max-majors"
+              type="number"
+              min="0"
+              max="50"
+              value={gate.maxMajors ?? 0}
+              onChange={(e) => updateGate('maxMajors', Math.max(0, parseInt(e.target.value, 10) || 0))}
+              className="field"
+            />
+            <p className="mt-1 text-xs text-ink-soft">High-impact issues with functional workarounds.</p>
+          </div>
+
+          <div>
+            <label htmlFor="gate-max-minors" className="label">
+              Max Minor Defects Permitted
+            </label>
+            <input
+              id="gate-max-minors"
+              type="number"
+              min="0"
+              max="100"
+              value={gate.maxMinors ?? 10}
+              onChange={(e) => updateGate('maxMinors', Math.max(0, parseInt(e.target.value, 10) || 0))}
+              className="field"
+            />
+            <p className="mt-1 text-xs text-ink-soft">Minor cosmetics, typos, and non-blocking layout shifts.</p>
+          </div>
+
+          <div className="flex items-center pt-6">
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-bold text-ink">
+              <input
+                type="checkbox"
+                className="h-5 w-5 accent-[#6C9BF2]"
+                checked={gate.strictAccessibility ?? false}
+                onChange={(e) => updateGate('strictAccessibility', e.target.checked)}
+              />
+              Require Zero WCAG AA Violations
+            </label>
+          </div>
+        </div>
+      </div>
+
+      {message && (
+        <p role="status" className="mt-3 text-sm text-pass font-bold">
+          ✓ {message}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Automated and recurring check-up scheduler. */
+function CheckupSchedules() {
+  const [schedules, setSchedules] = useState<CheckupSchedule[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+
+  // Form states
+  const [targetUrl, setTargetUrl] = useState('');
+  const [cadence, setCadence] = useState<'hourly' | 'daily' | 'weekly'>('daily');
+  const [hour, setHour] = useState(9);
+  const [dayOfWeek, setDayOfWeek] = useState(1);
+  const [preset, setPreset] = useState<'full' | 'quick'>('full');
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const loadSchedules = useCallback(async () => {
+    setLoading(true);
+    try {
+      const items = await listSchedules();
+      setSchedules(items);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof RunnerError ? err.message : 'Could not load recurring schedules.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSchedules();
+  }, [loadSchedules]);
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetUrl.trim()) return;
+    setSaving(true);
+    setNotice(null);
+    try {
+      await addSchedule({
+        targetUrl: targetUrl.trim(),
+        cadence,
+        hour: cadence !== 'hourly' ? hour : undefined,
+        dayOfWeek: cadence === 'weekly' ? dayOfWeek : undefined,
+        preset,
+      });
+      setShowAddForm(false);
+      setTargetUrl('');
+      setNotice('New automated check-up schedule activated.');
+      await loadSchedules();
+    } catch (err) {
+      setError(err instanceof RunnerError ? err.message : 'Failed to create schedule.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggle = async (schedule: CheckupSchedule) => {
+    try {
+      await toggleSchedule(schedule.id, !schedule.enabled);
+      await loadSchedules();
+    } catch (err) {
+      setError(err instanceof RunnerError ? err.message : 'Failed to update schedule status.');
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Delete this automated check-up schedule?')) return;
+    try {
+      await deleteSchedule(id);
+      await loadSchedules();
+    } catch (err) {
+      setError(err instanceof RunnerError ? err.message : 'Failed to delete schedule.');
+    }
+  };
+
+  return (
+    <section aria-labelledby="schedules-title" className="mt-8 rounded-lg border-2 border-edge bg-surface p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
+        <h2 id="schedules-title" className="text-xl font-bold">
+          Scheduled Check-ups
+        </h2>
+        <button
+          type="button"
+          onClick={() => setShowAddForm((prev) => !prev)}
+          className="btn-primary rounded-control px-3 py-1.5 text-xs font-bold shadow-level-1"
+        >
+          {showAddForm ? 'Cancel' : '+ New Schedule'}
+        </button>
+      </div>
+      <p className="mb-4 text-sm text-ink-soft">
+        Automate recurring release check-ups. The runner executes them in the background and saves full reports.
+      </p>
+
+      {notice && (
+        <p role="status" className="mb-3 text-sm text-pass font-bold">
+          ✓ {notice}
+        </p>
+      )}
+
+      {error && <ErrorMessage>{error}</ErrorMessage>}
+
+      {/* Add Schedule Form */}
+      {showAddForm && (
+        <form onSubmit={handleAdd} className="mb-6 rounded-card border border-stamp/40 bg-panel p-4 space-y-4">
+          <h3 className="font-bold text-sm text-ink">Schedule a New Check-up</h3>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="sm:col-span-2">
+              <label htmlFor="sched-url" className="label">
+                Target Website URL
+              </label>
+              <input
+                id="sched-url"
+                type="text"
+                required
+                placeholder="https://yourapp.com"
+                value={targetUrl}
+                onChange={(e) => setTargetUrl(e.target.value)}
+                className="field"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="sched-cadence" className="label">
+                Recurrence Cadence
+              </label>
+              <select
+                id="sched-cadence"
+                value={cadence}
+                onChange={(e) => setCadence(e.target.value as any)}
+                className="field"
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="hourly">Hourly</option>
+              </select>
+            </div>
+
+            {cadence !== 'hourly' && (
+              <div>
+                <label htmlFor="sched-hour" className="label">
+                  Time of Day (UTC 24h)
+                </label>
+                <select
+                  id="sched-hour"
+                  value={hour}
+                  onChange={(e) => setHour(parseInt(e.target.value, 10))}
+                  className="field"
+                >
+                  {Array.from({ length: 24 }).map((_, h) => (
+                    <option key={h} value={h}>
+                      {h.toString().padStart(2, '0')}:00 UTC
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {cadence === 'weekly' && (
+              <div>
+                <label htmlFor="sched-dow" className="label">
+                  Day of Week
+                </label>
+                <select
+                  id="sched-dow"
+                  value={dayOfWeek}
+                  onChange={(e) => setDayOfWeek(parseInt(e.target.value, 10))}
+                  className="field"
+                >
+                  <option value={1}>Monday</option>
+                  <option value={2}>Tuesday</option>
+                  <option value={3}>Wednesday</option>
+                  <option value={4}>Thursday</option>
+                  <option value={5}>Friday</option>
+                  <option value={6}>Saturday</option>
+                  <option value={0}>Sunday</option>
+                </select>
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="sched-preset" className="label">
+                Run Preset
+              </label>
+              <select
+                id="sched-preset"
+                value={preset}
+                onChange={(e) => setPreset(e.target.value as any)}
+                className="field"
+              >
+                <option value="full">Full check-up (standard breadth)</option>
+                <option value="quick">Quick smoke scan (faster)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 pt-2">
+            <button
+              type="submit"
+              disabled={saving || !targetUrl.trim()}
+              className="btn-primary rounded-control px-4 py-2 text-sm font-bold shadow-level-1"
+            >
+              {saving ? <Spinner label="Saving…" /> : 'Activate Schedule'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAddForm(false)}
+              className="btn-quiet rounded-control px-3 py-2 text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      {loading && !schedules && <Spinner label="Reading automated schedules…" />}
+
+      {schedules && schedules.length === 0 && !showAddForm && (
+        <p className="text-sm text-ink-soft py-2">
+          No automated schedules configured yet. Click "+ New Schedule" to set up recurring test runs.
+        </p>
+      )}
+
+      {schedules && schedules.length > 0 && (
+        <ul className="divide-y divide-rule">
+          {schedules.map((s) => (
+            <li key={s.id} className="py-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-block h-2.5 w-2.5 rounded-full ${
+                      s.enabled ? 'bg-pass' : 'bg-ink-soft/40'
+                    }`}
+                  />
+                  <span className="font-bold text-ink text-sm break-all">{s.targetUrl}</span>
+                  <span className="rounded bg-panel px-2 py-0.5 font-mono text-xs uppercase text-ink-soft border border-rule">
+                    {s.cadence}
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-ink-soft flex flex-wrap gap-x-3">
+                  <span>Next run: {formatWhen(s.nextRunAt)}</span>
+                  {s.lastRunAt && <span>Last run: {formatWhen(s.lastRunAt)}</span>}
+                  {s.preset && <span>Preset: {s.preset}</span>}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleToggle(s)}
+                  className="btn-quiet rounded-control px-2.5 py-1 text-xs font-bold"
+                >
+                  {s.enabled ? 'Pause' : 'Resume'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDelete(s.id)}
+                  className="btn-quiet rounded-control border border-fail/40 px-2.5 py-1 text-xs font-bold text-fail hover:bg-fail/10"
+                >
+                  Delete
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );

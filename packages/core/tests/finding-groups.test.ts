@@ -6,20 +6,22 @@ import type { Finding } from '@qa/types';
 import { mergeDuplicateFindings } from '../src/finding-groups.js';
 import { EvidenceCollector } from '../src/evidence.js';
 
-const finding = (overrides: Partial<Finding> & { urlPath: string; testCaseId: string }): Finding => ({
-  id: `F-${overrides.testCaseId}`,
-  testCaseId: overrides.testCaseId,
-  severity: 'Major',
-  checker: 'ux-quality',
-  title: 'WCAG Violation: Images must have alternative text (image-alt)',
-  where: { urlPath: overrides.urlPath, role: 'visitor', breakpoint: '1440px' },
-  expectedVsActual: { expected: '', actual: '' },
-  stepsToReproduce: [],
-  evidence: {},
-  resolution: '',
-  verifyCommand: '',
-  ...overrides,
-});
+const finding = (overrides: Partial<Finding> & { urlPath: string; testCaseId: string }): Finding => {
+  const { urlPath, ...rest } = overrides;
+  return {
+    id: `F-${overrides.testCaseId}`,
+    severity: 'Major',
+    checker: 'ux-quality',
+    title: 'WCAG Violation: Images must have alternative text (image-alt)',
+    where: { urlPath, role: 'visitor', breakpoint: '1440px' },
+    expectedVsActual: { expected: '', actual: '' },
+    stepsToReproduce: [],
+    evidence: {},
+    resolution: '',
+    verifyCommand: '',
+    ...rest,
+  };
+};
 
 describe('mergeDuplicateFindings', () => {
   it('merges the same problem on the same page, recording where else it was seen', () => {
@@ -61,6 +63,27 @@ describe('mergeDuplicateFindings', () => {
         evidence: { networkLogs: [{ url: 'https://cdn.example.net/a.js', method: 'GET', status: 404, timestamp: 1 }] },
       });
     expect(mergeDuplicateFindings([failing('/', 'P1'), failing('/about', 'P2'), failing('/shop', 'P3')])).toHaveLength(1);
+  });
+
+  it('assigns canonical issueKey and deduplicates findings with query strings or unnormalized paths', () => {
+    const f1 = finding({
+      urlPath: '/products/?utm_source=google&id=1#details',
+      testCaseId: 'TC-1',
+      title: 'Missing landmark <main>',
+      where: { urlPath: '/products/?utm_source=google&id=1#details', role: 'visitor', breakpoint: '1440px' },
+    });
+    const f2 = finding({
+      urlPath: 'https://example.com/products',
+      testCaseId: 'TC-2',
+      title: 'Missing landmark <main>',
+      where: { urlPath: 'https://example.com/products', role: 'admin', breakpoint: '375px' },
+    });
+    const merged = mergeDuplicateFindings([f1, f2]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].issueKey).toBeDefined();
+    expect(merged[0].where.urlPath).toBe('/products');
+    expect(merged[0].seenAt?.pages).toEqual(['/products']);
+    expect(merged[0].seenAt?.roles).toEqual(['visitor', 'admin']);
   });
 });
 

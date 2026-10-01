@@ -83,6 +83,18 @@ export default {
         base: ['1.125rem', { lineHeight: '1.6' }],
         question: ['clamp(1.875rem, 1.4rem + 2vw, 2.75rem)', { lineHeight: '1.1', letterSpacing: '-0.015em' }],
       },
+      boxShadow: {
+        'level-1': '0 1px 2px 0 rgb(0 0 0 / 0.3)',
+        'level-2': '0 4px 6px -1px rgb(0 0 0 / 0.4)',
+        'level-3': '0 10px 15px -3px rgb(0 0 0 / 0.4)',
+        'level-4': '0 20px 25px -5px rgb(0 0 0 / 0.5)',
+      },
+      borderRadius: {
+        control: '6px',
+        card: '8px',
+        panel: '12px',
+        pill: '9999px',
+      },
       maxWidth: {
         prose: '38rem',
       },

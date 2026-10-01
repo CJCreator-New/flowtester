@@ -1,8 +1,24 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { Breakpoint, DiscoveredFlow, NavigationCheck, PlanPage, PlanPageTest, ReviewPlan, RoleCredential, TestCaseExpectations } from '@qa/types';
 import { stepToSentence, expectationsToChecks } from '../../lib/plan-translate';
 import type { InterpretResult } from '../../api';
 import { Badge, ItemToggle, ReplanControl, SourceBadge, itemDomId, showItem } from './parts';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 /** What the person can do to the plan from the document. Each change goes to the QA Tool. */
 export interface PlanActions {
@@ -22,6 +38,10 @@ export interface PlanActions {
   saveDocsAndReplan: (productContext: string, designNotes: string) => Promise<void>;
   describeTest: (sentence: string, urlPath: string) => Promise<InterpretResult>;
   addJourney: (flow: DiscoveredFlow) => Promise<void>;
+  /** Reorders journeys by moving flow from one index to another. */
+  reorderJourneys?: (fromIndex: number, toIndex: number) => Promise<void>;
+  /** Renames a journey inline. */
+  renameJourney?: (flowId: string, newName: string) => Promise<void>;
   /** Confirms the AI's guess of what should happen (no text), or replaces it with the person's own words. */
   setExpectation: (itemId: string, text?: string) => void;
   /** Signs in as a role from the review, and adds what it sees to the plan. */
@@ -44,6 +64,7 @@ function roleName(role: string | undefined): string {
 interface View {
   query: string;
   needsMe: boolean;
+  expandAll?: boolean | null;
 }
 const ViewContext = createContext<View>({ query: '', needsMe: false });
 
@@ -96,31 +117,223 @@ function Section({
     </>
   );
   if (collapsible) {
-    const startOpen = (count ?? 0) <= COLLAPSE_OVER || !!view.query.trim() || view.needsMe;
+    const shouldOpen =
+      view.expandAll !== undefined && view.expandAll !== null
+        ? view.expandAll
+        : (count ?? 0) <= COLLAPSE_OVER || !!view.query.trim() || view.needsMe;
+    const [open, setOpen] = useState(shouldOpen);
+
+    useEffect(() => {
+      if (view.expandAll !== undefined && view.expandAll !== null) {
+        setOpen(view.expandAll);
+      } else if (view.query.trim() || view.needsMe) {
+        setOpen(true);
+      }
+    }, [view.expandAll, view.query, view.needsMe]);
+
     return (
-      <section id={id} aria-labelledby={`${id}-title`} className="scroll-mt-4 rounded-lg border border-rule bg-surface/60">
-        <details open={startOpen || undefined} key={String(startOpen)}>
+      <section id={id} aria-labelledby={`${id}-title`} className="scroll-mt-4 rounded-card border border-rule bg-surface/70 shadow-level-2">
+        <details open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
           <summary className="flex min-h-[56px] cursor-pointer items-center px-5 py-3">
             <h2 id={`${id}-title`} className="text-lg font-bold text-ink">
               {heading}
             </h2>
           </summary>
-          <div className="px-5 pb-5">
-            {intro && <p className="mb-4 max-w-prose text-sm text-ink-soft">{intro}</p>}
-            {children}
-          </div>
+          {open && (
+            <div className="px-5 pb-5">
+              {intro && <p className="mb-4 max-w-prose text-sm text-ink-soft">{intro}</p>}
+              {children}
+            </div>
+          )}
         </details>
       </section>
     );
   }
   return (
-    <section id={id} aria-labelledby={`${id}-title`} className="scroll-mt-4 rounded-lg border border-rule bg-surface/60 p-5">
+    <section id={id} aria-labelledby={`${id}-title`} className="scroll-mt-4 rounded-card border border-rule bg-surface/70 shadow-level-2 p-5">
       <h2 id={`${id}-title`} className="mb-1 text-lg font-bold text-ink">
         {heading}
       </h2>
       {intro && <p className="mb-4 max-w-prose text-sm text-ink-soft">{intro}</p>}
       {children}
     </section>
+  );
+}
+
+function CollapsibleGroup({
+  title,
+  startOpen,
+  headerRight,
+  children,
+}: {
+  title: React.ReactNode;
+  startOpen: boolean;
+  headerRight?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const view = useContext(ViewContext);
+  const shouldOpen =
+    view.expandAll !== undefined && view.expandAll !== null
+      ? view.expandAll
+      : startOpen || !!view.query.trim() || view.needsMe;
+  const [open, setOpen] = useState(shouldOpen);
+
+  useEffect(() => {
+    if (view.expandAll !== undefined && view.expandAll !== null) {
+      setOpen(view.expandAll);
+    } else if (view.query.trim() || view.needsMe) {
+      setOpen(true);
+    }
+  }, [view.expandAll, view.query, view.needsMe]);
+
+  return (
+    <details
+      className="mb-2 rounded-card border border-rule bg-surface/50 shadow-level-1"
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center justify-between gap-2 px-3 py-2 text-base text-ink">
+        <span>{title}</span>
+        {headerRight}
+      </summary>
+      {open && <div className="p-3">{children}</div>}
+    </details>
+  );
+}
+
+function ChunkedList<T>({
+  items,
+  renderItem,
+  chunkSize = 35,
+  className = 'space-y-2',
+}: {
+  items: T[];
+  renderItem: (item: T) => React.ReactNode;
+  chunkSize?: number;
+  className?: string;
+}) {
+  const view = useContext(ViewContext);
+  const [visibleCount, setVisibleCount] = useState(chunkSize);
+  const showAll = Boolean(view.query.trim() || view.needsMe || view.expandAll);
+  const visibleItems = showAll ? items : items.slice(0, visibleCount);
+  const remaining = items.length - visibleCount;
+
+  return (
+    <div>
+      <ul className={className}>{visibleItems.map(renderItem)}</ul>
+      {!showAll && remaining > 0 && (
+        <div className="pt-2 text-center">
+          <button
+            type="button"
+            className="btn-quiet rounded-control min-h-[36px] px-4 py-1 text-sm font-bold text-stamp hover:text-stamp-dark"
+            onClick={() => setVisibleCount((c) => c + chunkSize)}
+          >
+            Show {Math.min(remaining, chunkSize)} more ({remaining} remaining)
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function EditableTitle({
+  value,
+  onSave,
+  disabled,
+  className = 'text-base font-bold text-ink',
+}: {
+  value: string;
+  onSave: (next: string) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setText(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  if (editing) {
+    return (
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          const trimmed = text.trim();
+          if (trimmed && trimmed !== value) {
+            onSave(trimmed);
+          }
+          setEditing(false);
+        }}
+        className="inline-flex items-center gap-1.5"
+      >
+        <input
+          ref={inputRef}
+          type="text"
+          className="field rounded-control px-2 py-0.5 text-sm font-bold"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setText(value);
+              setEditing(false);
+            }
+          }}
+          onBlur={() => {
+            const trimmed = text.trim();
+            if (trimmed && trimmed !== value) {
+              onSave(trimmed);
+            }
+            setEditing(false);
+          }}
+          disabled={disabled}
+        />
+        <button
+          type="submit"
+          className="btn-quiet rounded-control px-2 py-0.5 text-xs font-bold text-stamp hover:text-stamp-dark"
+          disabled={disabled || !text.trim()}
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          className="btn-quiet rounded-control px-2 py-0.5 text-xs text-ink-soft hover:text-ink"
+          onClick={() => {
+            setText(value);
+            setEditing(false);
+          }}
+        >
+          Cancel
+        </button>
+      </form>
+    );
+  }
+
+  return (
+    <span className="group/edit inline-flex items-center gap-1.5">
+      <span className={className}>{value}</span>
+      {!disabled && (
+        <button
+          type="button"
+          aria-label={`Edit name: ${value}`}
+          title="Click to rename"
+          className="rounded-control p-1 text-ink-soft opacity-0 transition-opacity hover:bg-panel hover:text-stamp group-hover/edit:opacity-100 focus:opacity-100"
+          onClick={() => setEditing(true)}
+        >
+          <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+          </svg>
+        </button>
+      )}
+    </span>
   );
 }
 
@@ -390,7 +603,7 @@ function QuestionsSection({ plan, actions }: { plan: ReviewPlan; actions: PlanAc
     >
       <ul className="space-y-3">
         {shown.map((q) => (
-          <li key={q.id} id={itemDomId(q.id)} className="rounded border border-rule p-3">
+          <li key={q.id} id={itemDomId(q.id)} data-plan-item={q.id} className="rounded border border-rule p-3 transition-all">
             <p className="mb-2 text-base font-bold text-ink">
               {q.question} {q.isNew && <Badge tone="stamp">New</Badge>}
             </p>
@@ -427,7 +640,7 @@ function QuestionsSection({ plan, actions }: { plan: ReviewPlan; actions: PlanAc
 
 function TestRow({ test, page, actions }: { test: PlanPageTest; page: PlanPage; actions: PlanActions }) {
   return (
-    <li id={itemDomId(test.id)} className={`rounded bg-canvas/60 p-2 transition-shadow ${test.skipped ? 'opacity-60' : ''}`}>
+    <li id={itemDomId(test.id)} data-plan-item={test.id} className={`rounded bg-canvas/60 p-2 transition-all ${test.skipped ? 'opacity-60' : ''}`}>
       <div className="flex items-start gap-2">
         <ItemToggle label={`Run the test “${test.name}”`} on={!test.skipped} disabled={actions.busy || !!page.skipped} onChange={(on) => actions.setSkipped(test.id, !on)} />
         <div className="min-w-0 flex-1">
@@ -455,7 +668,7 @@ function TestRow({ test, page, actions }: { test: PlanPageTest; page: PlanPage; 
 function PageRow({ page, actions }: { page: PlanPage; actions: PlanActions }) {
   const covered = page.coverage === 'covered';
   return (
-    <li id={itemDomId(page.id)} className={`rounded border border-rule p-3 transition-shadow ${page.skipped ? 'opacity-60' : ''}`}>
+    <li id={itemDomId(page.id)} data-plan-item={page.id} className={`rounded border border-rule p-3 transition-all ${page.skipped ? 'opacity-60' : ''}`}>
       <div className="flex items-start gap-3">
         {!covered && <ItemToggle label={`Test the page ${page.urlPath}`} on={!page.skipped} disabled={actions.busy} onChange={(on) => actions.setSkipped(page.id, !on)} />}
         <div className="min-w-0 flex-1">
@@ -534,31 +747,33 @@ function PagesSection({ plan, actions }: { plan: ReviewPlan; actions: PlanAction
       collapsible
       intro="Every page found. Each tested page is visited at every screen size, as everyone who reached it, and every check runs on it; the tests under it run too. Pages built from one layout are tested through a few Sample Pages."
     >
-      <ul className="space-y-2">
-        {pages
-          .filter((p) => !grouped.has(p.urlPath))
-          .map((page) => (
-            <PageRow key={page.id} page={page} actions={actions} />
-          ))}
-      </ul>
+      <ChunkedList
+        items={pages.filter((p) => !grouped.has(p.urlPath))}
+        renderItem={(page) => <PageRow key={page.id} page={page} actions={actions} />}
+      />
       {groups.map((group) => {
         const members = pages.filter((p) => group.pages.includes(p.urlPath));
         if (members.length === 0) return null;
         const testable = members.filter((p) => p.coverage !== 'covered');
         return (
-          <details key={group.id} className="mt-3 rounded border border-rule" open={members.length <= 6 || !!view.query.trim() || undefined}>
-            <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center justify-between gap-2 px-3 py-2">
+          <CollapsibleGroup
+            key={group.id}
+            title={
               <span className="text-base font-bold text-ink">
                 {group.name} · {group.pages.length} pages, {testable.length} tested
               </span>
+            }
+            startOpen={members.length <= 6}
+            headerRight={
               <BulkSwitch ids={testable.map((p) => p.id)} skippedCount={testable.filter((p) => p.skipped).length} actions={actions} what="this group’s pages" />
-            </summary>
-            <ul className="space-y-2 p-3">
+            }
+          >
+            <ul className="space-y-2">
               {members.map((page) => (
                 <PageRow key={page.id} page={page} actions={actions} />
               ))}
             </ul>
-          </details>
+          </CollapsibleGroup>
         );
       })}
       {pages.length === 0 && <p className="text-sm text-ink-soft">No pages match.</p>}
@@ -601,7 +816,7 @@ function PagesSection({ plan, actions }: { plan: ReviewPlan; actions: PlanAction
 function NavRow({ nav, actions }: { nav: NavigationCheck; actions: PlanActions }) {
   const menuSizes = (nav.menuSteps || []).flatMap((s) => s.onlyAt || []);
   return (
-    <li id={itemDomId(nav.id)} className={`rounded border border-rule p-2.5 transition-shadow ${nav.skipped ? 'opacity-60' : ''}`}>
+    <li id={itemDomId(nav.id)} data-plan-item={nav.id} className={`rounded border border-rule p-2.5 transition-all ${nav.skipped ? 'opacity-60' : ''}`}>
       <div className="flex items-start gap-2">
         <ItemToggle label={`Check the link: ${nav.name}`} on={!nav.skipped} disabled={actions.busy} onChange={(on) => actions.setSkipped(nav.id, !on)} />
         <div className="min-w-0 flex-1">
@@ -667,19 +882,24 @@ function NavigationSection({ plan, actions }: { plan: ReviewPlan; actions: PlanA
           {starts.map((start) => {
             const links = inPage.filter((n) => n.startPage === start);
             return (
-              <details key={start} className="mb-2 rounded border border-rule" open={starts.length <= 3 || !!view.query.trim() || undefined}>
-                <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center justify-between gap-2 px-3 py-2 text-base text-ink">
+              <CollapsibleGroup
+                key={start}
+                title={
                   <span>
                     <span className="font-mono">{start}</span> · {links.length} {links.length === 1 ? 'link' : 'links'}
                   </span>
+                }
+                startOpen={starts.length <= 3}
+                headerRight={
                   <BulkSwitch ids={links.map((n) => n.id)} skippedCount={links.filter((n) => n.skipped).length} actions={actions} what="every link on this page" />
-                </summary>
-                <ul className="space-y-2 p-3">
+                }
+              >
+                <ul className="space-y-2">
                   {links.map((nav) => (
                     <NavRow key={nav.id} nav={nav} actions={actions} />
                   ))}
                 </ul>
-              </details>
+              </CollapsibleGroup>
             );
           })}
         </>
@@ -687,27 +907,25 @@ function NavigationSection({ plan, actions }: { plan: ReviewPlan; actions: PlanA
       {(leaving.length > 0 || hosts.length > 0) && (
         <>
           <h3 className="mb-2 mt-4 text-base font-bold text-ink">Links that leave the site</h3>
-          <ul className="mb-3 space-y-1.5">
-            {hosts.map((host) => (
-              <li key={host.host} className="flex flex-wrap items-center justify-between gap-2 rounded bg-canvas/60 px-3 py-2 text-base text-ink">
-                <span>
-                  <span className="font-mono">{host.host}</span> · {host.links} {host.links === 1 ? 'link' : 'links'}
-                </span>
-                {host.included ? (
-                  <Badge tone="pass">Explored</Badge>
-                ) : (
-                  <button type="button" className="btn-link text-sm" disabled={actions.busy} onClick={() => actions.includeHost(host.host)}>
-                    Explore this site too
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-          <ul className="space-y-2">
-            {leaving.map((nav) => (
-              <NavRow key={nav.id} nav={nav} actions={actions} />
-            ))}
-          </ul>
+          {hosts.length > 0 && (
+            <ul className="mb-3 space-y-1.5">
+              {hosts.map((host) => (
+                <li key={host.host} className="flex flex-wrap items-center justify-between gap-2 rounded bg-canvas/60 px-3 py-2 text-base text-ink">
+                  <span>
+                    <span className="font-mono">{host.host}</span> · {host.links} {host.links === 1 ? 'link' : 'links'}
+                  </span>
+                  {host.included ? (
+                    <Badge tone="pass">Explored</Badge>
+                  ) : (
+                    <button type="button" className="btn-link text-sm" disabled={actions.busy} onClick={() => actions.includeHost(host.host)}>
+                      Explore this site too
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          <ChunkedList items={leaving} renderItem={(nav) => <NavRow key={nav.id} nav={nav} actions={actions} />} />
         </>
       )}
       {all.length === 0 && <p className="text-sm text-ink-soft">No links were found to check.</p>}
@@ -796,47 +1014,115 @@ function DescribeTest({ plan, actions }: { plan: ReviewPlan; actions: PlanAction
   );
 }
 
+function SortableJourneyItem({ flow, actions }: { flow: DiscoveredFlow; actions: PlanActions }) {
+  const id = `journey:${flow.id}`;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: flow.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 30 : undefined,
+  };
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      id={itemDomId(id)}
+      data-plan-item={id}
+      className={`rounded-card border border-rule bg-surface/80 p-3.5 shadow-level-1 transition-all hover:shadow-level-2 ${
+        flow.outOfScope ? 'opacity-60' : ''
+      } ${isDragging ? 'opacity-85 ring-2 ring-stamp shadow-level-4 bg-panel' : ''}`}
+    >
+      <div className="flex items-start gap-2.5">
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          aria-label={`Drag to reorder journey: ${flow.name}`}
+          title="Drag to reorder"
+          className="mt-0.5 inline-flex h-8 w-6 cursor-grab items-center justify-center rounded-control text-ink-soft opacity-60 transition-opacity hover:opacity-100 hover:text-ink active:cursor-grabbing focus:opacity-100"
+        >
+          <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <circle cx="7" cy="4" r="1.5" />
+            <circle cx="13" cy="4" r="1.5" />
+            <circle cx="7" cy="10" r="1.5" />
+            <circle cx="13" cy="10" r="1.5" />
+            <circle cx="7" cy="16" r="1.5" />
+            <circle cx="13" cy="16" r="1.5" />
+          </svg>
+        </button>
+        <ItemToggle label={`Run the journey “${flow.name}”`} on={!flow.outOfScope} disabled={actions.busy} onChange={(on) => actions.setSkipped(id, !on)} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <EditableTitle
+              value={flow.name}
+              onSave={(nextName) => void actions.renameJourney?.(flow.id, nextName)}
+              disabled={actions.busy}
+              className="text-base font-bold text-ink"
+            />
+            {roleName(flow.role) !== 'visitor' && <span className="font-normal text-ink-soft">as {roleName(flow.role)}</span>}
+            <SourceBadge source={flow.source} />
+            {flow.isNew && <Badge tone="stamp">New</Badge>}
+            {flow.needsTestCopy && <Badge tone="warn">Needs a test copy</Badge>}
+          </div>
+          {flow.description && <p className="mt-0.5 text-sm text-ink-soft">{flow.description}</p>}
+          <ol className="mt-2 list-decimal pl-5 text-sm text-ink">
+            {flow.steps.map((step, i) => (
+              <li key={i}>{stepToSentence(step)}</li>
+            ))}
+          </ol>
+          <Expected itemId={id} expectations={flow.candidateExpectations} actions={actions} />
+          {flow.needsHelp?.map((help, i) => (
+            <p key={i} className="mt-1 text-sm text-warn">
+              {help}
+            </p>
+          ))}
+          <div className="mt-2">
+            <ReplanControl label={`Re-plan the journey “${flow.name}” with the AI`} disabled={actions.busy} onReplan={(text) => actions.replan(id, text)} />
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+}
+
 function JourneysSection({ plan, actions }: { plan: ReviewPlan; actions: PlanActions }) {
   const view = useContext(ViewContext);
   const flows = plan.flows.filter((f) => matches(view, `${f.name} ${f.description} ${f.startPage}`) && (!view.needsMe || flowNeedsMe(f)));
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id || !actions.reorderJourneys) return;
+    const oldIndex = plan.flows.findIndex((f) => f.id === active.id);
+    const newIndex = plan.flows.findIndex((f) => f.id === over.id);
+    if (oldIndex !== -1 && newIndex !== -1) {
+      void actions.reorderJourneys(oldIndex, newIndex);
+    }
+  };
+
   return (
-    <Section id="plan-journeys" title="Journeys" count={plan.flows.length} collapsible intro="Things a person does across pages to get something done, step by step.">
-      <ul className="space-y-3">
-        {flows.map((flow) => {
-          const id = `journey:${flow.id}`;
-          return (
-            <li key={flow.id} id={itemDomId(id)} className={`rounded border border-rule p-3 transition-shadow ${flow.outOfScope ? 'opacity-60' : ''}`}>
-              <div className="flex items-start gap-3">
-                <ItemToggle label={`Run the journey “${flow.name}”`} on={!flow.outOfScope} disabled={actions.busy} onChange={(on) => actions.setSkipped(id, !on)} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2 text-base font-bold text-ink">
-                    {flow.name}
-                    {roleName(flow.role) !== 'visitor' && <span className="font-normal text-ink-soft">as {roleName(flow.role)}</span>}
-                    <SourceBadge source={flow.source} />
-                    {flow.isNew && <Badge tone="stamp">New</Badge>}
-                    {flow.needsTestCopy && <Badge tone="warn">Needs a test copy</Badge>}
-                  </div>
-                  {flow.description && <p className="mt-0.5 text-sm text-ink-soft">{flow.description}</p>}
-                  <ol className="mt-2 list-decimal pl-5 text-sm text-ink">
-                    {flow.steps.map((step, i) => (
-                      <li key={i}>{stepToSentence(step)}</li>
-                    ))}
-                  </ol>
-                  <Expected itemId={id} expectations={flow.candidateExpectations} actions={actions} />
-                  {flow.needsHelp?.map((help, i) => (
-                    <p key={i} className="mt-1 text-sm text-warn">
-                      {help}
-                    </p>
-                  ))}
-                  <div className="mt-2">
-                    <ReplanControl label={`Re-plan the journey “${flow.name}” with the AI`} disabled={actions.busy} onReplan={(text) => actions.replan(id, text)} />
-                  </div>
-                </div>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+    <Section
+      id="plan-journeys"
+      title="Journeys"
+      count={plan.flows.length}
+      collapsible
+      intro="Things a person does across pages to get something done, step by step. Drag by the handle to change priority."
+    >
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={flows.map((f) => f.id)} strategy={verticalListSortingStrategy}>
+          <ul className="space-y-3">
+            {flows.map((flow) => (
+              <SortableJourneyItem key={flow.id} flow={flow} actions={actions} />
+            ))}
+          </ul>
+        </SortableContext>
+      </DndContext>
       {plan.flows.length === 0 && <p className="text-sm text-ink-soft">No journeys across pages were planned.</p>}
       {plan.flows.length > 0 && flows.length === 0 && <p className="text-sm text-ink-soft">No journeys match.</p>}
       <DescribeTest plan={plan} actions={actions} />
@@ -927,7 +1213,7 @@ function Overview({ plan, view, setView }: { plan: ReviewPlan; view: View; setVi
     <div className="space-y-3">
       <nav aria-label="Plan contents" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {cards.map(([id, name, value]) => (
-          <a key={id} href={`#${id}`} className="flex min-h-[56px] flex-col justify-center rounded border border-rule bg-surface px-3 py-2 hover:border-stamp">
+          <a key={id} href={`#${id}`} className="interactive flex min-h-[56px] flex-col justify-center rounded-card border border-rule bg-surface/80 px-3 py-2 shadow-level-1 hover:border-stamp hover:shadow-level-2">
             <span className="text-sm text-ink-soft">{name}</span>
             <span className="font-bold text-ink">{value}</span>
           </a>
@@ -945,18 +1231,201 @@ function Overview({ plan, view, setView }: { plan: ReviewPlan; view: View; setVi
           value={view.query}
           onChange={(e) => setView({ ...view, query: e.target.value })}
         />
-        <label className="flex min-h-[44px] cursor-pointer items-center gap-2 text-base text-ink">
-          <input type="checkbox" className="h-5 w-5 accent-[#6C9BF2]" checked={view.needsMe} onChange={(e) => setView({ ...view, needsMe: e.target.checked })} />
-          Only what needs me ({needsMe})
-        </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex min-h-[44px] cursor-pointer items-center gap-2 text-base text-ink">
+            <input type="checkbox" className="h-5 w-5 accent-[#6C9BF2]" checked={view.needsMe} onChange={(e) => setView({ ...view, needsMe: e.target.checked })} />
+            Only what needs me ({needsMe})
+          </label>
+          <button
+            type="button"
+            className="btn-quiet rounded-control min-h-[44px] px-3 text-sm font-bold text-ink hover:text-stamp"
+            onClick={() => setView({ ...view, expandAll: view.expandAll ? false : true })}
+            title={view.expandAll ? 'Collapse all plan sections' : 'Expand all plan sections'}
+          >
+            {view.expandAll ? 'Collapse all' : 'Expand all'}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
+function usePlanKeyboardNavigation() {
+  const [activeItemId, setActiveItemId] = useState<string | null>(null);
+  const chordRef = useRef<string | null>(null);
+  const chordTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      const tagName = activeEl?.tagName.toLowerCase();
+      if (
+        tagName === 'input' ||
+        tagName === 'textarea' ||
+        tagName === 'select' ||
+        (activeEl as HTMLElement)?.isContentEditable ||
+        document.querySelector('[role="dialog"]') !== null
+      ) {
+        return;
+      }
+
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      // Handle 'g' chords
+      if (chordRef.current === 'g') {
+        if (chordTimerRef.current) clearTimeout(chordTimerRef.current);
+        chordRef.current = null;
+
+        const targetMap: Record<string, string> = {
+          s: 'plan-summary',
+          p: 'plan-pages',
+          n: 'plan-navigation',
+          j: 'plan-journeys',
+          q: 'plan-questions',
+          w: 'plan-wontrun',
+          d: 'plan-docs',
+          c: 'plan-checks',
+        };
+
+        if (e.key === 'g') {
+          e.preventDefault();
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          return;
+        }
+
+        const targetId = targetMap[e.key.toLowerCase()];
+        if (targetId) {
+          e.preventDefault();
+          const targetEl = document.getElementById(targetId) || document.getElementById(`${targetId}-title`);
+          targetEl?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          return;
+        }
+      }
+
+      if (e.key === 'g') {
+        chordRef.current = 'g';
+        if (chordTimerRef.current) clearTimeout(chordTimerRef.current);
+        chordTimerRef.current = setTimeout(() => {
+          chordRef.current = null;
+        }, 1200);
+        return;
+      }
+
+      if (e.key === 'G') {
+        e.preventDefault();
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        return;
+      }
+
+      const items = Array.from(document.querySelectorAll<HTMLElement>('[data-plan-item]')).filter(
+        (el) => el.offsetParent !== null
+      );
+      if (items.length === 0) return;
+
+      const currentIndex = items.findIndex((el) => el.dataset.planItem === activeItemId);
+
+      if (e.key === 'j') {
+        e.preventDefault();
+        const nextIndex = currentIndex < items.length - 1 ? currentIndex + 1 : 0;
+        const nextItem = items[nextIndex];
+        const nextId = nextItem.dataset.planItem || null;
+        setActiveItemId(nextId);
+        nextItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
+      }
+
+      if (e.key === 'k') {
+        e.preventDefault();
+        const prevIndex = currentIndex > 0 ? currentIndex - 1 : items.length - 1;
+        const prevItem = items[prevIndex];
+        const prevId = prevItem.dataset.planItem || null;
+        setActiveItemId(prevId);
+        prevItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
+      }
+
+      if (e.key === ' ' && activeItemId) {
+        const activeItem = items.find((el) => el.dataset.planItem === activeItemId);
+        if (activeItem) {
+          const checkbox = activeItem.querySelector<HTMLInputElement>('input[type="checkbox"]');
+          if (checkbox) {
+            e.preventDefault();
+            checkbox.click();
+            return;
+          }
+        }
+      }
+
+      if (e.key === 'Enter' && activeItemId) {
+        const activeItem = items.find((el) => el.dataset.planItem === activeItemId);
+        if (activeItem) {
+          const details = activeItem.querySelector('details') || (activeItem.closest('details') as HTMLDetailsElement | null);
+          if (details) {
+            e.preventDefault();
+            details.open = !details.open;
+            return;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      if (chordTimerRef.current) clearTimeout(chordTimerRef.current);
+    };
+  }, [activeItemId]);
+
+  useEffect(() => {
+    if (!activeItemId) return;
+    const target = document.querySelector<HTMLElement>(`[data-plan-item="${activeItemId}"]`);
+    if (target) {
+      target.classList.add('ring-2', 'ring-stamp', 'bg-stamp-tint/10');
+      return () => {
+        target.classList.remove('ring-2', 'ring-stamp', 'bg-stamp-tint/10');
+      };
+    }
+  }, [activeItemId]);
+
+  return { activeItemId };
+}
+
 /** The complete plan as one readable document: everything that will run, and everything that won't. */
 export function PlanDocument({ plan, actions }: { plan: ReviewPlan; actions: PlanActions }) {
   const [view, setView] = useState<View>({ query: '', needsMe: false });
+  usePlanKeyboardNavigation();
+
+  useEffect(() => {
+    const handleHash = () => {
+      const raw = window.location.hash.slice(1);
+      if (!raw) return;
+      const decoded = decodeURIComponent(raw);
+      const target =
+        document.getElementById(decoded) ||
+        document.getElementById(itemDomId(decoded)) ||
+        document.querySelector<HTMLElement>(`[data-plan-item="${decoded}"]`);
+      if (target) {
+        let parent = target.parentElement;
+        while (parent) {
+          if (parent instanceof HTMLDetailsElement) parent.open = true;
+          parent = parent.parentElement;
+        }
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('ring-2', 'ring-stamp', 'shadow-level-3', 'transition-all', 'duration-300');
+        window.setTimeout(() => {
+          target.classList.remove('ring-2', 'ring-stamp', 'shadow-level-3');
+        }, 3000);
+      }
+    };
+
+    const timer = window.setTimeout(handleHash, 150);
+    window.addEventListener('hashchange', handleHash);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('hashchange', handleHash);
+    };
+  }, []);
+
   return (
     <ViewContext.Provider value={view}>
       <div className="mx-auto w-full max-w-4xl space-y-5 px-4 py-6 sm:px-6">

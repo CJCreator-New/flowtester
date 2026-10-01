@@ -21,10 +21,30 @@ export function TopBar({ route, hubConnected, checkupInProgress }: { route: Rout
   return (
     <header className="sticky top-0 z-50 border-b border-rule bg-surface/95 backdrop-blur-md">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-1 px-4 py-1 sm:px-6">
-        <Link to={PATHS.new} className="inline-flex min-h-[44px] items-center gap-2 font-bold text-ink">
-          <Mark />
-          Release check-up
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link to={PATHS.new} className="inline-flex min-h-[44px] items-center gap-2 font-bold text-ink">
+            <Mark />
+            Release check-up
+          </Link>
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('qa:open-command-palette', { detail: { mode: 'command' } }))}
+            className="hidden items-center gap-2 rounded-control border border-edge/60 bg-panel px-2.5 py-1 text-xs font-medium text-ink-soft hover:border-stamp hover:text-ink transition-colors sm:inline-flex"
+            title="Search commands, sections & shortcuts (Cmd+K)"
+          >
+            <span>Commands</span>
+            <kbd className="rounded border border-edge/40 bg-surface px-1.5 py-0.5 font-mono text-[10px] text-ink">⌘K</kbd>
+          </button>
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('qa:open-command-palette', { detail: { mode: 'shortcuts' } }))}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-edge/60 bg-panel font-mono text-xs font-bold text-ink-soft hover:border-stamp hover:text-ink"
+            title="Keyboard shortcuts (?)"
+            aria-label="Keyboard shortcuts"
+          >
+            ?
+          </button>
+        </div>
         <nav aria-label="Main">
           <ul className="flex flex-wrap items-center gap-x-3 sm:gap-x-5">
             <li>
@@ -38,6 +58,16 @@ export function TopBar({ route, hubConnected, checkupInProgress }: { route: Rout
             <li>
               <Link to={PATHS.reports} aria-current={current(['reports', 'report'])} className={`${item} ${tone(current(['reports', 'report']))}`}>
                 Past check-ups
+              </Link>
+            </li>
+            <li>
+              <Link to={PATHS.baselines} aria-current={current(['baselines'])} className={`${item} ${tone(current(['baselines']))}`}>
+                Baselines
+              </Link>
+            </li>
+            <li>
+              <Link to={PATHS.benchmark} aria-current={current(['benchmark'])} className={`${item} ${tone(current(['benchmark']))}`}>
+                Benchmark
               </Link>
             </li>
             <li>

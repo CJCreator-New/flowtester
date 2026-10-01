@@ -1,11 +1,26 @@
-import { createHash } from 'node:crypto';
-
 export interface FingerprintParams {
   productId: string;
   route: string;
   checkerId: string;
   ruleCode: string;
   selector?: string;
+}
+
+/**
+ * Fast 64-bit deterministic hash (hex-encoded, 16 characters).
+ * Pure TypeScript, zero dependencies, isomorphic across Node.js and Browser.
+ */
+function hashString16(str: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 0x01000193);
+    h2 = Math.imul(h2 ^ (ch >>> 1), 0x27d4eb2d);
+  }
+  const part1 = (h1 >>> 0).toString(16).padStart(8, '0');
+  const part2 = (h2 >>> 0).toString(16).padStart(8, '0');
+  return `${part1}${part2}`;
 }
 
 /**
@@ -49,6 +64,9 @@ export function normalizeRoute(rawRoute: string): string {
   return route.toLowerCase();
 }
 
+/** Canonical URL path normalizer alias (re-exported for consistency across packages) */
+export const normalizeUrlPath = normalizeRoute;
+
 /**
  * Normalizes an element selector:
  * - Standardizes attribute quoting (single to double quotes)
@@ -79,7 +97,7 @@ export function computeStructuralFingerprint(params: FingerprintParams): string 
   const normSelector = normalizeSelector(params.selector);
 
   const payload = [normProduct, normRoute, normChecker, normRule, normSelector].join('|');
-  const hash = createHash('sha256').update(payload).digest('hex').substring(0, 16);
+  const hash = hashString16(payload);
 
   return `fp_${hash}`;
 }

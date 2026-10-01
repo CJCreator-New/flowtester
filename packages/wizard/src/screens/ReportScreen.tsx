@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import type { AspectType, Finding, ReleaseReport } from '@qa/types';
-import { downloadRunFile, finishAiReview, getRun, RunnerError, triageProblem } from '../api';
+import { releaseVerdict, type AspectType, type Finding, type ReleaseReport } from '@qa/types';
+import { downloadRunFile, finishAiReview, getRun, getStoredReleaseGates, RunnerError, triageProblem } from '../api';
 import { DeveloperDetails } from '../components/DeveloperDetails';
 import { SiteMap } from '../components/SiteMap';
 import { ErrorMessage, FocusHeading, Notice, Spinner } from '../components/text';
@@ -110,22 +110,87 @@ function useLightReport(): [boolean, (on: boolean) => void] {
 }
 
 function Report({ report, actions, onReportChanged }: { report: ReleaseReport; actions: ReportActions; onReportChanged: (report: ReleaseReport) => void }) {
-  const summary = summarizeReport(report);
+  const summary = useMemo(() => summarizeReport(report), [report]);
   const host = hostOf(report.targetUrl);
   const { pages, statuses } = useMemo(() => pageResults(report), [report]);
   const [pageFilter, setPageFilter] = useState<string | null>(null);
+  const [mapOpen, setMapOpen] = useState(pages.length <= 6);
   const problemsRef = useRef<HTMLElement>(null);
   const coverage = report.coverage;
   const [light, setLight] = useLightReport();
-  const mustFix = summary.counts.filter((c) => c.severity === 'Blocker' || c.severity === 'Major').reduce((n, c) => n + c.count, 0);
+  const mustFix = useMemo(
+    () => summary.counts.filter((c) => c.severity === 'Blocker' || c.severity === 'Major').reduce((n, c) => n + c.count, 0),
+    [summary]
+  );
   const tokens = Object.entries(report.aiUsage || {});
+  const evaluatedGate = useMemo(() => {
+    const gate = getStoredReleaseGates();
+    return releaseVerdict(report.findings || [], gate);
+  }, [report.findings]);
+
+  useEffect(() => {
+    const handleHash = () => {
+      const raw = window.location.hash.slice(1);
+      if (!raw) return;
+      const decoded = decodeURIComponent(raw);
+      const target = document.getElementById(decoded) || document.querySelector<HTMLElement>(`[data-problem-key="${decoded}"]`);
+      if (target) {
+        const button = target.querySelector<HTMLButtonElement>('button[aria-expanded]') || (target instanceof HTMLButtonElement ? target : null);
+        if (button && button.getAttribute('aria-expanded') === 'false') {
+          button.click();
+        }
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('ring-2', 'ring-stamp', 'shadow-level-3', 'transition-all');
+        window.setTimeout(() => {
+          target.classList.remove('ring-2', 'ring-stamp', 'shadow-level-3');
+        }, 3000);
+      }
+    };
+
+    const timer = window.setTimeout(handleHash, 200);
+    window.addEventListener('hashchange', handleHash);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('hashchange', handleHash);
+    };
+  }, []);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-12 px-4 py-10 sm:px-6 sm:py-12">
+    <div className="mx-auto max-w-6xl space-y-8 px-4 py-8 sm:px-6 sm:py-10">
+      <nav aria-label="Breadcrumbs" className="flex flex-wrap items-center gap-2 text-sm text-ink-soft print:hidden">
+        <Link to={PATHS.reports} className="hover:text-ink transition-colors">
+          Past check-ups
+        </Link>
+        <span aria-hidden="true" className="text-rule">/</span>
+        <button
+          type="button"
+          onClick={() => setPageFilter(null)}
+          className={`hover:text-ink transition-colors ${!pageFilter ? 'font-bold text-ink' : ''}`}
+        >
+          {host}
+        </button>
+        <span aria-hidden="true" className="text-rule">/</span>
+        <span className="font-mono text-xs text-ink-soft">run #{report.runId.slice(0, 8)}</span>
+        {pageFilter && (
+          <>
+            <span aria-hidden="true" className="text-rule">/</span>
+            <span className="font-mono text-xs font-bold text-stamp">{pageFilter}</span>
+            <button
+              type="button"
+              onClick={() => setPageFilter(null)}
+              className="ml-1 text-xs text-ink-soft hover:text-ink"
+              title="Clear page filter"
+            >
+              (show all)
+            </button>
+          </>
+        )}
+      </nav>
+
       <header className="flex flex-col gap-6 sm:flex-row sm:items-center">
         <div className="shrink-0 py-2">
           <FocusHeading
-            className={`stamp inline-block rounded-md border-4 px-5 py-2 font-stamp text-4xl uppercase leading-none tracking-wide sm:text-5xl ${
+            className={`stamp inline-block rounded-card border-4 px-5 py-2 font-stamp text-4xl uppercase leading-none tracking-wide sm:text-5xl ${
               summary.ready ? 'border-pass text-pass' : 'border-fail text-fail'
             }`}
           >
@@ -155,6 +220,40 @@ function Report({ report, actions, onReportChanged }: { report: ReleaseReport; a
 
       <ReportActionsBar report={report} actions={actions} light={light} onLight={setLight} />
 
+      {/* Quality Gate Status */}
+      {evaluatedGate.gate && (
+        <section aria-labelledby="gate-verdict-title" className="rounded-panel border border-edge bg-surface/60 p-4 shadow-level-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-ink-soft">Quality Gate:</span>
+              <span className="font-bold text-ink">
+                {evaluatedGate.gate.strictAccessibility ? 'Strict' : evaluatedGate.gate.maxBlockers === 0 ? 'Standard' : 'Lenient'}
+              </span>
+              <span
+                className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${
+                  evaluatedGate.ready ? 'bg-pass/15 text-pass' : 'bg-fail/15 text-fail'
+                }`}
+              >
+                {evaluatedGate.ready ? 'Passed' : 'Breached'}
+              </span>
+            </div>
+            <Link to={PATHS.settings} className="text-xs font-bold text-stamp hover:underline">
+              Adjust Gate Criteria →
+            </Link>
+          </div>
+          {evaluatedGate.breaches && evaluatedGate.breaches.length > 0 && (
+            <div className="mt-2.5 space-y-1">
+              <span className="text-xs font-bold text-fail">Threshold Breaches:</span>
+              <ul className="list-disc pl-5 text-xs text-fail space-y-0.5">
+                {evaluatedGate.breaches.map((b: string, idx: number) => (
+                  <li key={idx}>{b}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
+
       <VisualReview report={report} onReportChanged={onReportChanged} />
 
       <Problems report={report} pageFilter={pageFilter} onPageFilter={setPageFilter} sectionRef={problemsRef} onReportChanged={onReportChanged} />
@@ -167,29 +266,35 @@ function Report({ report, actions, onReportChanged }: { report: ReleaseReport; a
       <AspectGrades report={report} />
 
       <section aria-labelledby="map-title">
-        <details className="rounded-lg border border-edge" open={pages.length <= 6 || undefined}>
+        <details
+          className="rounded-card border border-edge bg-surface/40 shadow-level-2"
+          open={mapOpen}
+          onToggle={(e) => setMapOpen((e.target as HTMLDetailsElement).open)}
+        >
           <summary className="flex min-h-[56px] cursor-pointer items-center px-4 py-3">
             <h2 id="map-title" className="text-2xl font-bold">
               Map of results
             </h2>
           </summary>
-          <div className="border-t border-rule p-4">
-            <p className="mb-3 text-ink-soft">Every page that was tested, coloured by what was found on it. Choose a page to see its problems.</p>
-            <div className="flex h-[30rem] overflow-hidden rounded-lg border border-edge">
-              <SiteMap
-                pages={pages}
-                journeys={report.siteMap?.journeys}
-                mode="report"
-                maxCards={12}
-                selectedPagePath={pageFilter}
-                pageStatuses={statuses}
-                onSelectPage={(path) => {
-                  setPageFilter(path);
-                  problemsRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
-                }}
-              />
+          {mapOpen && (
+            <div className="border-t border-rule p-4">
+              <p className="mb-3 text-ink-soft">Every page that was tested, coloured by what was found on it. Choose a page to see its problems.</p>
+              <div className="flex h-[30rem] overflow-hidden rounded-card border border-edge">
+                <SiteMap
+                  pages={pages}
+                  journeys={report.siteMap?.journeys}
+                  mode="report"
+                  maxCards={12}
+                  selectedPagePath={pageFilter}
+                  pageStatuses={statuses}
+                  onSelectPage={(path) => {
+                    setPageFilter(path);
+                    problemsRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+                  }}
+                />
+              </div>
             </div>
-          </div>
+          )}
         </details>
       </section>
 
@@ -408,19 +513,19 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
           const problems = checked ? groupProblems(report.findings.filter((f) => data.findings.includes(f.id))) : null;
           const problemCount = problems ? problems['must-fix'].length + problems['should-fix'].length + problems.suggestion.length : 0;
           return (
-            <li key={aspect} className="flex flex-col justify-between gap-3 rounded-lg border border-edge bg-surface p-4">
+            <li key={aspect} className="flex flex-col justify-between gap-3 rounded-card border border-edge bg-surface p-4 shadow-level-1">
               <div className="flex items-center justify-between gap-3">
                 <span>
                   <span className="block font-bold text-ink">{aspect}</span>
                   <span className="block text-sm text-ink-soft">{checked ? count(problemCount, 'problem', 'problems') : 'Nothing here was checked this time'}</span>
                 </span>
                 {checked ? (
-                  <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-md border-2 text-2xl font-bold ${gradeClasses(data.grade)}`}>
+                  <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-control border-2 text-2xl font-bold ${gradeClasses(data.grade)}`}>
                     <span className="sr-only">Grade </span>
                     {data.grade}
                   </span>
                 ) : (
-                  <span className="shrink-0 rounded-md border-2 border-edge px-2 py-1 text-sm font-bold text-ink-soft">Not checked</span>
+                  <span className="shrink-0 rounded-control border-2 border-edge px-2 py-1 text-sm font-bold text-ink-soft">Not checked</span>
                 )}
               </div>
               {checked && sub && (
@@ -460,9 +565,9 @@ function Improvements({ report }: { report: ReleaseReport }) {
           const plainSummary = rec.summary && !looksTechnical(rec.summary) ? rec.summary : null;
           const plainFix = rec.suggestedFix && !looksTechnical(rec.suggestedFix) ? rec.suggestedFix : null;
           return (
-            <li key={rec.id} className="rounded-lg border border-edge bg-surface p-4">
+            <li key={rec.id} className="rounded-card border border-edge bg-surface p-4 shadow-level-1">
               <p className="flex flex-wrap items-center gap-2 text-sm">
-                <span className={`rounded border px-1.5 font-bold ${rec.category === 'quick-win' ? 'border-pass text-pass' : 'border-stamp text-stamp'}`}>
+                <span className={`rounded-control border px-1.5 font-bold ${rec.category === 'quick-win' ? 'border-pass text-pass' : 'border-stamp text-stamp'}`}>
                   {rec.category === 'quick-win' ? 'Quick win' : 'Bigger change'}
                 </span>
                 <span className="text-ink-soft">
@@ -503,7 +608,7 @@ function Changes({ report }: { report: ReleaseReport }) {
       {history.previousTimestamp && <p className="mb-3 text-ink-soft">Compared with the check-up on {formatDay(history.previousTimestamp)}.</p>}
       <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {items.map((item) => (
-          <div key={item.label} className="flex flex-col-reverse rounded-lg border border-edge bg-surface p-4 text-center">
+          <div key={item.label} className="flex flex-col-reverse rounded-card border border-edge bg-surface p-4 text-center shadow-level-1">
             <dt className="text-sm text-ink-soft">{item.label}</dt>
             <dd className={`text-3xl font-bold ${item.tone}`}>{item.value}</dd>
           </div>
@@ -717,18 +822,40 @@ function ProblemItem({
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copiedMd, setCopiedMd] = useState(false);
   const first = group.findings[0];
   const id = `problem-${group.key.replace(/[^A-Za-z0-9_-]+/g, '_')}`;
   const kinds = [...new Map(group.findings.map((f) => searchKind(f)).filter((k): k is NonNullable<typeof k> => !!k).map((k) => [k.label, k])).values()];
   const titles = [...new Set(group.findings.map((f) => f.title))];
+
+  const copyMarkdown = async () => {
+    const md = [
+      `### ${group.title} (${group.bucket})`,
+      `**Category**: ${group.category}`,
+      `**Pages**: ${group.pages.join(', ')}`,
+      '',
+      `**Why it matters**: ${whyItMatters(group)}`,
+      `**How to fix**: ${howToFix(group, looksTechnical)}`,
+      '',
+      `*Reported in run: \`${report.runId}\` for ${report.targetUrl}*`,
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(md);
+      setCopiedMd(true);
+      setTimeout(() => setCopiedMd(false), 2500);
+    } catch {
+      // fallback
+    }
+  };
+
   return (
-    <li className={`rounded-lg border border-l-4 border-rule bg-surface ${BUCKET_BORDER[group.bucket]}`}>
+    <li id={id} data-problem-key={group.key} className={`rounded-card border border-l-4 border-rule bg-surface/80 shadow-level-1 transition-all ${BUCKET_BORDER[group.bucket]}`}>
       <button
         type="button"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-start justify-between gap-3 rounded-lg p-4 text-left hover:bg-panel"
+        className="interactive flex w-full items-start justify-between gap-3 rounded-card p-4 text-left hover:bg-panel/80 hover:shadow-level-2"
       >
         <span className="min-w-0">
           <span className="flex flex-wrap items-center gap-2 font-bold text-ink">
@@ -810,14 +937,24 @@ function ProblemItem({
                 </button>
               </form>
             ) : (
-              <p className="flex flex-wrap gap-x-4 text-sm">
-                <button type="button" className="btn-link text-sm" onClick={() => setMarking('False Positive')}>
-                  Not a problem
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="flex flex-wrap gap-x-4 text-sm">
+                  <button type="button" className="btn-link text-sm" onClick={() => setMarking('False Positive')}>
+                    Not a problem
+                  </button>
+                  <button type="button" className="btn-link text-sm" onClick={() => setMarking('Intended')}>
+                    It’s intended
+                  </button>
+                </p>
+                <button
+                  type="button"
+                  className="btn-quiet rounded-control min-h-[36px] px-3 text-xs font-bold text-ink hover:text-stamp"
+                  onClick={copyMarkdown}
+                  title="Copy problem details formatted as Markdown"
+                >
+                  {copiedMd ? '✓ Copied Markdown' : 'Copy as Markdown'}
                 </button>
-                <button type="button" className="btn-link text-sm" onClick={() => setMarking('Intended')}>
-                  It’s intended
-                </button>
-              </p>
+              </div>
             )}
             {marking && <p className="mt-1 text-sm text-ink-soft">It’s hidden from this report and not raised again for this site. You can undo it.</p>}
             {error && (

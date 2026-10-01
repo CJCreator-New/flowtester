@@ -130,10 +130,23 @@ export function NewCheckupScreen({
   const setChoice = (change: Partial<Pick<CheckupForm, 'owner' | 'markedTestCopy'>>) =>
     onFormChange((f) => ({ ...f, ...change, choicesFor: hostNow ?? f.choicesFor }));
 
+  const [confirmedProd, setConfirmedProd] = useState(false);
+  useEffect(() => {
+    setConfirmedProd(false);
+  }, [form.address]);
+
   const kind = check.state === 'ok' ? testCopyOf(check.facts, form) : null;
   // Search is checked on a live site and not on a test copy, unless the person says otherwise.
   const searchChecksOn = form.searchChecks ?? !(kind?.isTestCopy && form.owner);
-  const canStart = keyReady && check.state === 'ok' && !starting;
+
+  const hasStagingIndicator =
+    !!kind?.natural ||
+    /(?:^|\.)(staging|stg|dev|test|preview|qa|uat)(?:\.|$)/i.test(checkedHost || '') ||
+    /(?:-|\.)(staging|dev|test|preview)(?:\.|$)/i.test(checkedHost || '') ||
+    /\.(vercel\.app|netlify\.app|fly\.dev|railway\.app|onrender\.com)$/i.test(checkedHost || '');
+
+  const needsProdConfirmation = !!kind && !kind.natural && form.markedTestCopy && !hasStagingIndicator && !confirmedProd;
+  const canStart = keyReady && check.state === 'ok' && !starting && !needsProdConfirmation;
   const start = () => {
     if (check.state !== 'ok' || !kind || !canStart) return;
     onStart({ url: check.url, stagingHost: kind.showMark ? form.markedTestCopy : undefined, searchChecks: form.searchChecks ?? undefined });
@@ -206,6 +219,7 @@ export function NewCheckupScreen({
         <input
           id="url-input"
           type="text"
+          autoFocus
           inputMode="url"
           autoComplete="url"
           spellCheck={false}
@@ -245,6 +259,32 @@ export function NewCheckupScreen({
         )}
 
         {kind && <AccessChoice isTestCopyHost={kind.natural} form={form} onChange={setChoice} />}
+
+        {needsProdConfirmation && (
+          <div className="mt-4">
+            <Notice tone="warn" title="This appears to be a live production site">
+              <p>
+                The address doesn’t match typical staging or dev indicators. Form submissions and state-changing actions will be muted unless confirmed.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  className="btn-quiet rounded-control border border-stamp/50 px-3 py-1.5 text-xs font-bold text-stamp hover:text-stamp-dark"
+                  onClick={() => setConfirmedProd(true)}
+                >
+                  ✓ I confirm this is safe to test
+                </button>
+                <button
+                  type="button"
+                  className="text-xs text-ink-soft hover:underline"
+                  onClick={() => setChoice({ owner: true, markedTestCopy: false })}
+                >
+                  Switch to safe inspection mode
+                </button>
+              </div>
+            </Notice>
+          </div>
+        )}
 
         <div className="mt-6 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
           <label htmlFor="max-pages">Explore up to</label>

@@ -1,4 +1,4 @@
-import { normalizeRoute, type Finding } from '@qa/types';
+import { normalizeRoute, normalizeSelector, type Finding } from '@qa/types';
 
 /**
  * One problem, one finding: the same finding seen by several test points, widths or roles is
@@ -11,16 +11,24 @@ export function mergeDuplicateFindings(findings: Finding[]): Finding[] {
     // one element that appears on every page (a small link in the shared header). Anything about
     // a page as a whole (a dead end, a missing title) is one problem per page.
     const isFailedFile = f.checker === 'bug-detection' && (f.evidence.networkLogs?.length ?? 0) > 0;
-    const element = f.where.dataTestId || f.where.cssSelector;
-    const where = isFailedFile ? '' : element ? `element:${element}` : `page:${normalizeRoute(f.where.urlPath)}`;
-    const key = `${f.checker}|${f.title}|${where}`;
+    const rawElement = f.where.dataTestId || f.where.cssSelector;
+    const element = rawElement ? normalizeSelector(rawElement) : undefined;
+    const normUrlPath = normalizeRoute(f.where.urlPath);
+    const where = isFailedFile ? '' : element ? `element:${element}` : `page:${normUrlPath}`;
+    const issueKey = f.issueKey || `${f.checker}|${f.title}|${where}`;
+    const key = issueKey;
     const first = merged.get(key);
     if (!first) {
       merged.set(key, {
         ...f,
+        where: {
+          ...f.where,
+          urlPath: normUrlPath,
+        },
+        issueKey: f.issueKey || issueKey,
         occurrences: 1,
         seenAt: {
-          pages: [normalizeRoute(f.where.urlPath)],
+          pages: [normUrlPath],
           breakpoints: [f.where.breakpoint],
           roles: [f.where.role],
           testCaseIds: f.testCaseId ? [f.testCaseId] : [],
@@ -30,7 +38,7 @@ export function mergeDuplicateFindings(findings: Finding[]): Finding[] {
     }
     first.occurrences = (first.occurrences || 1) + 1;
     const seenAt = first.seenAt!;
-    const page = normalizeRoute(f.where.urlPath);
+    const page = normUrlPath;
     if (!seenAt.pages.includes(page)) seenAt.pages.push(page);
     if (!seenAt.breakpoints.includes(f.where.breakpoint)) seenAt.breakpoints.push(f.where.breakpoint);
     if (!seenAt.roles.includes(f.where.role)) seenAt.roles.push(f.where.role);

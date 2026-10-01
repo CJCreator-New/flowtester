@@ -25,6 +25,7 @@ import { NothingInProgress } from './components/RunStates';
 import { StepBar, type Step } from './components/StepBar';
 import { Spinner } from './components/text';
 import { TopBar } from './components/TopBar';
+import { CommandPalette } from './components/CommandPalette';
 import { useRunnerConnection } from './hooks/useRunnerConnection';
 import { useRunnerStream } from './hooks/useRunnerStream';
 import { DEFAULT_MAX_PAGES, EMPTY_FORM, productContextOf, rolesOf, type CheckupForm } from './lib/form';
@@ -42,6 +43,8 @@ import { ReportScreen } from './screens/ReportScreen';
 import { ScanningScreen, type ScanProgress } from './screens/ScanningScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { TestingScreen } from './screens/TestingScreen';
+import { VisualBaselinesScreen } from './screens/VisualBaselinesScreen';
+import { BenchmarkScreen } from './screens/BenchmarkScreen';
 
 /** How often the runner's state is read while a check-up is in progress, besides its events. */
 const POLL_MS = 5000;
@@ -564,7 +567,11 @@ export default function App() {
             ? `Testing ${host}`
             : route.name === 'plan' && !(plan && status?.phase === 'awaiting-review')
               ? 'Plan'
-              : null
+              : route.name === 'baselines'
+                ? 'Visual Baselines'
+                : route.name === 'benchmark'
+                  ? 'Competitive Benchmarking'
+                  : null
   );
 
   const scanFailure = feed.failure ?? (status?.phase === 'failed' ? plainFailure(status.lastRunError, 'product') : null);
@@ -653,6 +660,12 @@ export default function App() {
           />
         );
         break;
+      case 'baselines':
+        body = <VisualBaselinesScreen />;
+        break;
+      case 'benchmark':
+        body = <BenchmarkScreen initialTargetUrl={status?.targetUrl || undefined} />;
+        break;
       case 'settings':
         body = <SettingsScreen onKeySaved={(model) => setAi({ configured: true, model })} />;
         break;
@@ -671,6 +684,7 @@ export default function App() {
       <TopBar route={route} hubConnected={!!status?.hubConnected} checkupInProgress={inProgress} />
       {step && <StepBar current={step} links={{ address: PATHS.new }} />}
       <main id="main">{body}</main>
+      <CommandPalette route={route} />
       {dialog}
     </div>
   );

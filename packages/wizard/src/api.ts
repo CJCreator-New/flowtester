@@ -1,4 +1,4 @@
-import type { ReleaseReport, RoleCredential, ReviewPlan, DiscoveredFlow, TestCase, RunSummary } from '@qa/types';
+import type { ReleaseReport, RoleCredential, ReviewPlan, DiscoveredFlow, TestCase, RunSummary, CompetitiveBenchmark, ReleaseGateCriteria } from '@qa/types';
 
 /**
  * Every call to the runner lives here, and every failure becomes a RunnerError whose message is a
@@ -438,10 +438,18 @@ export async function patchPlan(body: PatchPlanBody): Promise<ReviewPlan | PlanD
   return json<ReviewPlan | PlanDelta>(res);
 }
 
-export async function approvePlan(options?: { roles?: RoleCredential[]; breakpoints?: string[] }): Promise<void> {
-  const res = await call('/api/runner/plan/approve', { method: 'POST', body: JSON.stringify(options || {}) });
+export async function approvePlan(options?: { roles?: RoleCredential[]; breakpoints?: string[]; idempotencyKey?: string }): Promise<void> {
+  const token = options?.idempotencyKey || `approve-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const res = await call('/api/runner/plan/approve', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': token },
+    body: JSON.stringify(options || {}),
+  });
   if (res.status === 409) {
     const err = await json<{ error: string; code?: string; needsSignIn?: string[] }>(res);
+    if (err.code === 'ERR_DUPLICATE_APPROVAL') {
+      return;
+    }
     throw new RunnerError(err.error, err.code);
   }
   if (res.status === 404) throw new RunnerError('This plan isn’t waiting for review any more. Start a new check-up.', 'ERR_NO_PLAN');
@@ -604,4 +612,129 @@ export async function resumeWaitingPlan(host: string): Promise<{ runId: string; 
   const body = await json<{ runId: string; targetUrl: string; error?: string }>(res);
   if (!res.ok) throw new RunnerError(body.error || 'That plan couldn’t be opened. Try again.');
   return body;
+}
+
+export interface VisualBaselineItem {
+  id: string;
+  testCaseId: string;
+  breakpoint: string;
+  fileName: string;
+  fileSizeBytes: number;
+  updatedAt: string;
+  previewUrl: string;
+  hasRegression?: boolean;
+  diffPercent?: number;
+  diffUrl?: string;
+  currentUrl?: string;
+}
+
+export async function listVisualBaselines(): Promise<VisualBaselineItem[]> {
+  try {
+    const res = await call('/api/runner/baselines');
+    return res.ok ? json<VisualBaselineItem[]>(res) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function acceptVisualBaseline(id: string, currentEvidencePath?: string): Promise<void> {
+  const res = await call('/api/runner/baselines/accept', {
+    method: 'POST',
+    body: JSON.stringify({ id, currentEvidencePath }),
+  });
+  if (!res.ok) throw new RunnerError('Couldn’t accept the new visual baseline.');
+}
+
+export async function deleteVisualBaseline(id: string): Promise<void> {
+  const res = await call(`/api/runner/baselines/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new RunnerError('Couldn’t delete the visual baseline.');
+}
+
+export async function runBenchmark(params: {
+  ourUrl: string;
+  ourName?: string;
+  refUrl: string;
+  refName?: string;
+  flowType?: string;
+  targetGoal?: string;
+}): Promise<CompetitiveBenchmark> {
+  const res = await call('/api/runner/benchmark', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const err = await json<{ error?: string }>(res).catch((): { error?: string } => ({}));
+    throw new RunnerError(err.error || 'Benchmarking failed. Check the addresses and try again.');
+  }
+  return json<CompetitiveBenchmark>(res);
+}
+
+export interface CheckupSchedule {
+  id: string;
+  name: string;
+  targetUrl: string;
+  cadence: 'daily' | 'weekly' | 'hourly';
+  hour: number;
+  dayOfWeek?: number;
+  preset: 'full' | 'quick';
+  enabled: boolean;
+  createdAt: string;
+  lastRunAt?: string;
+  lastRunStatus?: 'passed' | 'failed';
+  nextRunAt: string;
+}
+
+export async function listSchedules(): Promise<CheckupSchedule[]> {
+  try {
+    const res = await call('/api/runner/schedules');
+    return res.ok ? json<CheckupSchedule[]>(res) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function addSchedule(input: {
+  targetUrl: string;
+  name?: string;
+  cadence?: 'daily' | 'weekly' | 'hourly';
+  hour?: number;
+  dayOfWeek?: number;
+  preset?: 'full' | 'quick';
+}): Promise<CheckupSchedule> {
+  const res = await call('/api/runner/schedules', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new RunnerError('Couldn’t create the scheduled check-up.');
+  return json<CheckupSchedule>(res);
+}
+
+export async function toggleSchedule(id: string, enabled: boolean): Promise<CheckupSchedule> {
+  const res = await call(`/api/runner/schedules/${encodeURIComponent(id)}/toggle`, {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new RunnerError('Couldn’t update the schedule status.');
+  return json<CheckupSchedule>(res);
+}
+
+export async function deleteSchedule(id: string): Promise<void> {
+  const res = await call(`/api/runner/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new RunnerError('Couldn’t delete the schedule.');
+}
+
+const GATES_STORAGE_KEY = 'qa_release_gate_criteria';
+
+export function getStoredReleaseGates(): ReleaseGateCriteria {
+  try {
+    const saved = localStorage.getItem(GATES_STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch {}
+  return { maxBlockers: 0, maxMajors: 0, strictAccessibility: true };
+}
+
+export function saveStoredReleaseGates(gates: ReleaseGateCriteria): void {
+  try {
+    localStorage.setItem(GATES_STORAGE_KEY, JSON.stringify(gates));
+  } catch {}
 }

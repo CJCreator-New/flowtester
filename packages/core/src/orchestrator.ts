@@ -11,6 +11,7 @@ import type {
   RunCoverage,
   TraceabilityEntry,
 } from '@qa/types';
+import { normalizeRoute } from '@qa/types';
 import { BrowserManager, BREAKPOINT_VIEWPORTS, locateElement } from './browser.js';
 import { EvidenceCollector } from './evidence.js';
 import { PreFlightChecker } from './preflight.js';
@@ -123,9 +124,10 @@ export function sitePathOf(urlPath: string, targetUrl: string): string {
   try {
     const target = new URL(targetUrl);
     const url = new URL(urlPath, target);
-    return url.host === target.host ? url.pathname : url.origin + url.pathname;
+    const route = normalizeRoute(url.pathname);
+    return url.host === target.host ? route : url.origin + route;
   } catch {
-    return urlPath;
+    return normalizeRoute(urlPath);
   }
 }
 

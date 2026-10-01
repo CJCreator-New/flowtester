@@ -13,6 +13,8 @@ export type Route =
   | { name: 'testing' }
   | { name: 'reports' }
   | { name: 'report'; runId: string }
+  | { name: 'baselines' }
+  | { name: 'benchmark' }
   | { name: 'settings' }
   | { name: 'not-found'; path: string };
 
@@ -23,6 +25,8 @@ export const PATHS = {
   testing: '/check/testing',
   reports: '/reports',
   report: (runId: string) => `/reports/${encodeURIComponent(runId)}`,
+  baselines: '/baselines',
+  benchmark: '/benchmark',
   settings: '/settings',
 } as const;
 
@@ -39,6 +43,10 @@ export function matchRoute(pathname: string): Route {
       return { name: 'testing' };
     case PATHS.reports:
       return { name: 'reports' };
+    case PATHS.baselines:
+      return { name: 'baselines' };
+    case PATHS.benchmark:
+      return { name: 'benchmark' };
     case PATHS.settings:
       return { name: 'settings' };
   }

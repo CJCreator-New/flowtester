@@ -8,7 +8,7 @@ export class PreFlightChecker {
   async checkUrlReachable(
     url: string,
     tunnelAuth?: string
-  ): Promise<{ ok: boolean; status?: number; error?: string }> {
+  ): Promise<{ ok: boolean; status?: number; error?: string; testCopyHeader?: boolean }> {
     try {
       const headers: Record<string, string> = {
         'User-Agent': 'QA-Readiness-Checker/0.1.0',
@@ -28,9 +28,15 @@ export class PreFlightChecker {
       });
       clearTimeout(timeoutId);
 
+      const isTestCopyHeader =
+        res.headers.get('x-test-copy') === 'true' ||
+        res.headers.get('x-staging') === 'true' ||
+        ['staging', 'test', 'development', 'dev'].includes((res.headers.get('x-environment') || '').toLowerCase());
+
       return {
         ok: res.status < 500,
         status: res.status,
+        testCopyHeader: isTestCopyHeader,
       };
     } catch (err: unknown) {
       return {

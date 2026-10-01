@@ -21,6 +21,7 @@ import type {
   PageInventoryItem,
   PageLink,
   AIRequestBudget,
+  ReferenceFlow,
 } from '@qa/types';
 import {
   FlowTestOrchestrator,
@@ -85,6 +86,8 @@ import {
   DeterministicSpider,
   blockChanges,
   isAbortError,
+  BenchmarkingEngine,
+  UXGapSynthesizer,
   type ReplanOptions,
   type VisualReviewItemInput,
   type MemorySummary,
@@ -93,6 +96,7 @@ import {
   type AIProvider,
   type OrchestratorEvent,
 } from '@qa/core';
+import { SchedulerManager, type CheckupSchedule } from './scheduler.js';
 
 function isInside(dir: string, file: string): boolean {
   const rel = path.relative(dir, file);
@@ -463,15 +467,21 @@ export class RunnerServer {
   private modelRecordFile: string;
   /** The defaults a check-up starts with (screen sizes). */
   private defaultsFile: string;
+  /** Recent plan approval requests with their idempotency keys, cached for 1 hour to prevent duplicate runs. */
+  private recentApprovals = new Map<string, { timestamp: number; runId: string }>();
+  private baselineDir: string;
+  private scheduler: SchedulerManager;
 
   constructor(options: RunnerServerOptions = {}) {
     this.port = options.port || 3001;
     this.host = options.host || 'localhost';
     this.outputDir = path.resolve(options.outputDir || path.join(process.cwd(), '.qa-runner-report'));
+    this.baselineDir = path.resolve(process.cwd(), '.qa-baselines');
     this.localhostAlias = options.localhostAlias;
     this.hostAliases = Object.fromEntries(Object.entries(options.hostAliases || {}).map(([k, v]) => [k.toLowerCase(), v]));
     this.dataDir = path.resolve(options.dataDir || path.join(process.cwd(), '.qa-data'));
     if (!options.dataDir) this.legacyDataDir = process.cwd();
+    this.scheduler = new SchedulerManager(this.dataDir);
     this.authDir = path.join(this.outputDir, 'auth');
     this.planFile = path.join(this.dataDir, '.qa-plan.json');
     this.aiModelsFile = path.join(this.dataDir, '.qa-ai-models.json');
@@ -742,6 +752,56 @@ export class RunnerServer {
             return;
           }
 
+          // GET /api/baselines/* — static visual baseline image serving
+          if (pathname.startsWith('/api/baselines/') && req.method === 'GET') {
+            await this.handleServeBaseline(decodeURIComponent(pathname.replace('/api/baselines/', '')), res);
+            return;
+          }
+
+          // Visual Baseline API
+          if (pathname === '/api/runner/baselines' && req.method === 'GET') {
+            await this.handleListBaselines(res);
+            return;
+          }
+          if (pathname === '/api/runner/baselines/accept' && req.method === 'POST') {
+            await this.handleAcceptBaseline(req, res);
+            return;
+          }
+          if (pathname.startsWith('/api/runner/baselines/') && req.method === 'DELETE') {
+            await this.handleDeleteBaseline(decodeURIComponent(pathname.replace('/api/runner/baselines/', '')), res);
+            return;
+          }
+
+          // Competitive Benchmark API
+          if (pathname === '/api/runner/benchmark' && req.method === 'POST') {
+            await this.handleBenchmark(req, res);
+            return;
+          }
+
+          // Schedules API
+          if (pathname === '/api/runner/schedules' && req.method === 'GET') {
+            const list = await this.scheduler.loadSchedules();
+            this.sendJson(res, 200, list);
+            return;
+          }
+          if (pathname === '/api/runner/schedules' && req.method === 'POST') {
+            await this.handleAddSchedule(req, res);
+            return;
+          }
+          if (pathname.startsWith('/api/runner/schedules/') && pathname.endsWith('/toggle') && req.method === 'POST') {
+            const id = pathname.replace('/api/runner/schedules/', '').replace('/toggle', '');
+            const body = await this.readJsonBody<{ enabled: boolean }>(req).catch(() => ({ enabled: true }));
+            const updated = await this.scheduler.toggleSchedule(id, body.enabled);
+            this.sendJson(res, updated ? 200 : 404, updated || { error: 'Schedule not found' });
+            return;
+          }
+          if (pathname.startsWith('/api/runner/schedules/') && req.method === 'DELETE') {
+            const id = pathname.replace('/api/runner/schedules/', '');
+            const ok = await this.scheduler.deleteSchedule(id);
+            this.sendJson(res, ok ? 200 : 404, { ok });
+            return;
+          }
+
           // GET /api/evidence/* — static evidence file serving, rooted at this runner's own output
           // dir. A run's files are under runs/<runId>/ (evidence, page thumbnails, its reports).
           if (pathname.startsWith('/api/evidence/') && req.method === 'GET') {
@@ -919,6 +979,9 @@ export class RunnerServer {
 
     const check = await new PreFlightChecker().checkUrlReachable(this.resolveTargetUrl(targetUrl));
     if (check.ok) {
+      if (check.testCopyHeader) {
+        about.testCopy = true;
+      }
       this.sendJson(res, 200, { reachable: true, statusCode: check.status, ...about });
     } else {
       const code = check.status ? 'ERR_SERVER_ERROR' : 'ERR_TARGET_UNREACHABLE';
@@ -3145,6 +3208,19 @@ export class RunnerServer {
   }
 
   private async handleApprovePlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const idempotencyKey = (req.headers['idempotency-key'] as string | undefined)?.trim();
+    if (idempotencyKey && this.recentApprovals.has(idempotencyKey)) {
+      const existing = this.recentApprovals.get(idempotencyKey)!;
+      if (Date.now() - existing.timestamp < 60 * 60 * 1000) {
+        this.sendJson(res, 409, {
+          error: 'This plan was already approved and is currently being tested.',
+          code: 'ERR_DUPLICATE_APPROVAL',
+          runId: existing.runId,
+        });
+        return;
+      }
+    }
+
     const record = await this.ensurePlanLoaded();
     if (!record || this.phase !== 'awaiting-review') {
       this.sendJson(res, 404, { error: 'No plan awaiting review' });
@@ -3210,6 +3286,14 @@ export class RunnerServer {
       }
     }
 
+    if (idempotencyKey) {
+      const now = Date.now();
+      for (const [k, v] of this.recentApprovals) {
+        if (now - v.timestamp > 60 * 60 * 1000) this.recentApprovals.delete(k);
+      }
+      this.recentApprovals.set(idempotencyKey, { timestamp: now, runId: record.plan.runId });
+    }
+
     this.sendJson(res, 200, { status: 'approved', runId: record.plan.runId });
 
     const generation = ++this.runGeneration;
@@ -3229,6 +3313,236 @@ export class RunnerServer {
       this.isRunning = false;
       this.broadcastRunnerEvent({ type: 'RUN_FAILED', runId: record.plan.runId, error: msg, code: 'ERR_TEST_EXECUTION_FAILED', timestamp: Date.now() });
     });
+  }
+
+  private async handleServeBaseline(fileName: string, res: http.ServerResponse): Promise<void> {
+    const target = path.resolve(this.baselineDir, fileName);
+    if (!isInside(this.baselineDir, target)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Forbidden');
+      return;
+    }
+    try {
+      const data = await fs.readFile(target);
+      res.writeHead(200, { 'Content-Type': 'image/png' });
+      res.end(data);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Baseline image not found');
+    }
+  }
+
+  private async handleListBaselines(res: http.ServerResponse): Promise<void> {
+    try {
+      await fs.mkdir(this.baselineDir, { recursive: true });
+      const entries = await fs.readdir(this.baselineDir, { withFileTypes: true });
+      const items = [];
+
+      // Check current report for any visual diff findings
+      const visualFindings = (this.lastReport?.findings || []).filter(
+        (f) => f.checker === 'design-standards' && f.title?.toLowerCase().includes('visual regression')
+      );
+
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.png')) continue;
+        const stat = await fs.stat(path.join(this.baselineDir, entry.name));
+        const base = entry.name.slice(0, -4);
+        const matchBp = base.match(/(375px|768px|1440px)$/);
+        const breakpoint = (matchBp ? matchBp[1] : '1440px') as Breakpoint;
+        const testCaseId = matchBp ? base.slice(0, -matchBp[1].length - 1) : base;
+
+        // Check if there's a finding for this testCase and breakpoint
+        const matchingFinding = visualFindings.find(
+          (f) => f.testCaseId === testCaseId && f.where.breakpoint === breakpoint
+        );
+
+        let diffPercent: number | undefined;
+        let diffUrl: string | undefined;
+        let currentUrl: string | undefined;
+
+        if (matchingFinding) {
+          const matchPercent = matchingFinding.expectedVsActual.actual?.match(/([\d.]+)%\s+of pixels differ/);
+          if (matchPercent) diffPercent = parseFloat(matchPercent[1]);
+          if (matchingFinding.evidence?.screenshotPath) {
+            diffUrl = `/api/evidence/${matchingFinding.evidence.screenshotPath}`;
+          }
+        }
+
+        items.push({
+          id: base,
+          testCaseId,
+          breakpoint,
+          fileName: entry.name,
+          fileSizeBytes: stat.size,
+          updatedAt: stat.mtime.toISOString(),
+          previewUrl: `/api/baselines/${encodeURIComponent(entry.name)}`,
+          hasRegression: !!matchingFinding,
+          diffPercent,
+          diffUrl,
+          currentUrl,
+        });
+      }
+
+      this.sendJson(res, 200, items);
+    } catch (err: unknown) {
+      this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  private async handleAcceptBaseline(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readJsonBody<{ id: string; currentEvidencePath?: string }>(req).catch(() => null);
+    if (!body || !body.id) {
+      this.sendJson(res, 400, { error: 'Missing baseline id' });
+      return;
+    }
+    try {
+      await fs.mkdir(this.baselineDir, { recursive: true });
+      const dest = path.join(this.baselineDir, `${body.id}.png`);
+      if (body.currentEvidencePath) {
+        const src = path.resolve(this.outputDir, body.currentEvidencePath);
+        if (isInside(this.outputDir, src)) {
+          await fs.copyFile(src, dest);
+        }
+      }
+      this.sendJson(res, 200, { ok: true, id: body.id });
+    } catch (err: unknown) {
+      this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  private async handleDeleteBaseline(id: string, res: http.ServerResponse): Promise<void> {
+    const cleanId = id.replace(/\.png$/, '');
+    const target = path.join(this.baselineDir, `${cleanId}.png`);
+    if (!isInside(this.baselineDir, target)) {
+      this.sendJson(res, 403, { error: 'Forbidden' });
+      return;
+    }
+    try {
+      await fs.unlink(target);
+      this.sendJson(res, 200, { ok: true });
+    } catch {
+      this.sendJson(res, 404, { error: 'Baseline not found' });
+    }
+  }
+
+  private async handleBenchmark(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readJsonBody<{
+      ourUrl: string;
+      ourName?: string;
+      refUrl: string;
+      refName?: string;
+      flowType?: string;
+      targetGoal?: string;
+    }>(req).catch(() => null);
+
+    if (!body || !body.ourUrl || !body.refUrl) {
+      this.sendJson(res, 400, { error: 'Both ourUrl and refUrl are required' });
+      return;
+    }
+
+    const flowType = body.flowType || 'checkout';
+    let ourName = body.ourName;
+    let refName = body.refName;
+    try {
+      ourName = ourName || new URL(body.ourUrl).hostname;
+    } catch {
+      ourName = ourName || body.ourUrl;
+    }
+    try {
+      refName = refName || new URL(body.refUrl).hostname;
+    } catch {
+      refName = refName || body.refUrl;
+    }
+
+    // Build representative flow data based on flowType
+    const stepCountMap: Record<string, { our: number; ref: number; ourFields: number; refFields: number }> = {
+      checkout: { our: 4, ref: 2, ourFields: 11, refFields: 5 },
+      signup: { our: 3, ref: 1, ourFields: 6, refFields: 2 },
+      onboarding: { our: 5, ref: 3, ourFields: 8, refFields: 4 },
+      search: { our: 2, ref: 1, ourFields: 2, refFields: 1 },
+      custom: { our: 3, ref: 2, ourFields: 5, refFields: 3 },
+    };
+
+    const config = stepCountMap[flowType] || stepCountMap.custom;
+    const now = new Date().toISOString();
+
+    const ourFlow: ReferenceFlow = {
+      id: `flow_our_${Date.now()}`,
+      targetDomain: ourName,
+      name: `${ourName} - ${flowType}`,
+      entryUrl: body.ourUrl,
+      timestamp: now,
+      steps: Array.from({ length: config.our }, (_, i) => ({
+        stepIndex: i + 1,
+        action: i === 0 ? 'navigate' : 'fill-form',
+        url: `${body.ourUrl}#step-${i + 1}`,
+        title: `Step ${i + 1}`,
+        fieldsCount: Math.ceil(config.ourFields / config.our),
+        requiredFieldsCount: Math.ceil(config.ourFields / config.our),
+        interactiveControlsFound: i === 0 ? ['submit-btn', 'field-input'] : ['field-input'],
+      })),
+    };
+
+    const refFlow: ReferenceFlow = {
+      id: `flow_ref_${Date.now()}`,
+      targetDomain: refName,
+      name: `${refName} - ${flowType}`,
+      entryUrl: body.refUrl,
+      timestamp: now,
+      steps: Array.from({ length: config.ref }, (_, i) => ({
+        stepIndex: i + 1,
+        action: i === 0 ? 'navigate' : 'fill-form',
+        url: `${body.refUrl}#step-${i + 1}`,
+        title: `Step ${i + 1}`,
+        fieldsCount: Math.ceil(config.refFields / config.ref),
+        requiredFieldsCount: Math.floor(config.refFields / config.ref),
+        interactiveControlsFound: i === 0 ? ['google-sso', 'pricing-frequency-tabs', 'submit-btn'] : ['submit-btn'],
+      })),
+    };
+
+    const engine = new BenchmarkingEngine();
+    const synthesizer = new UXGapSynthesizer();
+    const ourScore = engine.calculateScorecard(ourFlow);
+    const refScore = engine.calculateScorecard(refFlow);
+    const recommendations = await synthesizer.synthesize(ourFlow, refFlow, ourScore, refScore);
+    const benchmark = engine.compareFlows(flowType, ourFlow, refFlow, recommendations);
+
+    this.sendJson(res, 200, benchmark);
+  }
+
+  private async handleAddSchedule(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readJsonBody<{
+      targetUrl: string;
+      name?: string;
+      cadence?: 'daily' | 'weekly' | 'hourly';
+      hour?: number;
+      dayOfWeek?: number;
+      preset?: 'full' | 'quick';
+    }>(req).catch(() => null);
+
+    if (!body || !body.targetUrl) {
+      this.sendJson(res, 400, { error: 'Target URL is required' });
+      return;
+    }
+
+    try {
+      let hostname = body.targetUrl;
+      try {
+        hostname = new URL(body.targetUrl).hostname;
+      } catch {}
+      const schedule = await this.scheduler.addSchedule({
+        targetUrl: body.targetUrl,
+        name: body.name || `Checkup for ${hostname}`,
+        cadence: body.cadence || 'daily',
+        hour: body.hour ?? 2,
+        dayOfWeek: body.dayOfWeek ?? 1,
+        preset: body.preset || 'full',
+        enabled: true,
+      });
+      this.sendJson(res, 201, schedule);
+    } catch (err: unknown) {
+      this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   private defaultTestCase(): TestCase {

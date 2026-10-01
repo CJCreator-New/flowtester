@@ -9,6 +9,8 @@ describe('every screen has an address', () => {
     ['/check/testing/', { name: 'testing' }],
     ['/reports', { name: 'reports' }],
     ['/reports/run-1790000000000', { name: 'report', runId: 'run-1790000000000' }],
+    ['/baselines', { name: 'baselines' }],
+    ['/benchmark', { name: 'benchmark' }],
     ['/settings', { name: 'settings' }],
     ['/studio', { name: 'not-found', path: '/studio' }],
     ['/reports/a/b', { name: 'not-found', path: '/reports/a/b' }],
