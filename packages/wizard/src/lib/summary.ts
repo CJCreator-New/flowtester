@@ -1,6 +1,7 @@
 import type { AspectType, CheckerType, Finding, FindingSeverity, ReleaseReport } from '@qa/types';
-// The verdict module only: the package index also exports Node-only code (fingerprints).
+// The verdict and problem modules only: the package index also exports Node-only code (fingerprints).
 import { countsTowardVerdict, releaseVerdict } from '@qa/types/src/verdict.js';
+import { ASPECT_CHECKERS, ASPECTS, aspectOfChecker, groupIntoProblems, plainTitleText, SEVERITY_ORDER } from '@qa/types/src/problems.js';
 
 export interface SeverityCount {
   severity: FindingSeverity;
@@ -28,9 +29,9 @@ export interface ReportSummary {
   readOnly: boolean;
   /** Checks based on an AI guess the site didn't match: not issues until someone confirms them. */
   toConfirm: number;
+  /** The findings behind the problems, for the developer details. */
+  findings: number;
 }
-
-const SEVERITY_ORDER: FindingSeverity[] = ['Blocker', 'Major', 'Minor', 'Suggestion'];
 
 const SEVERITY_WORDS: Record<FindingSeverity, (n: number) => string> = {
   Blocker: (n) => `${n} ${n === 1 ? 'blocks' : 'block'} release`,
@@ -39,7 +40,7 @@ const SEVERITY_WORDS: Record<FindingSeverity, (n: number) => string> = {
   Suggestion: (n) => `${n} ${n === 1 ? 'suggestion' : 'suggestions'}`,
 };
 
-export function category(f: Pick<Finding, 'checker' | 'id'>): string {
+export function category(f: Pick<Finding, 'checker' | 'id'> & { categoryTag?: string }): string {
   switch (f.checker) {
     case 'bug-detection':
       return 'Something broke';
@@ -54,7 +55,9 @@ export function category(f: Pick<Finding, 'checker' | 'id'>): string {
     case 'performance':
       return 'Speed and phones';
     case 'seo':
-      return 'Being found in search';
+      if (f.categoryTag === 'GEO' || f.id.includes('GEO')) return 'AI search';
+      if (f.categoryTag === 'AEO' || f.id.includes('AEO')) return 'AI answers';
+      return 'Search';
     case 'ai-review':
       return 'How it looks and reads';
     case 'ux-quality':
@@ -64,71 +67,10 @@ export function category(f: Pick<Finding, 'checker' | 'id'>): string {
   }
 }
 
-/** The report's six areas, and the checks behind each (the same mapping as the grades). */
-export const ASPECT_CHECKERS: Record<AspectType, CheckerType[]> = {
-  Works: ['bug-detection', 'spec-conformance'],
-  Accessible: ['ux-quality'],
-  'Fast and mobile': ['performance'],
-  Findable: ['seo'],
-  Secure: ['security', 'permission-matrix'],
-  'Looks and reads well': ['design-standards', 'ai-review'],
-};
-
-export const ASPECTS: AspectType[] = ['Works', 'Accessible', 'Fast and mobile', 'Findable', 'Secure', 'Looks and reads well'];
+export { ASPECT_CHECKERS, ASPECTS, plainTitleText };
 
 export function aspectOf(checker: CheckerType): AspectType {
-  return ASPECTS.find((a) => ASPECT_CHECKERS[a].includes(checker)) ?? 'Works';
-}
-
-/** Rewrites a technical finding title as a sentence; unknown shapes are only tidied. */
-export function plainTitleText(t: string): string {
-  let m: RegExpMatchArray | null;
-  if ((m = t.match(/^Third-party request failed/))) return 'A service your site relies on didn’t respond';
-  if ((m = t.match(/^HTTP (\d{3})/))) return `A request to your site failed (error ${m[1]})`;
-  if (/^HTTP Failed/.test(t)) return 'A request to your site didn’t go through';
-  if (/^Uncaught Exception/.test(t)) return 'The page crashed while it was running';
-  if (/^Console Error/.test(t)) return 'The page reported an error behind the scenes';
-  if ((m = t.match(/^Step failed: "(.+)"$/))) return `Couldn’t complete “${m[1]}”`;
-  if (/^Touch target too small/.test(t)) return 'A button is too small to tap easily on a phone';
-  if (/^Dead End Page/.test(t)) return 'A page has no way back or menu to leave it';
-  if (/^Horizontal page overflow/.test(t)) return 'The page is wider than the screen and scrolls sideways';
-  if (/^Visual regression/.test(t)) return 'A screen looks different from its approved version';
-  if (/^Design Token Mismatch/.test(t)) return 'A colour or shape doesn’t match the design';
-  if ((m = t.match(/^URL did not match expected pattern:?\s*["']?(?:\^)?(.*?)(?:\$)?["']?$/i))) {
-    const raw = m[1].replace(/\\\//g, '/').replace(/\/\.\*$/, '').replace(/\\[a-zA-Z0-9+*.]+/g, '').replace(/\/+$/, '');
-    const target = raw || 'the expected page';
-    return `Didn’t reach “${target}” as expected`;
-  }
-  if (/^URL did not match/i.test(t)) return 'Didn’t reach the expected page';
-
-  if (/Elements must meet minimum color contrast ratio thresholds/i.test(t) || /color-contrast/i.test(t)) {
-    return 'Text doesn’t have enough contrast with its background';
-  }
-  if (/Images must have alternate text/i.test(t) || /image-alt/i.test(t)) {
-    return 'An image is missing a text description for screen readers';
-  }
-  if (/Buttons must have discernible text/i.test(t) || /button-name/i.test(t)) {
-    return 'A button is missing a visible or spoken label';
-  }
-  if (/Links must have discernible text/i.test(t) || /link-name/i.test(t)) {
-    return 'A link has no text explaining where it goes';
-  }
-  if (/Document should have one main landmark/i.test(t) || /landmark-one-main/i.test(t)) {
-    return 'The page is missing a main landmark';
-  }
-  if (/All page content should be contained by landmarks/i.test(t) || /region/i.test(t)) {
-    return 'Some page content is outside layout landmarks';
-  }
-  if (/Page should have title element/i.test(t) || /document-title/i.test(t)) {
-    return 'The page is missing a title';
-  }
-  if (/Heading order should be sequential/i.test(t) || /heading-order/i.test(t)) {
-    return 'Headings are out of order';
-  }
-  if (/Form elements must have labels/i.test(t) || /label/i.test(t)) {
-    return 'A form field is missing a label';
-  }
-  return t.replace(/^WCAG Violation:\s*/i, '').replace(/\s*\([a-z0-9-]+\)$/i, '');
+  return aspectOfChecker(checker);
 }
 
 /** Rewrites the report's technical finding titles as sentences; unknown shapes are only tidied. */
@@ -138,19 +80,17 @@ export function plainTitle(f: Pick<Finding, 'title'>): string {
 
 export function summarizeReport(report: ReleaseReport): ReportSummary {
   const verdict = releaseVerdict(report.findings);
-  const active = report.findings.filter(
-    (f) => f.triageStatus !== 'Intended' && f.triageStatus !== 'False Positive' && !f.needsConfirmation
-  );
+  const problems = groupIntoProblems(report.findings).filter((p) => !p.toConfirm);
   const total = verdict.total;
 
   const counts = SEVERITY_ORDER.map((severity) => ({ severity, count: verdict.counts[severity] }))
     .filter((c) => c.count > 0)
     .map((c) => ({ ...c, sentence: SEVERITY_WORDS[c.severity](c.count) }));
 
-  const top = [...active]
-    .sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity))
+  const top = [...problems]
+    .sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) || b.pages.length - a.pages.length)
     .slice(0, 3)
-    .map((f) => ({ title: plainTitle(f), category: category(f), severity: f.severity }));
+    .map((p) => ({ title: p.title, category: category(p.findings[0]), severity: p.severity }));
 
   return {
     ready: verdict.ready,
@@ -167,6 +107,7 @@ export function summarizeReport(report: ReleaseReport): ReportSummary {
     top,
     readOnly: report.scanMode === 'safe-public' || report.scanMode === 'read-only',
     toConfirm: verdict.toConfirm,
+    findings: verdict.findings,
   };
 }
 
@@ -195,7 +136,10 @@ export interface ProblemGroup {
   key: string;
   title: string;
   category: string;
+  /** The area it counts toward. */
   aspect: AspectType;
+  /** Every area it touches, when more than one check found it (a missing title is also a search problem). */
+  aspects: AspectType[];
   bucket: Bucket;
   severity: FindingSeverity;
   findings: Finding[];
@@ -205,27 +149,26 @@ export interface ProblemGroup {
 
 /**
  * The report's problems, grouped by what to fix first, then by problem: the same problem on
- * several pages is one entry that lists the pages. Findings marked as intended or false positives
- * are left out.
+ * several pages, or found by several checks, is one entry that lists them. It's the grouping the
+ * verdict counts (see @qa/types problems.ts), so the numbers and the list always agree. Findings
+ * marked as intended or false positives are left out.
  */
 export function groupProblems(findings: Finding[]): Record<Bucket, ProblemGroup[]> {
-  const groups = new Map<string, ProblemGroup>();
-  for (const f of findings) {
-    if (f.triageStatus === 'Intended' || f.triageStatus === 'False Positive') continue;
-    const bucket = bucketOf(f);
-    const title = plainTitle(f);
-    const key = `${bucket}|${f.checker}|${title}`;
-    let group = groups.get(key);
-    if (!group) {
-      group = { key, title, category: category(f), aspect: aspectOf(f.checker), bucket, severity: f.severity, findings: [], pages: [] };
-      groups.set(key, group);
-    }
-    group.findings.push(f);
-    if (SEVERITY_ORDER.indexOf(f.severity) < SEVERITY_ORDER.indexOf(group.severity)) group.severity = f.severity;
-    for (const page of [f.where.urlPath, ...(f.seenAt?.pages || [])]) if (page && !group.pages.includes(page)) group.pages.push(page);
-  }
   const result: Record<Bucket, ProblemGroup[]> = { 'must-fix': [], 'should-fix': [], suggestion: [], 'to-confirm': [] };
-  for (const group of groups.values()) result[group.bucket].push(group);
+  for (const p of groupIntoProblems(findings)) {
+    const bucket = bucketOf({ severity: p.severity, needsConfirmation: p.toConfirm });
+    result[bucket].push({
+      key: p.key,
+      title: p.title,
+      category: [...new Set(p.findings.map((f) => category(f)))].join(' · '),
+      aspect: p.aspects[0],
+      aspects: p.aspects,
+      bucket,
+      severity: p.severity,
+      findings: p.findings,
+      pages: p.pages,
+    });
+  }
   for (const list of Object.values(result)) {
     list.sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) || b.pages.length - a.pages.length);
   }
@@ -317,4 +260,49 @@ ${steps || '  // Open the page and look for the problem.'}
   // Actual:   ${f.expectedVsActual.actual.replace(/\n/g, ' ')}
 });
 `;
+}
+
+/** Why a problem in each area matters to the people using the site, in one plain sentence. */
+const WHY_BY_ASPECT: Record<AspectType, string> = {
+  Works: 'People hit an error, or can’t finish what they came to do.',
+  Accessible: 'Some people, such as those using a screen reader, a keyboard or large text, can’t use this part of the site.',
+  'Fast and mobile': 'People on phones get a slow, cramped or broken page, and many leave.',
+  Findable: 'Fewer people find the site through search engines and AI assistants.',
+  Secure: 'People’s data or accounts could be put at risk.',
+  'Looks and reads well': 'The page looks unfinished or is hard to read, which costs trust.',
+};
+
+/** Sharper reasons for problems people see often. */
+const WHY_BY_TITLE: Array<[RegExp, string]> = [
+  [/too small to tap/i, 'Small buttons are easy to miss on a phone, so people tap the wrong thing or give up.'],
+  [/contrast/i, 'Text that blends into its background is hard to read, especially outdoors or with poor eyesight.'],
+  [/password|sign-in details/i, 'Passwords in page addresses end up in browser history and server logs, where others can find them.'],
+  [/request to your site failed|crashed|error behind the scenes/i, 'Something on the page broke, so people may see missing content or be unable to continue.'],
+  [/no way back or menu/i, 'People who land here get stuck, with no way to reach the rest of the site.'],
+  [/wider than the screen/i, 'On a phone, people have to scroll sideways to read, which most won’t do.'],
+  [/fit phone screens/i, 'Without it, phones show a tiny desktop page that people have to zoom to read.'],
+  [/missing a title/i, 'The browser tab, bookmarks, screen readers and search results all use the title to say what the page is.'],
+];
+
+/** Why a problem matters, in one plain sentence. */
+export function whyItMatters(group: Pick<ProblemGroup, 'title' | 'aspect'>): string {
+  return WHY_BY_TITLE.find(([pattern]) => pattern.test(group.title))?.[1] ?? WHY_BY_ASPECT[group.aspect];
+}
+
+/**
+ * How to fix a problem, in one plain sentence: the check's own advice when it reads as words, else
+ * a pointer to the developer details below it.
+ */
+export function howToFix(group: Pick<ProblemGroup, 'findings'>, looksTechnical: (text: string) => boolean): string {
+  const advice = group.findings.map((f) => f.resolution?.trim()).find((r): r is string => !!r && !looksTechnical(r) && r.length <= 240);
+  return advice ?? 'Ask a developer to look at “Details for developers” below: it says exactly where and what to change.';
+}
+
+/** The kind of search problem, in words people know: search engines, AI answers, or AI search. */
+export function searchKind(f: Pick<Finding, 'checker' | 'id'> & { categoryTag?: string }): { label: string; hint: string } | null {
+  const tag = f.categoryTag || (f.id.includes('GEO') ? 'GEO' : f.id.includes('AEO') ? 'AEO' : f.checker === 'seo' ? 'SEO' : undefined);
+  if (tag === 'GEO') return { label: 'AI search', hint: 'How AI search tools, such as ChatGPT search or Perplexity, read and quote the site (GEO).' };
+  if (tag === 'AEO') return { label: 'AI answers', hint: 'How answer engines and AI assistants pick answers from the site (AEO).' };
+  if (tag === 'SEO') return { label: 'Search', hint: 'How search engines, such as Google, find and list the site (SEO).' };
+  return null;
 }

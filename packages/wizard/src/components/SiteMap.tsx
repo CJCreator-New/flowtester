@@ -212,7 +212,7 @@ export function SiteMap({
               type="button"
               onClick={() => setViewMode(id)}
               aria-pressed={viewMode === id}
-              className={`min-h-[32px] rounded px-3 font-bold transition-colors ${
+              className={`min-h-[44px] min-w-[44px] rounded px-3 py-1 font-bold transition-colors ${
                 viewMode === id ? 'bg-stamp text-surface' : 'text-ink-soft hover:bg-surface hover:text-ink'
               }`}
             >
@@ -248,7 +248,8 @@ export function SiteMap({
                   type="button"
                   onClick={() => onSelectPage?.(node.urlPath)}
                   aria-pressed={selectedPagePath === node.urlPath}
-                  className={`flex w-full items-center justify-between gap-3 rounded-md border-2 p-3 text-left transition-colors ${
+                  aria-label={`${node.title}, ${node.urlPath}${showStatus ? `: ${statusText(node)}` : ''}`}
+                  className={`flex min-h-[44px] w-full items-center justify-between gap-3 rounded-md border-2 p-3 text-left transition-colors ${
                     selectedPagePath === node.urlPath ? 'border-stamp bg-surface' : 'border-rule bg-surface/50 hover:border-edge'
                   }`}
                 >
@@ -272,7 +273,7 @@ export function SiteMap({
                     <button
                       type="button"
                       onClick={() => onSelectPage?.(page)}
-                      className="min-h-[36px] w-full rounded px-2 text-left font-mono text-xs text-ink-soft hover:bg-surface hover:text-ink"
+                      className="min-h-[44px] w-full rounded px-2 text-left font-mono text-xs text-ink-soft hover:bg-surface hover:text-ink"
                     >
                       {page}
                     </button>
@@ -329,7 +330,7 @@ export function SiteMap({
                     isSelected ? 'ring-2 ring-stamp' : ''
                   } ${node.status === 'running' ? 'animate-pulse ring-2 ring-stamp motion-reduce:animate-none' : ''}`}
                 >
-                  <span className="flex items-center justify-between border-b border-rule/50 px-2.5 py-1.5 font-mono text-[10px] text-ink-soft">
+                  <span className="flex items-center justify-between border-b border-rule/50 px-2.5 py-1.5 font-mono text-xs text-ink-soft">
                     <span aria-hidden="true">{node.ref}</span>
                     <span className="max-w-[100px] truncate">{node.urlPath}</span>
                   </span>
@@ -363,7 +364,7 @@ export function SiteMap({
                   className="w-full rounded-md border border-dashed border-rule bg-surface/40 p-3 text-center transition-colors hover:border-stamp hover:bg-surface/70"
                 >
                   <span className="block text-xs font-bold text-ink">{group.label}</span>
-                  <span className="block font-mono text-[10px] text-ink-soft">
+                  <span className="block font-mono text-xs text-ink-soft">
                     {group.count} {group.count === 1 ? 'page' : 'pages'}
                   </span>
                 </button>
@@ -374,7 +375,7 @@ export function SiteMap({
                         <button
                           type="button"
                           onClick={() => onSelectPage?.(page)}
-                          className="min-h-[32px] w-full truncate rounded px-2 text-left font-mono text-[11px] text-ink-soft hover:bg-canvas hover:text-ink"
+                          className="min-h-[44px] w-full truncate rounded px-2 text-left font-mono text-xs text-ink-soft hover:bg-canvas hover:text-ink"
                         >
                           {page}
                         </button>
@@ -396,7 +397,7 @@ function PageStatusLabel({ node, compact = false }: { node: PageNode; compact?: 
     node.status === 'fail' ? 'text-fail' : node.status === 'warn' ? 'text-warn' : node.status === 'pass' ? 'text-pass' : node.status === 'running' ? 'text-stamp' : 'text-ink-soft';
   const mark = node.status === 'fail' ? '✕' : node.status === 'warn' ? '!' : node.status === 'pass' ? '✓' : node.status === 'running' ? '●' : '–';
   return (
-    <span className={`shrink-0 font-mono ${compact ? 'text-[10px]' : 'text-xs'} font-bold ${tone}`}>
+    <span className={`shrink-0 font-mono ${compact ? 'text-xs' : 'text-xs'} font-bold ${tone}`}>
       <span aria-hidden="true">{mark} </span>
       {compact && (node.status === 'warn' || node.status === 'fail') ? node.issuesCount : statusText(node)}
     </span>

@@ -1,5 +1,6 @@
 import type { AIProvider } from '../ai-provider.js';
-import type { AIMessage, AICompletionOptions, AIProviderType } from '@qa/types';
+import { DEFAULT_MODELS } from '../default-models.js';
+import type { AICompletion, AIMessage, AICompletionOptions, AIProviderType } from '@qa/types';
 
 export class AnthropicProvider implements AIProvider {
   readonly providerType: AIProviderType = 'anthropic';
@@ -15,6 +16,10 @@ export class AnthropicProvider implements AIProvider {
   }
 
   async generateText(messages: AIMessage[], options: AICompletionOptions = {}): Promise<string> {
+    return (await this.complete(messages, options)).text;
+  }
+
+  async complete(messages: AIMessage[], options: AICompletionOptions = {}): Promise<AICompletion> {
     const systemMessage = messages.find((m) => m.role === 'system');
     const nonSystemMessages = messages.filter((m) => m.role !== 'system');
 
@@ -41,7 +46,7 @@ export class AnthropicProvider implements AIProvider {
     });
 
     const body: Record<string, any> = {
-      model: options.model || this.defaultModel || 'claude-sonnet-5',
+      model: options.model || this.defaultModel || DEFAULT_MODELS.anthropic,
       max_tokens: options.maxTokens || 4096,
       temperature: options.temperature ?? 0.2,
       messages: formattedMessages,
@@ -68,6 +73,11 @@ export class AnthropicProvider implements AIProvider {
 
     const data = (await res.json()) as any;
     const textBlock = data.content?.find((c: any) => c.type === 'text');
-    return textBlock?.text || '';
+    return {
+      text: textBlock?.text || '',
+      finishReason: data.stop_reason === 'max_tokens' ? 'length' : data.stop_reason,
+      model: data.model || body.model,
+      usage: data.usage ? { promptTokens: data.usage.input_tokens ?? 0, completionTokens: data.usage.output_tokens ?? 0 } : undefined,
+    };
   }
 }

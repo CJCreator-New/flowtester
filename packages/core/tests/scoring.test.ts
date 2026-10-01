@@ -180,4 +180,22 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
     // An F in any aspect caps overall grade at C
     expect(['C', 'D', 'F']).toContain(grades.overallGrade);
   });
+
+  it('lets the AI’s visual review take an area down to a C at most, however many opinions it has', () => {
+    const opinions: Finding[] = Array.from({ length: 30 }, (_, n) => ({
+      id: 'AI-' + n,
+      severity: 'Minor',
+      checker: 'ai-review',
+      title: '[AI Review] Opinion number ' + n,
+      where: { urlPath: '/p' + n, role: 'visitor', breakpoint: '1440px' },
+      expectedVsActual: { expected: '', actual: '' },
+      stepsToReproduce: [],
+      evidence: {},
+      resolution: '',
+      verifyCommand: '',
+    }));
+    const looks = calculateSiteAspectGrades(opinions).aspects['Looks and reads well'];
+    expect(looks.score).toBe(75);
+    expect(looks.grade).toBe('C');
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Breakpoint, ReviewPlan } from '@qa/types';
 import { SiteMap } from '../components/SiteMap';
 import { FocusHeading, Notice, Spinner } from '../components/text';
@@ -6,7 +6,19 @@ import { count } from '../lib/format';
 import { useDocumentTitle } from '../lib/title';
 import { PlanDocument, type PlanActions } from '../components/plan/PlanDocument';
 import { showItem } from '../components/plan/parts';
-import { patchPlan, replanItem, replanEverything, addPageToPlan, includeHostInPlan, downloadPlanMarkdown, interpretSentence } from '../api';
+import {
+  addPageToPlan,
+  addSignInToPlan,
+  applyPlanChange,
+  downloadPlanMarkdown,
+  includeHostInPlan,
+  interpretSentence,
+  patchPlan,
+  replanEverything,
+  replanItem,
+  type PlanDelta,
+} from '../api';
+import type { ConfirmOptions } from '../components/ConfirmDialog';
 
 /** A background change to the plan (re-planning, adding pages), as the QA Tool reports it. */
 export interface PlanUpdateState {
@@ -31,6 +43,8 @@ export interface PlanReviewScreenProps {
   approveError?: string | null;
   approving?: boolean;
   notice?: PlanNotice | null;
+  /** Asks before something that can't be undone. */
+  confirm: (options: ConfirmOptions) => Promise<boolean>;
 }
 
 /**
@@ -49,17 +63,27 @@ function withChanges(plan: ReviewPlan, switched: Record<string, boolean>, sizes:
   };
 }
 
+const TABS = [
+  ['plan', 'Full plan'],
+  ['map', 'Map'],
+] as const;
+
 /**
  * The Plan Review. Leaving it keeps the plan waiting (the new check-up screen offers it again), so
  * there's no Back here that could throw it away.
  */
-export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, approveError, approving = false, notice }: PlanReviewScreenProps) {
+export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, approveError, approving = false, notice, confirm }: PlanReviewScreenProps) {
   const [tab, setTab] = useState<'plan' | 'map'>('plan');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [switched, setSwitched] = useState<Record<string, boolean>>({});
   const [sizes, setSizes] = useState<Breakpoint[] | null>(null);
+  const [barOpen, setBarOpen] = useState(false);
   const shown = useMemo(() => withChanges(plan, switched, sizes), [plan, switched, sizes]);
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  // The plan a change is applied to: always the newest one, even when changes come back out of order.
+  const latest = useRef(plan);
+  latest.current = plan;
 
   // A background change started here waits until the QA Tool says it has finished or failed.
   useEffect(() => {
@@ -67,10 +91,11 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
   }, [update.running]);
   const busy = pending || update.running;
 
-  const edit = async (change: () => Promise<ReviewPlan>) => {
+  const edit = async (change: () => Promise<ReviewPlan | PlanDelta>) => {
     setError(null);
     try {
-      onPlanUpdated(await change());
+      const result = await change();
+      onPlanUpdated(applyPlanChange(latest.current, result));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The plan couldn’t be changed. Try again.');
     }
@@ -85,16 +110,19 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
       setError(err instanceof Error ? err.message : 'The plan couldn’t be updated. Try again.');
     }
   };
+  const switchItems = (ids: string[], skipped: boolean) => {
+    setSwitched((s) => ({ ...s, ...Object.fromEntries(ids.map((id) => [id, skipped])) }));
+    void edit(() => patchPlan({ items: ids.map((id) => ({ id, skipped })) })).finally(() =>
+      setSwitched((s) => Object.fromEntries(Object.entries(s).filter(([id]) => !ids.includes(id))))
+    );
+  };
 
+  const budget = plan.budget;
   const actions: PlanActions = {
     busy,
     // Shown at once; kept until the saved plan comes back, or undone if saving fails.
-    setSkipped: (id, skipped) => {
-      setSwitched((s) => ({ ...s, [id]: skipped }));
-      void edit(() => patchPlan({ items: [{ id, skipped }] })).finally(() =>
-        setSwitched(({ [id]: _done, ...rest }) => rest)
-      );
-    },
+    setSkipped: (id, skipped) => switchItems([id], skipped),
+    setSkippedMany: switchItems,
     replan: (id, instructions) => void inBackground(() => replanItem(id, instructions)),
     promote: (id) => void inBackground(() => replanItem(id, undefined, true)),
     addPage: async (address) => {
@@ -113,13 +141,42 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
       setSizes(chosen);
       void edit(() => patchPlan({ screenSizes: chosen })).finally(() => setSizes(null));
     },
-    replanEverything: () => void inBackground(() => replanEverything()),
+    replanEverything: async () => {
+      const tested = (plan.planPages || []).filter((p) => p.coverage !== 'covered').length;
+      const about = Math.ceil(tested / 3) + 2;
+      const ok = await confirm({
+        title: 'Re-plan everything with the AI?',
+        body: (
+          <p>
+            The AI plans every page, link and journey again, which takes about {about} AI requests
+            {budget?.left !== undefined ? ` (you have ${budget.left} left today)` : ''}. What you switched off stays off, but changes you made to
+            tests and journeys are replaced.
+          </p>
+        ),
+        confirmLabel: 'Re-plan everything',
+        cancelLabel: 'Keep the plan',
+        danger: true,
+      });
+      if (ok) void inBackground(() => replanEverything());
+    },
     saveDocsAndReplan: async (productContext, designNotes) => {
       await edit(() => patchPlan({ productContext, designNotes }));
       await inBackground(() => replanEverything(productContext));
     },
     describeTest: (sentence, urlPath) => interpretSentence({ sentence, urlPath }),
     addJourney: (flow) => edit(() => patchPlan({ flows: [...plan.flows, flow] })),
+    setExpectation: (itemId, text) => void edit(() => patchPlan({ expectations: [{ id: itemId, text }] })),
+    addSignIn: async (signIn) => {
+      setError(null);
+      setPending(true);
+      try {
+        await addSignInToPlan(signIn);
+      } catch (err) {
+        setPending(false);
+        throw err;
+      }
+    },
+    quickCheck: () => void edit(() => patchPlan({ preset: 'quick' })),
   };
 
   // The site's real links, for the map.
@@ -135,7 +192,40 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
     // keep the address as it is
   }
   const lines = plan.summary?.lines || [];
+  const tests = plan.summary?.tests;
+  const minutes = plan.summary?.minutes;
   useDocumentTitle(`Plan for ${host}`);
+
+  const approveButton = (
+    <button type="button" className="btn-primary shrink-0" disabled={busy || approving} onClick={onApprove}>
+      {approving ? <Spinner label="Starting the tests…" /> : 'Approve the plan and start testing'}
+    </button>
+  );
+  const moveTab = (from: 'plan' | 'map', by: number) => {
+    const i = TABS.findIndex(([id]) => id === from);
+    const next = TABS[(i + by + TABS.length) % TABS.length][0];
+    setTab(next);
+    tabRefs.current[next]?.focus();
+  };
+
+  let panel: ReactNode;
+  if (tab === 'plan') panel = <PlanDocument plan={shown} actions={actions} />;
+  else
+    panel = (
+      <div className="flex h-[70vh]">
+        <SiteMap
+          pages={plan.pages}
+          flows={plan.flows}
+          mode="plan"
+          links={links}
+          maxCards={12}
+          onSelectPage={(urlPath) => {
+            setTab('plan');
+            window.setTimeout(() => showItem(`page:${urlPath}`), 60);
+          }}
+        />
+      </div>
+    );
 
   return (
     <div className="flex min-h-[calc(100vh-7rem)] w-full flex-col bg-canvas">
@@ -151,19 +241,29 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div role="tablist" aria-label="How to show the plan" className="flex rounded border border-rule bg-panel p-0.5 text-sm">
-              {(
-                [
-                  ['plan', 'Full plan'],
-                  ['map', 'Map'],
-                ] as const
-              ).map(([id, name]) => (
+              {TABS.map(([id, name]) => (
                 <button
                   key={id}
+                  ref={(el) => {
+                    tabRefs.current[id] = el;
+                  }}
                   type="button"
                   role="tab"
+                  id={`plan-tab-${id}`}
+                  aria-controls="plan-tabpanel"
                   aria-selected={tab === id}
+                  tabIndex={tab === id ? 0 : -1}
                   onClick={() => setTab(id)}
-                  className={`min-h-[40px] rounded px-3 font-bold ${tab === id ? 'bg-stamp text-surface' : 'text-ink-soft hover:text-ink'}`}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      moveTab(id, 1);
+                    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      moveTab(id, -1);
+                    }
+                  }}
+                  className={`min-h-[44px] rounded px-3 font-bold ${tab === id ? 'bg-stamp text-surface' : 'text-ink-soft hover:text-ink'}`}
                 >
                   {name}
                 </button>
@@ -193,41 +293,38 @@ export function PlanReviewScreen({ plan, onApprove, onPlanUpdated, update, appro
         )}
       </div>
 
-      <div className="flex-1">
-        {tab === 'plan' ? (
-          <PlanDocument plan={shown} actions={actions} />
-        ) : (
-          <div className="flex h-[70vh]">
-            <SiteMap
-              pages={plan.pages}
-              flows={plan.flows}
-              mode="plan"
-              links={links}
-              maxCards={12}
-              onSelectPage={(urlPath) => {
-                setTab('plan');
-                window.setTimeout(() => showItem(`page:${urlPath}`), 60);
-              }}
-            />
-          </div>
-        )}
+      <div className="flex-1" role="tabpanel" id="plan-tabpanel" aria-labelledby={`plan-tab-${tab}`}>
+        {panel}
       </div>
 
-      <div className="sticky bottom-0 z-40 border-t border-rule bg-surface/95 px-4 py-3 backdrop-blur sm:px-6">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0 flex-1 text-sm text-ink">
-            <p className="font-bold">{lines[0]?.text ?? 'Ready to test'}</p>
-            <p className="text-ink-soft">{lines.length > 1 ? lines.slice(1).map((l) => l.text).join(' · ') : 'Nothing runs until you approve.'}</p>
-            {approveError && (
-              <p role="alert" className="font-bold text-fail">
-                {approveError}
-              </p>
-            )}
-          </div>
-          <button type="button" className="btn-primary" disabled={busy || approving} onClick={onApprove}>
-            {approving ? <Spinner label="Starting the tests…" /> : 'Approve the plan and start testing'}
+      <div className="sticky bottom-0 z-40 border-t border-rule bg-surface/95 px-4 py-2 backdrop-blur sm:px-6 sm:py-3">
+        {/* Phones: one line that opens into the summary, so the bar doesn't cover the plan. */}
+        <div className="flex items-center justify-between gap-3 sm:hidden">
+          <button type="button" className="min-h-[44px] min-w-0 flex-1 text-left text-sm font-bold text-ink" aria-expanded={barOpen} onClick={() => setBarOpen((o) => !o)}>
+            {tests !== undefined ? `${count(tests, 'test', 'tests')}${minutes ? ` · about ${minutes} min` : ''}` : 'Ready to test'} {barOpen ? '▾' : '▸'}
+          </button>
+          <button type="button" className="btn-primary min-h-[44px] shrink-0 px-4" disabled={busy || approving} onClick={onApprove}>
+            {approving ? <Spinner label="Starting…" /> : 'Approve'}
           </button>
         </div>
+        {barOpen && (
+          <p className="pb-2 text-sm text-ink-soft sm:hidden">{lines.length > 1 ? lines.slice(1).map((l) => l.text).join(' · ') : 'Nothing runs until you approve.'}</p>
+        )}
+        <div className="mx-auto hidden max-w-6xl flex-wrap items-center justify-between gap-3 sm:flex">
+          <div className="min-w-0 flex-1 text-sm text-ink">
+            <p className="font-bold">
+              {lines[0]?.text ?? 'Ready to test'}
+              {minutes ? <span className="font-normal text-ink-soft"> · about {minutes} min</span> : null}
+            </p>
+            <p className="text-ink-soft">{lines.length > 1 ? lines.slice(1).map((l) => l.text).join(' · ') : 'Nothing runs until you approve.'}</p>
+          </div>
+          {approveButton}
+        </div>
+        {approveError && (
+          <p role="alert" className="mx-auto max-w-6xl text-sm font-bold text-fail">
+            {approveError}
+          </p>
+        )}
       </div>
     </div>
   );

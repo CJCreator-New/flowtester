@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import type { ReleaseReport, AspectType, FindingSeverity, RankedRecommendation } from '@qa/types';
-import { releaseVerdict } from '@qa/types';
+import { groupIntoProblems, releaseVerdict } from '@qa/types';
 
 export interface HtmlReportOptions {
   outputDir?: string;
@@ -39,6 +39,8 @@ export async function generateSingleFileHtmlReport(
   // contradict it; the aspects are graded below.
   const verdict = releaseVerdict(report.findings);
   const gradeStyle = verdict.ready ? GRADE_COLORS.A : GRADE_COLORS.F;
+  /** Problems among an area's findings, counted as the verdict counts them. */
+  const problemsIn = (ids: string[]) => groupIntoProblems(report.findings.filter((f) => ids.includes(f.id))).filter((p) => !p.toConfirm).length;
 
   const aspects: AspectType[] = [
     'Works',
@@ -78,7 +80,7 @@ export async function generateSingleFileHtmlReport(
           </div>
           <div class="aspect-footer">
             <span>Score: ${data.score}/100</span>
-            <span>${data.findings.length} ${data.findings.length === 1 ? 'issue' : 'issues'}</span>
+            <span>${problemsIn(data.findings)} ${problemsIn(data.findings) === 1 ? 'problem' : 'problems'}</span>
           </div>
         </div>
       `;
@@ -460,6 +462,11 @@ export async function generateSingleFileHtmlReport(
       font-size: 0.8rem;
       margin-top: 2rem;
     }
+    /* Printed or saved as PDF: plain paper, no dotted board, nothing cut across pages. */
+    @media print {
+      body { background: #FFFFFF; background-image: none; padding: 0; }
+      .header-banner, section, .card { box-shadow: none !important; break-inside: avoid; }
+    }
   </style>
 </head>
 <body>
@@ -484,7 +491,7 @@ export async function generateSingleFileHtmlReport(
     ${recommendationsHtml}
 
     <section class="section card">
-      <h3 class="section-title">All Defect Findings (${report.findings.length})</h3>
+      <h3 class="section-title">Every finding behind the ${verdict.total} ${verdict.total === 1 ? 'problem' : 'problems'} (${report.findings.length})</h3>
       <p class="section-desc">Click any finding to inspect expected vs actual behavior, steps to reproduce, and recommended fix.</p>
       <div class="findings-list">
         ${findingsHtml || '<p style="color: #059669; font-weight: 500;">No defects identified! All checked criteria passed.</p>'}

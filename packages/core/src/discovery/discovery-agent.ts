@@ -45,6 +45,8 @@ export interface DiscoveryOptions {
    * past `left`, and the rest is planned by fixed rules.
    */
   aiBudget?: { left?: number; limit?: number; visualReview?: number };
+  /** The model the provider uses, and others to switch to when it stops before answering. */
+  aiModels?: { model?: string; fallbacks?: string[] };
   /** Told how the scan is going, for the progress screen. */
   onProgress?: (progress: DiscoveryProgress) => void;
   /**
@@ -54,6 +56,11 @@ export interface DiscoveryOptions {
   remembered?: RememberedPlan;
   /** Stops the scan: no more pages or AI requests, the browser closes, and discover() throws an AbortError. */
   signal?: AbortSignal;
+  /**
+   * Finishes the scan early: no more pages are explored, and what was found is planned (by fixed
+   * rules for anything the AI hasn't planned yet).
+   */
+  finishSignal?: AbortSignal;
   /** Where sign-in sessions are saved. Default `<outputDir>/auth`. Keep it out of any folder that's served. */
   authDir?: string;
 }
@@ -72,6 +79,10 @@ export type DiscoveryProgress =
       pagesFound: number;
       layoutGroups: number;
       what: string;
+      /** A request is on its way: `what` names it. */
+      asking?: boolean;
+      /** 1 for the first request, 2 for the repair. */
+      attempt?: number;
     };
 
 /** Pages described to the AI when it plans journeys: enough to see the site, not so many a small model loses track. */
@@ -200,7 +211,8 @@ export class DiscoveryAgent {
       robots: ownMachine ? undefined : await RobotsPolicy.fetch(targetOrigin.origin, CRAWLER_TOKEN),
       pageDelayMs: ownMachine ? 0 : PUBLIC_SITE_PAGE_DELAY_MS,
       screenshotDir: path.join(outputDir, 'plan-pages'),
-      signal,
+      // Stopping to plan what's found ends the crawl the same way as stopping outright.
+      signal: options.finishSignal && signal ? AbortSignal.any([signal, options.finishSignal]) : (options.finishSignal ?? signal),
     };
     const newContext = async (storageState?: string) => {
       const context = await this.browserManager.createContext({ baseUrl: options.targetUrl, storageState });
@@ -256,11 +268,17 @@ export class DiscoveryAgent {
 
     const spiderResult = mergeCrawls(crawls);
     const exploration = describeExploration(crawls, spiderResult, signInFailed);
+    if (options.finishSignal?.aborted) {
+      exploration.notes.push(
+        `You stopped the scan after ${spiderResult.pages.length} ${spiderResult.pages.length === 1 ? 'page' : 'pages'}, so pages it hadn’t reached yet aren’t in the plan.`
+      );
+    }
 
     // Narrow screens: which menu links fold behind a button there, and which button shows them.
+    // Skipped when the person asked to finish with what's found.
     options.onProgress?.({ stage: 'narrow-screens' });
     let lastNarrowLoad = 0;
-    await lookAtNarrowScreens(spiderResult.pages, {
+    if (!options.finishSignal?.aborted) await lookAtNarrowScreens(spiderResult.pages, {
       baseUrl: options.targetUrl,
       openContext: async (size, page) => {
         const signedIn = page.reachedBy?.includes('visitor') ? undefined : page.reachedBy?.[0];
@@ -287,15 +305,7 @@ export class DiscoveryAgent {
       `[DiscoveryAgent] Spider found ${spiderResult.pages.length} pages, ${spiderResult.forms.length} forms, ${spiderResult.sensitiveActions.length} sensitive actions.`
     );
 
-    // 3. Form ambiguity questions for unmapped forms
     const ambiguityQuestions: AmbiguityQuestion[] = [...spiderResult.ambiguityQuestions];
-    let qCounter = ambiguityQuestions.length + 1;
-
-    for (const form of spiderResult.forms) {
-      // A sign-in form is how roles get in, not something the plan asks about.
-      if (form.inputs.some((i) => i.type === 'password')) continue;
-      ambiguityQuestions.push(formQuestion(form, qCounter++));
-    }
 
     // 4. The site's shape: the App Flow (which page links where) and the Layout Groups.
     const detectedSiteType: SiteType = detectSiteType(spiderResult.pages, options.targetUrl);
@@ -312,6 +322,23 @@ export class DiscoveryAgent {
     }
     const tested = testedPages({ pages: spiderResult.pages, coverage });
 
+    // 3. A question for each form that will be sent: not on a live site (nothing is sent there),
+    // only on pages that are tested, and one question for the same form on many pages.
+    if (!options.readOnly) {
+      const testedPaths = new Set(tested.map((p) => p.urlPath));
+      const sameForm = new Map<string, { form: SpiderResult['forms'][number]; pages: string[] }>();
+      for (const form of spiderResult.forms) {
+        // A sign-in form is how roles get in, not something the plan asks about.
+        if (form.inputs.some((i) => i.type === 'password') || !testedPaths.has(form.urlPath)) continue;
+        const shape = JSON.stringify([form.method, form.submitButtonSelector, form.inputs.map((i) => i.selector)]);
+        const seen = sameForm.get(shape);
+        if (seen) seen.pages.push(form.urlPath);
+        else sameForm.set(shape, { form, pages: [form.urlPath] });
+      }
+      let qCounter = ambiguityQuestions.length + 1;
+      for (const { form, pages } of sameForm.values()) ambiguityQuestions.push(formQuestion(form, qCounter++, pages));
+    }
+
     // 5. The AI plans every Plan Item, within the AI Request Budget: pages a few at a time, the
     // shared menus, then the journeys. Past the budget, fixed rules plan the rest. What the last
     // approved Plan already has for an unchanged site is reused, not asked again.
@@ -322,8 +349,15 @@ export class DiscoveryAgent {
     const requestsNeeded =
       estimatePageRequests({ pages: spiderResult.pages, coverage, graph, remembered: options.remembered }) + (reuseJourneys ? 0 : 1);
     const requestsLeft = options.aiBudget?.left;
-    const paced = options.aiProvider ? new PacedAI(options.aiProvider, requestsLeft ?? Infinity, { signal }) : undefined;
-    const planningProgress = (done: number, what: string) =>
+    const paced = options.aiProvider
+      ? new PacedAI(options.aiProvider, requestsLeft ?? Infinity, {
+          signal,
+          finishSignal: options.finishSignal,
+          model: options.aiModels?.model,
+          fallbackModels: options.aiModels?.fallbacks,
+        })
+      : undefined;
+    const planningProgress = (done: number, what: string, asking?: { attempt?: number }) =>
       options.onProgress?.({
         stage: 'planning',
         done,
@@ -334,6 +368,8 @@ export class DiscoveryAgent {
         pagesFound: spiderResult.pages.length,
         layoutGroups: layoutGroups.length,
         what,
+        asking: asking ? true : undefined,
+        attempt: asking?.attempt,
       });
     planningProgress(0, `Found ${spiderResult.pages.length} pages; planning them`);
     const pagePlan = await planPagesAndMenus(
@@ -351,7 +387,7 @@ export class DiscoveryAgent {
         remembered: options.remembered,
       },
       paced,
-      (p) => planningProgress(p.done, p.what)
+      (p) => planningProgress(p.done, p.what, p.asking ? { attempt: p.attempt } : undefined)
     );
     stopIfAborted(signal);
     exploration.notes.push(...pagePlan.notes);
@@ -360,6 +396,7 @@ export class DiscoveryAgent {
     // Journeys across pages, from the tested pages closest to the start page. While no page has
     // changed since the last approved Plan, its journeys are reused.
     const byClicks = (p: PageInventoryItem) => graph.clickPaths.get(p.urlPath)?.length ?? Number.MAX_SAFE_INTEGER;
+    if (!reuseJourneys && paced) planningProgress(requestsNeeded - 1, 'Asking the AI about the journeys…', { attempt: 1 });
     const journeyPlan = reuseJourneys
       ? (() => {
           const flows: DiscoveredFlow[] = JSON.parse(JSON.stringify(options.remembered!.flows));
@@ -383,7 +420,6 @@ export class DiscoveryAgent {
     siteType = journeyPlan.siteType;
     const synthesizedFlows = journeyPlan.flows;
     const usedFallbackSynthesis = journeyPlan.usedFallback;
-    const journeysOverBudget = journeyPlan.overBudget;
     exploration.notes.push(...journeyPlan.notes);
     ambiguityQuestions.push(...journeyPlan.questions);
     planningProgress(requestsNeeded, 'Planned the journeys');
@@ -419,7 +455,11 @@ export class DiscoveryAgent {
           left: requestsLeft !== undefined ? (paced ? paced.left : requestsLeft) : undefined,
           limit: options.aiBudget?.limit,
           visualReview: options.aiBudget?.visualReview,
-          overBudget: pagePlan.overBudget + (journeysOverBudget ? synthesizedFlows.length : 0) || undefined,
+          // Counted from the items, as the approval summary counts them.
+          overBudget:
+            pagePlan.overBudget + synthesizedFlows.filter((f) => f.source === 'fallback' && f.fallbackReason === 'budget').length || undefined,
+          tokens: paced && Object.keys(paced.tokens).length > 0 ? paced.tokens : undefined,
+          models: paced && Object.keys(paced.models).length > 0 ? paced.models : undefined,
         },
       },
     };

@@ -7,15 +7,12 @@ import type {
   FindingSeverity,
   SiteAspectGrades,
 } from '@qa/types';
+import { ASPECT_CHECKERS, aspectOfFinding, problemKey } from '@qa/types';
 
-export const ASPECT_CHECKERS: Record<AspectType, CheckerType[]> = {
-  Works: ['bug-detection', 'spec-conformance'],
-  Accessible: ['ux-quality'],
-  'Fast and mobile': ['performance'],
-  Findable: ['seo'],
-  Secure: ['security', 'permission-matrix'],
-  'Looks and reads well': ['design-standards', 'ai-review'],
-};
+export { ASPECT_CHECKERS };
+
+/** The most the AI's visual review can take off an area's score on its own (from 100 to a C). */
+const MAX_OPINION_DEDUCTION = 25;
 
 const SEVERITY_DEDUCTIONS: Record<FindingSeverity, number> = {
   Blocker: 30,
@@ -71,8 +68,9 @@ export function calculateSiteAspectGrades(findings: Finding[], options: { checke
   for (const aspect of aspectList) {
     const relevantCheckers = new Set(ASPECT_CHECKERS[aspect]);
     // Group findings by finding title/category to evaluate spread across pages
+    // A finding counts toward its own area when it names one (a missing viewport tag is about phones).
     const aspectFindings = findings.filter(
-      (f) => relevantCheckers.has(f.checker) && !f.needsConfirmation && f.triageStatus !== 'False Positive' && f.triageStatus !== 'Intended'
+      (f) => aspectOfFinding(f) === aspect && !f.needsConfirmation && f.triageStatus !== 'False Positive' && f.triageStatus !== 'Intended'
     );
 
     let totalDeduction = 0;
@@ -80,12 +78,12 @@ export function calculateSiteAspectGrades(findings: Finding[], options: { checke
     const findingIds: string[] = [];
 
     // Group duplicate findings by title/code to avoid double penalizing the same recurring bug
-    const grouped = new Map<string, { severity: FindingSeverity; pages: Set<string>; ids: string[] }>();
+    const grouped = new Map<string, { severity: FindingSeverity; pages: Set<string>; ids: string[]; opinion: boolean }>();
     for (const f of aspectFindings) {
       findingIds.push(f.id);
-      const key = f.title;
+      const key = problemKey(f);
       if (!grouped.has(key)) {
-        grouped.set(key, { severity: f.severity, pages: new Set(), ids: [] });
+        grouped.set(key, { severity: f.severity, pages: new Set(), ids: [], opinion: f.checker === 'ai-review' });
       }
       const entry = grouped.get(key)!;
       entry.pages.add(f.where.urlPath);
@@ -95,11 +93,15 @@ export function calculateSiteAspectGrades(findings: Finding[], options: { checke
       }
     }
 
+    // The AI's visual review is an opinion: on its own it can take an area down to a C, not fail it.
+    let opinionDeduction = 0;
     for (const [, group] of grouped.entries()) {
       const baseDeduction = SEVERITY_DEDUCTIONS[group.severity] || 5;
       const multiplier = getSpreadMultiplier(group.pages.size);
-      totalDeduction += baseDeduction * multiplier;
+      if (group.opinion) opinionDeduction += baseDeduction * multiplier;
+      else totalDeduction += baseDeduction * multiplier;
     }
+    totalDeduction += Math.min(opinionDeduction, MAX_OPINION_DEDUCTION);
 
     let finalScore = Math.max(0, Math.round(100 - totalDeduction));
     // Blocker caps
@@ -116,6 +118,28 @@ export function calculateSiteAspectGrades(findings: Finding[], options: { checke
       findings: findingIds,
       ...(ran ? { checked: [...relevantCheckers].some((c) => ran.has(c)) || findingIds.length > 0 } : {}),
     };
+
+    if (aspect === 'Findable') {
+      const seoFindings = aspectFindings.filter((f) => f.categoryTag === 'SEO' || (!f.categoryTag && f.checker === 'seo'));
+      const aeoFindings = aspectFindings.filter((f) => f.categoryTag === 'AEO');
+      const geoFindings = aspectFindings.filter((f) => f.categoryTag === 'GEO');
+
+      const calcSub = (subF: Finding[]) => {
+        let ded = 0;
+        for (const f of subF) {
+          ded += SEVERITY_DEDUCTIONS[f.severity] || 5;
+        }
+        const sc = Math.max(0, Math.round(100 - ded));
+        const status: 'Clean' | 'Warning' | 'Failing' = sc >= 90 ? 'Clean' : sc >= 70 ? 'Warning' : 'Failing';
+        return { score: sc, issueCount: subF.length, status };
+      };
+
+      aspects.Findable.subBreakdown = {
+        seo: calcSub(seoFindings),
+        aeo: calcSub(aeoFindings),
+        geo: calcSub(geoFindings),
+      };
+    }
   }
 
   // Calculate overall score & grade, over the aspects that were checked

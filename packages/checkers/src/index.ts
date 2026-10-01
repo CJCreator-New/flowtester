@@ -6,3 +6,6 @@ export * from './permission-matrix.js';
 export * from './security.js';
 export * from './performance.js';
 export * from './seo.js';
+export * from './site-root.js';
+export * from './aeo.js';
+export * from './geo.js';

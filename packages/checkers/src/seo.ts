@@ -1,5 +1,8 @@
 import type { Page } from 'playwright';
-import type { Breakpoint, Finding, FindingSeverity } from '@qa/types';
+import type { Breakpoint, Finding } from '@qa/types';
+import { SiteRootAuditor } from './site-root.js';
+import { AeoChecker } from './aeo.js';
+import { GeoChecker } from './geo.js';
 
 export interface SeoContext {
   testCaseId?: string;
@@ -8,6 +11,16 @@ export interface SeoContext {
   breakpoint: Breakpoint;
   urlPath: string;
   baseUrl?: string;
+  /**
+   * Check how search engines and AI assistants see the page. False on a site that isn't public (a
+   * test copy): then only its links are checked.
+   */
+  searchChecks?: boolean;
+  /**
+   * Facts about the whole site already reported this run (its icon, its phone set-up, who runs it):
+   * each is reported once, on the first page it's seen on, not on every page.
+   */
+  siteWide?: Set<string>;
 }
 
 export interface SeoPageDetails {
@@ -16,6 +29,10 @@ export interface SeoPageDetails {
   h1Count: number;
   headings: Array<{ level: number; text: string }>;
   canonicalUrl?: string;
+  canonicalCount: number;
+  hasViewportMeta: boolean;
+  hasFavicon: boolean;
+  imagesWithoutAltCount: number;
   ogTitle?: string;
   ogDescription?: string;
   ogImage?: string;
@@ -25,22 +42,42 @@ export interface SeoPageDetails {
 }
 
 export class SeoChecker {
+  private siteRootAuditor = new SiteRootAuditor();
+  private aeoChecker = new AeoChecker();
+  private geoChecker = new GeoChecker();
+
   /**
-   * Check SEO fundamentals and link health for a page.
+   * Check SEO fundamentals, AEO answer patterns, GEO signals, and link health for a page.
    */
   async checkPage(page: Page, context: SeoContext): Promise<Finding[]> {
     const findings: Finding[] = [];
     const details = await this.collectDetails(page);
     if (!details) return findings;
 
+    const tcId = context.testCaseId || 'GEN';
+    const isPublicVisitor = !context.role || context.role === 'visitor' || context.role === 'anonymous';
+    /** True the first time a site-wide fact is reported this run. */
+    const firstTime = (key: string) => {
+      if (!context.siteWide) return true;
+      if (context.siteWide.has(key)) return false;
+      context.siteWide.add(key);
+      return true;
+    };
+
+    // Not a public site: how search engines see it doesn't matter, but broken links still do.
+    if (context.searchChecks === false) {
+      return details.sameSiteLinks?.length ? this.checkBrokenLinks(page, details.sameSiteLinks, context) : findings;
+    }
+
     // 1. Page Title
     if (!details.title || details.title.trim().length === 0) {
       findings.push({
-        id: `F-SEO-${context.testCaseId || 'GEN'}-TITLE-${findings.length + 1}`,
+        id: `F-SEO-${tcId}-TITLE-${findings.length + 1}`,
         testCaseId: context.testCaseId,
         flowId: context.flowId,
         severity: 'Major',
         checker: 'seo',
+        categoryTag: 'SEO',
         title: 'Page is missing a title tag',
         where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
         expectedVsActual: {
@@ -57,11 +94,12 @@ export class SeoChecker {
     // 2. Meta Description
     if (!details.metaDescription || details.metaDescription.trim().length === 0) {
       findings.push({
-        id: `F-SEO-${context.testCaseId || 'GEN'}-DESC-${findings.length + 1}`,
+        id: `F-SEO-${tcId}-DESC-${findings.length + 1}`,
         testCaseId: context.testCaseId,
         flowId: context.flowId,
         severity: 'Minor',
         checker: 'seo',
+        categoryTag: 'SEO',
         title: 'Page is missing a meta description',
         where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
         expectedVsActual: {
@@ -78,11 +116,12 @@ export class SeoChecker {
     // 3. Heading Structure: Exactly one H1 and sequential order
     if (details.h1Count === 0) {
       findings.push({
-        id: `F-SEO-${context.testCaseId || 'GEN'}-H1-MISSING-${findings.length + 1}`,
+        id: `F-SEO-${tcId}-H1-MISSING-${findings.length + 1}`,
         testCaseId: context.testCaseId,
         flowId: context.flowId,
         severity: 'Major',
         checker: 'seo',
+        categoryTag: 'SEO',
         title: 'Page has no primary <h1> heading',
         where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
         expectedVsActual: {
@@ -96,11 +135,12 @@ export class SeoChecker {
       });
     } else if (details.h1Count > 1) {
       findings.push({
-        id: `F-SEO-${context.testCaseId || 'GEN'}-H1-MULTIPLE-${findings.length + 1}`,
+        id: `F-SEO-${tcId}-H1-MULTIPLE-${findings.length + 1}`,
         testCaseId: context.testCaseId,
         flowId: context.flowId,
         severity: 'Minor',
         checker: 'seo',
+        categoryTag: 'SEO',
         title: `Page has multiple <h1> headings (${details.h1Count} found)`,
         where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
         expectedVsActual: {
@@ -121,11 +161,12 @@ export class SeoChecker {
         const next = details.headings[i + 1].level;
         if (next > curr + 1) {
           findings.push({
-            id: `F-SEO-${context.testCaseId || 'GEN'}-HEADING-SKIP-${findings.length + 1}`,
+            id: `F-SEO-${tcId}-HEADING-SKIP-${findings.length + 1}`,
             testCaseId: context.testCaseId,
             flowId: context.flowId,
             severity: 'Minor',
             checker: 'seo',
+            categoryTag: 'SEO',
             title: `Heading levels skipped: <h${curr}> followed directly by <h${next}>`,
             where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
             expectedVsActual: {
@@ -145,11 +186,12 @@ export class SeoChecker {
     // 4. HTML Language Attribute
     if (!details.htmlLang || details.htmlLang.trim().length === 0) {
       findings.push({
-        id: `F-SEO-${context.testCaseId || 'GEN'}-LANG-${findings.length + 1}`,
+        id: `F-SEO-${tcId}-LANG-${findings.length + 1}`,
         testCaseId: context.testCaseId,
         flowId: context.flowId,
         severity: 'Minor',
         checker: 'seo',
+        categoryTag: 'SEO',
         title: '<html> element is missing a lang attribute',
         where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
         expectedVsActual: {
@@ -163,18 +205,151 @@ export class SeoChecker {
       });
     }
 
-    // 5. OpenGraph Tags (Social preview)
+    // 5. Canonical Tag Check (for public search-indexed pages)
+    if (isPublicVisitor) {
+      if (!details.canonicalUrl || details.canonicalUrl.trim().length === 0) {
+        findings.push({
+          id: `F-SEO-${tcId}-CANONICAL-MISSING-${findings.length + 1}`,
+          testCaseId: context.testCaseId,
+          flowId: context.flowId,
+          severity: 'Minor',
+          checker: 'seo',
+          categoryTag: 'SEO',
+          title: 'Page is missing a canonical URL tag',
+          where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
+          expectedVsActual: {
+            expected: 'Every page should specify a canonical URL via <link rel="canonical" href="..."> to prevent duplicate content indexing',
+            actual: 'No <link rel="canonical"> tag was found in <head>',
+          },
+          stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect <head> for link[rel="canonical"]'],
+          evidence: {},
+          resolution: 'Add a <link rel="canonical" href="https://example.com/page"> pointing to the definitive address of this page.',
+          verifyCommand: `qa-test verify F-SEO-CANONICAL`,
+        });
+      } else if (details.canonicalCount > 1) {
+        findings.push({
+          id: `F-SEO-${tcId}-CANONICAL-MULTIPLE-${findings.length + 1}`,
+          testCaseId: context.testCaseId,
+          flowId: context.flowId,
+          severity: 'Minor',
+          checker: 'seo',
+          categoryTag: 'SEO',
+          title: `Page contains multiple canonical URL tags (${details.canonicalCount} found)`,
+          where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
+          expectedVsActual: {
+            expected: 'A page must have exactly one canonical URL tag',
+            actual: `Found ${details.canonicalCount} conflicting <link rel="canonical"> tags`,
+          },
+          stepsToReproduce: [`Visit ${context.urlPath}`, 'Query document.querySelectorAll("link[rel=\'canonical\']")]'],
+          evidence: {},
+          resolution: 'Remove duplicate <link rel="canonical"> declarations.',
+          verifyCommand: `qa-test verify F-SEO-CANONICAL-MULTIPLE`,
+        });
+      }
+    }
+
+    // 6. Meta Robots Noindex Warning
+    if (details.metaRobots && details.metaRobots.toLowerCase().includes('noindex')) {
+      findings.push({
+        id: `F-SEO-${tcId}-NOINDEX-${findings.length + 1}`,
+        testCaseId: context.testCaseId,
+        flowId: context.flowId,
+        severity: 'Major',
+        checker: 'seo',
+        categoryTag: 'SEO',
+        title: 'Page has a noindex directive preventing search engine indexing',
+        where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
+        expectedVsActual: {
+          expected: 'Public production pages should not block search crawlers unless intentionally hidden',
+          actual: `meta robots directive is "${details.metaRobots}"`,
+        },
+        stepsToReproduce: [`Visit ${context.urlPath}`, 'Check <meta name="robots"> in <head>'],
+        evidence: {},
+        resolution: 'Remove "noindex" from the meta robots tag if this page should appear in search results.',
+        verifyCommand: `qa-test verify F-SEO-NOINDEX`,
+      });
+    }
+
+    // 7. Mobile Viewport Meta Tag (for public pages)
+    if (isPublicVisitor && !details.hasViewportMeta && firstTime('viewport')) {
+      findings.push({
+        id: `F-SEO-${tcId}-VIEWPORT-MISSING-${findings.length + 1}`,
+        testCaseId: context.testCaseId,
+        flowId: context.flowId,
+        severity: 'Major',
+        checker: 'seo',
+        // Found by the search checks, but it's about how the site works on phones.
+        aspect: 'Fast and mobile',
+        title: 'Page is missing a mobile viewport meta tag',
+        where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
+        expectedVsActual: {
+          expected: 'Page should declare <meta name="viewport" content="width=device-width, initial-scale=1"> for mobile search ranking',
+          actual: 'No viewport meta tag was found',
+        },
+        stepsToReproduce: [`Visit ${context.urlPath}`, 'Search for <meta name="viewport"> in <head>'],
+        evidence: {},
+        resolution: 'Add <meta name="viewport" content="width=device-width, initial-scale=1"> inside <head>.',
+        verifyCommand: `qa-test verify F-SEO-VIEWPORT`,
+      });
+    }
+
+    // 8. Favicon Link Tag (for public pages)
+    if (isPublicVisitor && !details.hasFavicon && firstTime('favicon')) {
+      findings.push({
+        id: `F-SEO-${tcId}-FAVICON-MISSING-${findings.length + 1}`,
+        testCaseId: context.testCaseId,
+        flowId: context.flowId,
+        severity: 'Minor',
+        checker: 'seo',
+        categoryTag: 'SEO',
+        title: 'Page is missing a favicon link tag',
+        where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
+        expectedVsActual: {
+          expected: 'Search results display brand icons; site should provide <link rel="icon" href="...">',
+          actual: 'No favicon link tag found in <head>',
+        },
+        stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect <head> for link[rel="icon"]'],
+        evidence: {},
+        resolution: 'Add a <link rel="icon" href="/favicon.ico"> tag in <head>.',
+        verifyCommand: `qa-test verify F-SEO-FAVICON`,
+      });
+    }
+
+    // 9. Content Image Alt Descriptions
+    if (details.imagesWithoutAltCount > 0) {
+      findings.push({
+        id: `F-SEO-${tcId}-IMG-ALT-MISSING-${findings.length + 1}`,
+        testCaseId: context.testCaseId,
+        flowId: context.flowId,
+        severity: 'Minor',
+        checker: 'seo',
+        categoryTag: 'SEO',
+        title: `Images missing alt text descriptions (${details.imagesWithoutAltCount} found)`,
+        where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
+        expectedVsActual: {
+          expected: 'All content images must have descriptive alt attributes for Google Image Search and screen readers',
+          actual: `Found ${details.imagesWithoutAltCount} images without alt attributes`,
+        },
+        stepsToReproduce: [`Visit ${context.urlPath}`, 'Query images missing alt attribute: document.querySelectorAll("img:not([alt])")'],
+        evidence: {},
+        resolution: 'Add descriptive alt text to all informative images, or alt="" for purely decorative graphics.',
+        verifyCommand: `qa-test verify F-SEO-IMG-ALT`,
+      });
+    }
+
+    // 10. OpenGraph Tags (Social preview)
     const missingOg: string[] = [];
     if (!details.ogTitle) missingOg.push('og:title');
     if (!details.ogDescription) missingOg.push('og:description');
     if (!details.ogImage) missingOg.push('og:image');
-    if (missingOg.length === 3) {
+    if (missingOg.length === 3 && firstTime('opengraph')) {
       findings.push({
-        id: `F-SEO-${context.testCaseId || 'GEN'}-OG-${findings.length + 1}`,
+        id: `F-SEO-${tcId}-OG-${findings.length + 1}`,
         testCaseId: context.testCaseId,
         flowId: context.flowId,
         severity: 'Suggestion',
         checker: 'seo',
+        categoryTag: 'SEO',
         title: 'Page is missing OpenGraph social preview tags',
         where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
         expectedVsActual: {
@@ -188,10 +363,61 @@ export class SeoChecker {
       });
     }
 
-    // 6. Check for broken links on page (limited rate, same-site only)
+    // 11. Check for broken links on page (limited rate, same-site only)
     if (details.sameSiteLinks && details.sameSiteLinks.length > 0) {
       const linkFindings = await this.checkBrokenLinks(page, details.sameSiteLinks, context);
       findings.push(...linkFindings);
+    }
+
+    // 12. Site Root Auditor (robots.txt, sitemap.xml, llms.txt, AI crawlers)
+    if (context.baseUrl) {
+      const isRootPath = context.urlPath === '/' || context.urlPath === '' || context.urlPath === '/index.html';
+      if (isRootPath) {
+        try {
+          const requestContext = page.context().request;
+          const rootResult = await this.siteRootAuditor.audit(
+            async (url: string) => {
+              try {
+                const r = await requestContext.fetch(url, { timeout: 3000 });
+                return {
+                  status: () => r.status(),
+                  text: () => r.text(),
+                };
+              } catch {
+                return null;
+              }
+            },
+            {
+              baseUrl: context.baseUrl,
+              testCaseId: context.testCaseId,
+              flowId: context.flowId,
+              role: context.role,
+              breakpoint: context.breakpoint,
+            }
+          );
+          findings.push(...rootResult.findings);
+        } catch {
+          // Skip on network failure
+        }
+      }
+    }
+
+    // 13. AEO Audits (Answer Engine Optimization: JSON-LD, Q&A patterns, breadcrumbs)
+    if (isPublicVisitor) {
+      try {
+        const aeoFindings = await this.aeoChecker.checkPage(page, context);
+        findings.push(...aeoFindings);
+      } catch {
+        // Non-blocking
+      }
+
+      // 14. GEO Audits (Generative Engine Optimization: density, citations, author bylines)
+      try {
+        const geoFindings = await this.geoChecker.checkPage(page, context);
+        findings.push(...geoFindings);
+      } catch {
+        // Non-blocking
+      }
     }
 
     return findings;
@@ -212,8 +438,23 @@ export class SeoChecker {
           headings.push({ level, text: (h.textContent || '').trim() });
         });
 
-        const canonicalEl = document.querySelector('link[rel="canonical"]');
-        const canonicalUrl = canonicalEl ? canonicalEl.getAttribute('href') || '' : undefined;
+        const canonicalEls = document.querySelectorAll('link[rel="canonical"]');
+        const canonicalUrl = canonicalEls.length > 0 ? canonicalEls[0].getAttribute('href') || '' : undefined;
+
+        const hasViewportMeta = !!document.querySelector('meta[name="viewport"]');
+        const hasFavicon = !!document.querySelector('link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]');
+
+        const images = Array.from(document.querySelectorAll('img'));
+        let imagesWithoutAltCount = 0;
+        for (const img of images) {
+          if (!img.hasAttribute('alt')) {
+            const role = img.getAttribute('role');
+            const ariaHidden = img.getAttribute('aria-hidden');
+            if (role !== 'presentation' && role !== 'none' && ariaHidden !== 'true') {
+              imagesWithoutAltCount++;
+            }
+          }
+        }
 
         const ogTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content') || undefined;
         const ogDescription = document.querySelector('meta[property="og:description"]')?.getAttribute('content') || undefined;
@@ -250,6 +491,10 @@ export class SeoChecker {
           h1Count: h1s.length,
           headings,
           canonicalUrl,
+          canonicalCount: canonicalEls.length,
+          hasViewportMeta,
+          hasFavicon,
+          imagesWithoutAltCount,
           ogTitle,
           ogDescription,
           ogImage,
@@ -283,6 +528,8 @@ export class SeoChecker {
             flowId: context.flowId,
             severity: 'Major',
             checker: 'seo',
+            // A broken link is something broken, whoever the site is for.
+            aspect: 'Works',
             title: `Broken link found: ${linkPath} returned HTTP ${response.status()}`,
             where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
             expectedVsActual: {

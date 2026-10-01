@@ -72,6 +72,15 @@ export class UXQualityChecker {
             document.querySelectorAll('button, a, input[type="button"], input[type="submit"]')
           );
           return interactive
+            .filter((el) => {
+              if (el.classList.contains('sr-only') || el.closest('.sr-only')) return false;
+              if (el.getAttribute('aria-hidden') === 'true' || el.closest('[aria-hidden="true"]')) return false;
+              if (el.closest('details:not([open])')) return false;
+              const style = window.getComputedStyle(el);
+              if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+              if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+              return true;
+            })
             .map((el) => {
               const rect = el.getBoundingClientRect();
               const testId = el.getAttribute('data-testid');
@@ -84,7 +93,7 @@ export class UXQualityChecker {
                 text,
                 ariaLabel,
                 tagName: el.tagName.toLowerCase(),
-                visible: rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).display !== 'none',
+                visible: rect.width > 0 && rect.height > 0,
               };
             })
             .filter((item) => item.visible && (item.width < 44 || item.height < 44));
@@ -100,6 +109,8 @@ export class UXQualityChecker {
             testCaseId: context.testCaseId,
             severity: 'Minor',
             checker: 'ux-quality',
+            // A tap target is about using the site on a phone.
+            aspect: 'Fast and mobile',
             title: `Touch target too small: ${label} (${Math.round(target.width)}x${Math.round(target.height)}px)`,
             where: {
               urlPath: context.urlPath,

@@ -68,24 +68,100 @@ export async function getStatus(): Promise<RunnerStatus | null> {
   }
 }
 
+export type AiProviderId = 'openrouter' | 'anthropic' | 'openai' | 'gemini';
+
 export interface AiSetup {
   configured: boolean;
   model: string | null;
-  /** Free requests the key has left today, when asked for and OpenRouter says. */
-  requestsLeft?: number;
-  requestsLimit?: number;
+  /** The service the AI runs on. OpenRouter's free models by default. */
+  provider?: AiProviderId;
+  /** The model that reviews screenshots after a run, when one is set up. */
+  visionModel?: string | null;
+  /** The person picked the models in Settings, rather than the QA Tool picking free ones. */
+  chosenBy?: 'person' | 'auto';
+  /** The services a key can be added for. */
+  providers?: Array<{ id: AiProviderId; name: string; free: boolean }>;
 }
 
 /**
- * Whether the QA Tool already has a working AI key, and the free model it chose. Both live on the
- * QA Tool, not in this browser, so any browser or device skips the setup once it's done. `usage`
- * also asks OpenRouter how many free requests are left today (slower: for Settings).
+ * Whether the QA Tool already has a working AI key, the service and the model it uses. They live
+ * on the QA Tool, not in this browser, so any browser skips the setup once it's done. Answered from
+ * this computer alone, so it's quick; today's free requests come from getAiUsage.
  */
-export async function getAiSetup(usage = false): Promise<AiSetup> {
-  const res = await call(`/api/ai/openrouter/key${usage ? '?usage=1' : ''}`);
+export async function getAiSetup(): Promise<AiSetup> {
+  const res = await call('/api/ai/settings');
   if (!res.ok) throw new RunnerError(NOT_RESPONDING);
-  const body = await json<{ configured: boolean; model?: string | null; requestsLeft?: number; requestsLimit?: number }>(res);
-  return { configured: body.configured, model: body.model ?? null, requestsLeft: body.requestsLeft, requestsLimit: body.requestsLimit };
+  const body = await json<AiSetup>(res);
+  return { ...body, model: body.model ?? null };
+}
+
+/** The free requests the key has left today, when OpenRouter says (one call to OpenRouter: slow). */
+export async function getAiUsage(): Promise<{ requestsLeft: number | null; requestsLimit: number | null }> {
+  const res = await call('/api/ai/usage', {}, 12000);
+  if (!res.ok) throw new RunnerError(NOT_RESPONDING);
+  return json(res);
+}
+
+/** Saves the AI service, a key for it, and the models chosen. A model given here is kept while it's available. */
+export async function saveAiSettings(settings: {
+  provider: AiProviderId;
+  apiKey?: string;
+  model?: string | null;
+  visionModel?: string | null;
+}): Promise<AiSetup> {
+  const res = await call('/api/ai/settings', { method: 'POST', body: JSON.stringify(settings) }, 25000);
+  const body = await json<AiSetup & { reason?: string; error?: string }>(res).catch(() => ({}) as AiSetup & { reason?: string; error?: string });
+  if (!res.ok) throw new RunnerError(body.reason || body.error || 'The settings couldn’t be saved. Try again.');
+  return { ...body, model: body.model ?? null };
+}
+
+export interface FreeModel {
+  id: string;
+  name: string;
+  contextLength: number;
+  supportsJsonOutput: boolean;
+  supportsImages: boolean;
+  /** Thinks before answering, which uses up its answer allowance. */
+  thinks?: boolean;
+  /** Has let planning down more often than it answered, on this computer. */
+  unreliable?: boolean;
+}
+
+/** OpenRouter's free models, best first. */
+export async function listFreeModels(): Promise<FreeModel[]> {
+  const res = await call('/api/ai/openrouter/free-models', {}, 20000);
+  if (!res.ok) throw new RunnerError('The model list couldn’t be read from OpenRouter. Try again in a minute.');
+  return (await json<{ models: FreeModel[] }>(res)).models;
+}
+
+/** One small request to a model, to see that it answers. It uses one of today's requests. */
+export async function testModel(model?: string): Promise<{ ok: boolean; ms: number; model?: string; reason?: string }> {
+  const res = await call('/api/ai/test-model', { method: 'POST', body: JSON.stringify({ model }) }, 90000);
+  if (!res.ok) {
+    const body = await json<{ reason?: string }>(res).catch(() => ({ reason: undefined }));
+    throw new RunnerError(body.reason || 'The model couldn’t be tested. Try again.');
+  }
+  return json(res);
+}
+
+/** About how many AI requests a scan of the site needs, and how many are left today. */
+export interface AiEstimate {
+  low: number;
+  high: number;
+  visualReview: number;
+  seenBefore: boolean;
+  free: boolean;
+  left: number | null;
+  limit: number | null;
+}
+
+export async function estimateAi(targetUrl: string, maxPages: number): Promise<AiEstimate | null> {
+  try {
+    const res = await call('/api/runner/ai-estimate', { method: 'POST', body: JSON.stringify({ targetUrl, maxPages }) }, 15000);
+    return res.ok ? await json<AiEstimate>(res) : null;
+  } catch {
+    return null;
+  }
 }
 
 export type KeyCheck = { valid: true } | { valid: false; reason: string };
@@ -114,7 +190,14 @@ export interface SiteFacts {
   /** The address can be tested fully: this computer, a private network, a tunnel, or marked as a test copy. */
   testCopy?: boolean;
   /** What was chosen for the site last time. */
-  remembered?: { owner?: boolean; markedTestCopy?: boolean };
+  remembered?: {
+    owner?: boolean;
+    markedTestCopy?: boolean;
+    /** Whether search was checked last time; unset means never chosen. */
+    searchChecks?: boolean;
+    /** Sign-ins saved for the site (never their passwords). */
+    signIns?: Array<{ role: string; username: string }>;
+  };
 }
 
 export type Reachability =
@@ -172,6 +255,19 @@ export interface StartRunRequest {
   replacePlan?: boolean;
   /** Test with the approved plan when nothing on the site is new. */
   testAgain?: boolean;
+  /** The AI service saved in Settings. OpenRouter when not given. */
+  aiProvider?: AiProviderId;
+  /** Plan with fixed rules now, spending no AI requests; re-plan items with the AI later. */
+  planWithoutAI?: boolean;
+  /**
+   * Check how search engines and AI assistants see the site. Off for a test copy by default: it
+   * matters on the public site.
+   */
+  searchChecks?: boolean;
+  /** Remember the sign-ins for this site (passwords in the computer's keychain). */
+  rememberSignIns?: boolean;
+  /** Sign in with the ones saved for the site. */
+  useSavedSignIns?: boolean;
 }
 
 /** Starts a check-up: the scan, then the plan waits for review. Returns the run id. */
@@ -190,8 +286,12 @@ export async function startRun(request: StartRunRequest): Promise<string> {
     skipReview: false,
     mode: 'product',
     useAI: true,
-    aiProvider: 'openrouter',
+    aiProvider: request.aiProvider ?? 'openrouter',
   };
+  if (request.planWithoutAI) body.planWithoutAI = true;
+  if (request.rememberSignIns) body.rememberSignIns = true;
+  if (request.useSavedSignIns) body.useSavedSignIns = true;
+  if (request.searchChecks !== undefined) body.searchChecks = request.searchChecks;
   if (request.stagingHost !== undefined) body.stagingHost = request.stagingHost;
   if (request.roles?.length) body.roles = request.roles;
   if (request.productContext) body.productContext = request.productContext;
@@ -218,11 +318,14 @@ export async function startRun(request: StartRunRequest): Promise<string> {
   return (await json<{ runId: string }>(res)).runId;
 }
 
-/** Stops the scan or test run. `planKept` when testing stopped: the plan waits for review again. */
-export async function abortRun(): Promise<{ aborted: boolean; planKept?: boolean }> {
+/**
+ * Stops the scan or test run. `planKept` when testing stopped: the plan waits for review again.
+ * With `finish`, the work so far is kept: the scan plans what it found, testing makes a partial report.
+ */
+export async function abortRun(finish = false): Promise<{ aborted: boolean; planKept?: boolean; finishing?: boolean }> {
   try {
-    const res = await call('/api/runner/abort', { method: 'POST' });
-    if (res.ok) return await json<{ aborted: boolean; planKept?: boolean }>(res);
+    const res = await call('/api/runner/abort', { method: 'POST', body: finish ? JSON.stringify({ finish: true }) : undefined });
+    if (res.ok) return await json<{ aborted: boolean; planKept?: boolean; finishing?: boolean }>(res);
   } catch {
     // runner might be busy or unreachable
   }
@@ -247,6 +350,39 @@ export interface PatchPlanBody {
   items?: Array<{ id: string; skipped: boolean }>;
   /** The screen sizes the run uses. */
   screenSizes?: Array<'375px' | '768px' | '1440px'>;
+  /** Confirms the AI's guess of what should happen (no text), or replaces it with the person's words. */
+  expectations?: Array<{ id: string; text?: string }>;
+  /** 'quick': desktop only, and only the shared menus' links. */
+  preset?: 'quick';
+}
+
+/** What a small change (a switch, an answer, the sizes) changed: merged into the plan on screen. */
+export interface PlanDelta {
+  delta: true;
+  summary?: ReviewPlan['summary'];
+  wontRun?: ReviewPlan['wontRun'];
+  screenSizes?: ReviewPlan['screenSizes'];
+  questions: ReviewPlan['questions'];
+  planPages: NonNullable<ReviewPlan['planPages']>;
+  navigation: NonNullable<ReviewPlan['navigation']>;
+  flows: ReviewPlan['flows'];
+}
+
+/** The plan with a change applied: a whole new plan, or the items a small change touched. */
+export function applyPlanChange(plan: ReviewPlan, change: ReviewPlan | PlanDelta): ReviewPlan {
+  if (!('delta' in change)) return change;
+  const byId = <T extends { id: string }>(items: T[] | undefined, changed: T[]): T[] | undefined =>
+    items?.map((item) => changed.find((c) => c.id === item.id) ?? item);
+  return {
+    ...plan,
+    summary: change.summary,
+    wontRun: change.wontRun,
+    screenSizes: change.screenSizes,
+    questions: change.questions,
+    planPages: byId(plan.planPages, change.planPages),
+    navigation: byId(plan.navigation, change.navigation),
+    flows: plan.flows.map((f) => change.flows.find((c) => c.id === f.id) ?? f),
+  };
 }
 
 /**
@@ -269,6 +405,8 @@ export const replanEverything = (productContext?: string) => startPlanUpdate('/a
 export const addPageToPlan = (address: string) => startPlanUpdate('/api/runner/plan/add-page', { address });
 /** Explores another host the site links to, and plans its pages. */
 export const includeHostInPlan = (host: string) => startPlanUpdate('/api/runner/plan/include-host', { host });
+/** Signs in as a role, explores what it sees, and adds that to the plan. */
+export const addSignInToPlan = (signIn: RoleCredential) => startPlanUpdate('/api/runner/plan/add-sign-in', signIn);
 
 /** Saves a response as a file, with the name the QA Tool gave it. */
 async function saveResponse(res: Response, fallbackName: string): Promise<void> {
@@ -290,14 +428,14 @@ export async function downloadPlanMarkdown(): Promise<void> {
   await saveResponse(res, 'test-plan.md');
 }
 
-export async function patchPlan(body: PatchPlanBody): Promise<ReviewPlan> {
+export async function patchPlan(body: PatchPlanBody): Promise<ReviewPlan | PlanDelta> {
   const res = await call('/api/runner/plan', { method: 'PATCH', body: JSON.stringify(body) });
   if (res.status === 422) {
     const err = await json<{ error: string; issues?: string[] }>(res);
     throw new RunnerError(err.error || 'Some steps are aimed at things that aren’t on the page.');
   }
   if (!res.ok) throw new RunnerError('Couldn’t update the plan. Try again.');
-  return json<ReviewPlan>(res);
+  return json<ReviewPlan | PlanDelta>(res);
 }
 
 export async function approvePlan(options?: { roles?: RoleCredential[]; breakpoints?: string[] }): Promise<void> {
@@ -383,4 +521,87 @@ export async function finishAiReview(): Promise<{
   const res = await call('/api/runner/ai/finish', { method: 'POST' });
   if (!res.ok) throw new RunnerError('Couldn’t finish the AI review. Try again.');
   return json(res);
+}
+
+/** What's remembered about a site on this computer. Passwords are never sent back. */
+export interface RememberedSite {
+  host: string;
+  owner?: boolean;
+  markedTestCopy?: boolean;
+  /** Whether search is checked; unset means the default (on for a live site, off for a test copy). */
+  searchChecks?: boolean;
+  signIns: Array<{ role: string; username: string; loginPath?: string }>;
+  updatedAt: string;
+}
+
+export async function listSites(): Promise<RememberedSite[]> {
+  const res = await call('/api/sites');
+  if (!res.ok) throw new RunnerError('The remembered sites couldn’t be read. Try again.');
+  return (await json<{ sites: RememberedSite[] }>(res)).sites;
+}
+
+/** Changes what's remembered for a site: whether search is checked (null: the default), or forgets a saved sign-in. */
+export async function updateSite(host: string, change: { searchChecks?: boolean | null; forgetSignIn?: string }): Promise<void> {
+  const res = await call(`/api/sites/${encodeURIComponent(host)}`, { method: 'POST', body: JSON.stringify(change) });
+  if (!res.ok) throw new RunnerError('That couldn’t be saved. Try again.');
+}
+
+export type ScreenSize = '375px' | '768px' | '1440px';
+
+/** The screen sizes a new check-up starts with. */
+export async function getDefaults(): Promise<{ screenSizes: ScreenSize[] }> {
+  const res = await call('/api/settings/defaults');
+  if (!res.ok) throw new RunnerError(NOT_RESPONDING);
+  return json(res);
+}
+
+export async function saveDefaults(defaults: { screenSizes: ScreenSize[] }): Promise<{ screenSizes: ScreenSize[] }> {
+  const res = await call('/api/settings/defaults', { method: 'POST', body: JSON.stringify(defaults) });
+  const body = await json<{ screenSizes: ScreenSize[]; error?: string }>(res);
+  if (!res.ok) throw new RunnerError(body.error || 'The defaults couldn’t be saved. Try again.');
+  return body;
+}
+
+/**
+ * Marks a problem as intended, or as not a problem, with an optional reason; null undoes it. The
+ * report is updated and the site's next check-ups don't raise it again. Returns the updated report.
+ */
+export async function triageProblem(
+  runId: string,
+  titles: string[],
+  status: 'Intended' | 'False Positive' | null,
+  reason?: string
+): Promise<ReleaseReport> {
+  const res = await call(`/api/runs/${encodeURIComponent(runId)}/triage`, { method: 'POST', body: JSON.stringify({ titles, status, reason }) });
+  if (!res.ok) {
+    const err = await json<{ error?: string }>(res).catch((): { error?: string } => ({}));
+    throw new RunnerError(err.error || 'That couldn’t be saved. Try again.');
+  }
+  return json<ReleaseReport>(res);
+}
+
+/** A plan kept aside for its site while another site was checked. */
+export interface WaitingPlan {
+  host: string;
+  targetUrl: string;
+  runId: string;
+  discoveredAt: string;
+  pages: number;
+}
+
+export async function listWaitingPlans(): Promise<WaitingPlan[]> {
+  try {
+    const res = await call('/api/runner/waiting-plans');
+    return res.ok ? (await json<{ plans: WaitingPlan[] }>(res)).plans : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Brings a kept-aside plan back for review; the plan waiting now, if any, is kept aside instead. */
+export async function resumeWaitingPlan(host: string): Promise<{ runId: string; targetUrl: string }> {
+  const res = await call('/api/runner/waiting-plans', { method: 'POST', body: JSON.stringify({ host }) });
+  const body = await json<{ runId: string; targetUrl: string; error?: string }>(res);
+  if (!res.ok) throw new RunnerError(body.error || 'That plan couldn’t be opened. Try again.');
+  return body;
 }

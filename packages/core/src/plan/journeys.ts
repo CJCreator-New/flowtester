@@ -1,12 +1,21 @@
-import type { AIMessage, AmbiguityQuestion, DiscoveredFlow, PageInventoryItem, RoleCredential } from '@qa/types';
-import type { AIProvider } from '../ai/ai-provider.js';
+import type { AIMessage, AmbiguityQuestion, FallbackReason, DiscoveredFlow, PageInventoryItem, RoleCredential } from '@qa/types';
+import { AITruncatedError, completeWith, type AIProvider } from '../ai/ai-provider.js';
 import { PlanValidator } from '../discovery/plan-validator.js';
 import { CREDENTIAL_PLACEHOLDERS } from '../credentials.js';
 import { generateFallbackJourneys, type SiteType } from '../discovery/site-type.js';
 import { stepQuestion } from '../discovery/questions.js';
 import type { SpiderResult } from '../discovery/deterministic-spider.js';
-import { BudgetSpentError } from './ai-budget.js';
-import { parseJsonAnswer } from './ai-planner.js';
+import { BudgetSpentError, StoppedEarlyError } from './ai-budget.js';
+import { fallbackReasonOf, parseJsonAnswer, PLANNING_MAX_TOKENS } from './ai-planner.js';
+
+/** Long product notes are cut short: the journeys need the gist, and every token counts on a free model. */
+const CONTEXT_CHARS = 4000;
+
+function productContextFor(context: string | undefined): string {
+  const notes = context?.trim();
+  if (!notes) return 'No written PRD provided. Rely on discovered pages.';
+  return notes.length > CONTEXT_CHARS ? `${notes.slice(0, CONTEXT_CHARS)}… (cut short)` : notes;
+}
 
 export interface JourneyPlannerInput {
   targetUrl: string;
@@ -52,41 +61,52 @@ function guessFillValue(step: { selector?: string; name: string }): string {
  * Budget, fixed rules choose the journeys.
  */
 export async function planJourneys(input: JourneyPlannerInput, ai: AIProvider | undefined): Promise<JourneyPlannerOutput> {
-  let siteType = input.siteType;
+  const siteType = input.siteType;
   const notes: string[] = [];
   const validator = new PlanValidator(input.spider.pages, input.spider.forms);
   const fallback = () => generateFallbackJourneys(siteType, input.spider as SpiderResult, input.roles);
 
   if (!ai) {
     notes.push('No AI key is set up, so the journeys were chosen by fixed rules. The AI review sections were skipped.');
-    return finish(fallback(), true, false);
+    return finish(fallback(), true, false, 'no-ai');
   }
 
-  const formsForPrompt = input.spider.forms.map((f) => ({
-    page: f.urlPath,
-    method: f.method,
-    action: f.action,
-    fields: f.inputs.map((i) => ({ label: i.label, type: i.type, required: i.required || undefined, selector: i.selector })),
-    submitSelector: f.submitButtonSelector,
-  }));
+  // A form repeated on many pages (a search box in the header) is listed once, with its pages.
+  const formsForPrompt: Array<{ pages: string[]; method?: string; action?: string; fields: unknown[]; submitSelector?: string }> = [];
+  const byShape = new Map<string, (typeof formsForPrompt)[number]>();
+  for (const f of input.spider.forms) {
+    const form = {
+      method: f.method,
+      action: f.action,
+      fields: f.inputs.map((i) => ({ label: i.label, type: i.type, required: i.required || undefined, selector: i.selector })),
+      submitSelector: f.submitButtonSelector,
+    };
+    const shape = JSON.stringify(form);
+    const same = byShape.get(shape);
+    if (same) {
+      if (!same.pages.includes(f.urlPath)) same.pages.push(f.urlPath);
+      continue;
+    }
+    const entry = { pages: [f.urlPath], ...form };
+    byShape.set(shape, entry);
+    formsForPrompt.push(entry);
+  }
   const promptMessage: AIMessage = {
     role: 'user',
     content: input.redact(`
 You are an expert QA Engineer synthesizing application flows for pre-release testing.
-Target Application: ${input.targetUrl}
-Product ID: ${input.productId}
+Target Application: ${input.targetUrl} (a ${siteType} site)
 
 Product Context:
-${input.productContext || 'No written PRD provided. Rely on discovered pages.'}
+${productContextFor(input.productContext)}
 ${input.instructions ? `\nThe owner asks: ${input.instructions}\n` : ''}
 Discovered Pages and the interactive elements on each (nothing else exists):
 ${input.promptPages.map((p) => PlanValidator.describePageForPrompt(p)).join('\n\n')}
 
-Discovered Forms:
-${JSON.stringify(formsForPrompt, null, 2)}
+Discovered Forms (a form on several pages is listed once):
+${JSON.stringify(formsForPrompt)}
 
-Roles:
-${JSON.stringify((input.roles.length ? input.roles : [{ role: 'member' }]).map((r) => ({ role: r.role })), null, 2)}
+Roles: ${(input.roles.length ? input.roles : [{ role: 'member' }]).map((r) => r.role).join(', ')}
 
 Rules:
 - Every step "selector" MUST be copied exactly from the element or form lists above, from the page the step runs on. Never invent a selector.
@@ -95,8 +115,7 @@ Rules:
 - Only give expected text or error messages that appear in the Product Context or on a listed page. If you don't know the exact wording, leave it out.
 
 Generate a JSON object with:
-1. "siteType": classify this site into exactly one of: "shop" | "SaaS" | "content" | "booking" | "app" | "other"
-2. "flows": the journeys a person takes across pages to get something done, as an array of 3 to 8 DiscoveredFlow items (each page's own buttons and links are planned separately, so focus on multi-step journeys). Each flow MUST have:
+1. "flows": the journeys a person takes across pages to get something done, as an array of 3 to 8 DiscoveredFlow items (each page's own buttons and links are planned separately, so focus on multi-step journeys). Each flow MUST have:
    - "id": e.g. "FLOW-001"
    - "name": flow name
    - "role": assigned role
@@ -106,19 +125,14 @@ Generate a JSON object with:
    - "inferredRules": list of validation or business constraints
    - "candidateExpectations": { url?: { pattern: string }, text?: { contains: string } }
    - "candidateValidationRules": [ { field: string, selector?: string, min?: number, max?: number, expectedError: string } ]
-3. "inferredRules": list of global inferred application business rules
+2. "inferredRules": list of global inferred application business rules
 
 Respond with ONLY the JSON object.
 `),
   };
 
-  const parseFlows = (responseText: string): DiscoveredFlow[] => {
-    const parsed = parseJsonAnswer(responseText);
-    if (parsed.siteType && ['shop', 'SaaS', 'content', 'booking', 'app', 'other'].includes(parsed.siteType)) {
-      siteType = parsed.siteType as SiteType;
-    }
-    return parsed.flows || [];
-  };
+  // The site type comes from the crawl (site-type.ts); the AI isn't asked for it.
+  const parseFlows = (responseText: string): DiscoveredFlow[] => parseJsonAnswer(responseText).flows || [];
 
   // Small free models often omit "value" on fill steps, which would silently type nothing: that
   // counts as unusable, so it gets the same repair as malformed JSON.
@@ -141,16 +155,35 @@ Respond with ONLY the JSON object.
   };
 
   const system: AIMessage = { role: 'system', content: 'You are an autonomous QA flow extraction agent. Output strictly valid JSON.' };
+  const asked = { responseFormat: 'json', reasoning: 'low', maxTokens: PLANNING_MAX_TOKENS, stage: 'journeys' } as const;
+  // Asked again when the answer is cut off: fewer, leaner journeys fit in what the model has left
+  // after thinking. The same request again would be cut off the same way.
+  const shorterMessage: AIMessage = {
+    role: 'user',
+    content: `${promptMessage.content}\nKeep the answer short, or it gets cut off: at most 3 flows of at most 6 steps, each with only "id", "name", "role", "description", "startPage", "steps" and "candidateExpectations". Leave out "inferredRules" and "candidateValidationRules".`,
+  };
   try {
-    const responseText = await ai.generateText([system, promptMessage], { responseFormat: 'json', temperature: 0.2 });
+    let asking = promptMessage;
+    let first = await completeWith(ai, [system, asking], { ...asked, temperature: 0.2 });
     let firstParse: DiscoveredFlow[] | null = null;
-    let problems: string[];
-    try {
-      firstParse = parseFlows(responseText);
-      problems = problemsIn(firstParse);
-    } catch (parseErr) {
-      problems = [`The response was not valid JSON (${parseErr instanceof Error ? parseErr.message : parseErr}).`];
+    let problems: string[] = [];
+    for (let attempt = 1; ; attempt++) {
+      try {
+        firstParse = parseFlows(first.text);
+        problems = problemsIn(firstParse);
+        break;
+      } catch (parseErr) {
+        if (first.finishReason !== 'length') {
+          problems = [`The response was not valid JSON (${parseErr instanceof Error ? parseErr.message : parseErr}).`];
+          break;
+        }
+        if (attempt > 1) throw new AITruncatedError(first.model);
+        console.warn('[JourneyPlanner] The answer was cut off; asking for fewer, shorter journeys...');
+        asking = shorterMessage;
+        first = await completeWith(ai, [system, asking], { ...asked, temperature: 0.2 });
+      }
     }
+    const responseText = first.text;
     if (problems.length === 0 && firstParse) return finish(firstParse, false, false);
 
     // One chance to repair its own output, told exactly what was wrong.
@@ -158,7 +191,7 @@ Respond with ONLY the JSON object.
     const repairText = await ai.generateText(
       [
         system,
-        promptMessage,
+        asking,
         { role: 'assistant', content: responseText },
         {
           role: 'user',
@@ -168,7 +201,7 @@ Respond with ONLY the JSON object.
             .join('\n')}\n\nReply again with ONLY a single valid JSON object matching the requested schema — no markdown fences, no commentary, no truncation. Copy every selector exactly from the element lists, and every "fill" step MUST include a concrete non-empty "value".`,
         },
       ],
-      { responseFormat: 'json', temperature: 0 }
+      { ...asked, stage: 'repair', temperature: 0 }
     );
     let flows: DiscoveredFlow[];
     try {
@@ -196,13 +229,20 @@ Respond with ONLY the JSON object.
     notes.push(
       overBudget
         ? 'The AI Request Budget ran out before the journeys, so fixed rules chose them. Re-plan them with the AI when requests are available again.'
-        : 'The AI couldn’t plan the journeys, so fixed rules chose them.'
+        : aiErr instanceof StoppedEarlyError
+          ? 'You stopped the scan early, so fixed rules chose the journeys.'
+          : aiErr instanceof AITruncatedError
+          ? 'The AI model stopped before it finished planning the journeys (it used its whole answer allowance), so fixed rules chose them. Choose another model in Settings, then re-plan them.'
+          : 'The AI service didn’t answer for the journeys, so fixed rules chose them.'
     );
-    return finish(fallback(), true, overBudget);
+    return finish(fallback(), true, overBudget, fallbackReasonOf(aiErr));
   }
 
-  function finish(flows: DiscoveredFlow[], usedFallback: boolean, overBudget: boolean): JourneyPlannerOutput {
-    for (const flow of flows) flow.source ??= usedFallback ? 'fallback' : 'ai';
+  function finish(flows: DiscoveredFlow[], usedFallback: boolean, overBudget: boolean, reason?: FallbackReason): JourneyPlannerOutput {
+    for (const flow of flows) {
+      flow.source ??= usedFallback ? 'fallback' : 'ai';
+      if (flow.source === 'fallback' && reason) flow.fallbackReason = reason;
+    }
     // What the AI expects is a guess unless the owner's notes say it, and a guess never fails a site
     // on its own: it's reported as "Could not verify" until someone confirms it.
     const context = input.productContext || '';

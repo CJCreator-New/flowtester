@@ -1,3 +1,5 @@
+import type { AIModelOutcome } from '@qa/types';
+
 /**
  * OpenRouter account helpers used by the non-technical wizard: key validation and
  * free-tier model discovery. Keys are only ever sent to OpenRouter; nothing here logs them.
@@ -13,6 +15,8 @@ export interface OpenRouterModel {
   supportsJsonOutput: boolean;
   /** Takes screenshots as input, so it can do the visual review. */
   supportsImages: boolean;
+  /** Thinks before it answers, which spends its answer allowance. Such models are tried last. */
+  thinks?: boolean;
 }
 
 export type KeyValidation = { valid: true } | { valid: false; reason: string };
@@ -113,6 +117,7 @@ export class OpenRouterClient {
         contextLength: m.context_length ?? 0,
         supportsJsonOutput: (m.supported_parameters ?? []).includes('response_format'),
         supportsImages: (m.architecture?.input_modalities ?? []).includes('image'),
+        thinks: thinks(m) || undefined,
         reasoningMandatory: !!m.reasoning?.mandatory,
       }))
       .sort((a, b) => rank(b) - rank(a) || b.contextLength - a.contextLength)
@@ -137,19 +142,51 @@ function isChatModel(m: RawModel): boolean {
   );
 }
 
-/** Higher is better: JSON-mode support (discovery asks for JSON), then no forced reasoning (faster). */
-function rank(m: { supportsJsonOutput: boolean; reasoningMandatory: boolean }): number {
-  return (m.supportsJsonOutput ? 2 : 0) + (m.reasoningMandatory ? 0 : 1);
+/** A model that reasons before answering: the reasoning comes out of the same answer allowance. */
+function thinks(m: RawModel): boolean {
+  const params = m.supported_parameters ?? [];
+  return !!m.reasoning?.mandatory || params.includes('reasoning') || params.includes('include_reasoning');
+}
+
+/**
+ * Higher is better: JSON-mode support (planning asks for JSON), then no reasoning at all (a free
+ * reasoning model can spend its whole allowance thinking and answer nothing), then reasoning that
+ * can at least be turned down.
+ */
+function rank(m: { supportsJsonOutput: boolean; thinks?: boolean; reasoningMandatory: boolean }): number {
+  return (m.supportsJsonOutput ? 4 : 0) + (m.thinks ? 0 : 2) + (m.reasoningMandatory ? 0 : 1);
+}
+
+/** How each model has done on this machine: see AIModelOutcome. */
+export type ModelRecord = Record<string, AIModelOutcome>;
+
+/** A model that has let planning down more often than it has answered: it's tried after the others. */
+export function unreliable(model: string, record: ModelRecord = {}): boolean {
+  const r = record[model];
+  return !!r && r.truncated + r.failed > 0 && r.truncated + r.failed >= r.ok;
+}
+
+/** The list best-first, with models that keep letting planning down moved to the end. */
+export function byTrackRecord(models: OpenRouterModel[], record: ModelRecord = {}): OpenRouterModel[] {
+  return [...models.filter((m) => !unreliable(m.id, record)), ...models.filter((m) => unreliable(m.id, record))];
 }
 
 /** The model that writes the test plan. The list is already sorted best-first. */
-export function pickRecommendedModel(models: OpenRouterModel[]): string | null {
-  return models[0]?.id ?? null;
+export function pickRecommendedModel(models: OpenRouterModel[], record: ModelRecord = {}): string | null {
+  return byTrackRecord(models, record)[0]?.id ?? null;
 }
 
 /** The model that reviews screenshots: the best one that takes images, or null when none is free. */
-export function pickVisionModel(models: OpenRouterModel[]): string | null {
-  return models.find((m) => m.supportsImages)?.id ?? null;
+export function pickVisionModel(models: OpenRouterModel[], record: ModelRecord = {}): string | null {
+  return byTrackRecord(models, record).find((m) => m.supportsImages)?.id ?? null;
+}
+
+/** Models to switch to when the chosen one stops before answering: the next best few. */
+export function fallbackModels(models: OpenRouterModel[], chosen: string | null | undefined, record: ModelRecord = {}, count = 3): string[] {
+  return byTrackRecord(models, record)
+    .filter((m) => m.id !== chosen && m.supportsJsonOutput && !unreliable(m.id, record))
+    .slice(0, count)
+    .map((m) => m.id);
 }
 
 /**
@@ -158,12 +195,16 @@ export function pickVisionModel(models: OpenRouterModel[]): string | null {
  */
 export function keepOrPickModels(
   models: OpenRouterModel[],
-  current: { text?: string | null; vision?: string | null } = {}
+  current: { text?: string | null; vision?: string | null; chosenBy?: 'person' } = {},
+  record: ModelRecord = {}
 ): { text: string | null; vision: string | null } {
-  const stillFree = (id: string | null | undefined, needsImages: boolean) =>
-    !!id && models.some((m) => m.id === id && (!needsImages || m.supportsImages));
+  // A model the person picked is kept while it's free; one picked automatically also has to keep answering.
+  const keep = (id: string | null | undefined, needsImages: boolean) =>
+    !!id &&
+    models.some((m) => m.id === id && (!needsImages || m.supportsImages)) &&
+    (current.chosenBy === 'person' || !unreliable(id, record));
   return {
-    text: stillFree(current.text, false) ? current.text! : pickRecommendedModel(models),
-    vision: stillFree(current.vision, true) ? current.vision! : pickVisionModel(models),
+    text: keep(current.text, false) ? current.text! : pickRecommendedModel(models, record),
+    vision: keep(current.vision, true) ? current.vision! : pickVisionModel(models, record),
   };
 }

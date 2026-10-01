@@ -4,13 +4,14 @@
  * expansion from Plan to tests that the approval summary and the run share.
  */
 import { describe, it, expect } from 'vitest';
-import type { AIMessage, AICompletionOptions, AIProviderType, DiscoveryDraft, ElementInventoryItem, PageInventoryItem, PageLink } from '@qa/types';
+import type { AICompletion, AIMessage, AICompletionOptions, AIProviderType, DiscoveryDraft, ElementInventoryItem, PageInventoryItem, PageLink } from '@qa/types';
 import type { AIProvider } from '../src/ai/ai-provider.js';
 import { buildSiteGraph } from '../src/plan/site-graph.js';
 import { itemShape, sampleLayoutGroups } from '../src/plan/sampling.js';
 import { planPagesAndMenus, estimatePageRequests, type PagePlannerInput } from '../src/plan/ai-planner.js';
 import { BudgetSpentError, PacedAI } from '../src/plan/ai-budget.js';
 import { expandPlan } from '../src/plan/expand.js';
+import { planJourneys } from '../src/plan/journeys.js';
 import { planToMarkdown } from '../src/plan/markdown.js';
 
 const el = (role: string, name: string, selector: string, extra: Partial<ElementInventoryItem> = {}): ElementInventoryItem => ({
@@ -152,12 +153,14 @@ describe('The AI Planner', () => {
     expect(ai.prompts.join('\n')).not.toContain('"Delete account"');
     expect(out.pages.find((p) => p.urlPath === '/products/red-wool-scarf-2')).toMatchObject({ coverage: 'covered', tests: [] });
 
-    // Shared menu once, with the AI's names; every sample's own links; the partner link leaves the site.
+    // Shared menu once, named from the links (their destinations were all seen, so the AI wasn't
+    // asked about them); every sample's own links; the partner link leaves the site.
     const shared = out.navigation.filter((n) => n.shared);
-    expect(shared.map((n) => n.name).sort()).toEqual(['AI menu: About', 'AI menu: Home', 'AI menu: Products']);
+    expect(shared.map((n) => n.name).sort()).toEqual(['Menu: “About” opens /about', 'Menu: “Home” opens /', 'Menu: “Products” opens /products']);
+    expect(shared.find((n) => n.linkName === 'About')!.expectation).toBe('The “about” page');
     expect(shared.every((n) => n.startPage === '/')).toBe(true);
     expect(out.navigation.filter((n) => n.startPage === '/products' && !n.shared)).toHaveLength(6);
-    expect(out.navigation.find((n) => n.leavesSite)).toMatchObject({ to: 'https://partner.example/offer', name: 'AI: Partner' });
+    expect(out.navigation.find((n) => n.leavesSite)).toMatchObject({ to: 'https://partner.example/offer', name: '“Partner” link to partner.example works' });
     expect(out.navigation.every((n) => n.source === 'ai')).toBe(true);
   });
 
@@ -185,6 +188,40 @@ describe('The AI Planner', () => {
     expect(out.pages.filter((p) => p.coverage !== 'covered' && p.source === 'ai')).toHaveLength(3);
     expect(out.overBudget).toBeGreaterThan(0);
     expect(out.notes.some((n) => n.includes('AI Request Budget ran out'))).toBe(true);
+  });
+
+  it('doesn’t repair an answer the model cut off: fixed rules plan it, and the note names the real cause', async () => {
+    const prompts: string[] = [];
+    const cutOff: AIProvider = {
+      providerType: 'openrouter',
+      async generateText() {
+        throw new Error('complete() is used');
+      },
+      async complete(messages: AIMessage[]): Promise<AICompletion> {
+        prompts.push(messages.map((m) => m.content).join('\n'));
+        return { text: '', finishReason: 'length', model: 'vendor/thinker', usage: { promptTokens: 700, completionTokens: 4096, reasoningTokens: 4096 } };
+      },
+    };
+    const input = plannerInput([page('/', [], { elements: [el('button', 'Show offers', '[data-testid="offers"]')] })]);
+    const out = await planPagesAndMenus(input, cutOff);
+    expect(prompts).toHaveLength(1);
+    expect(out.pages[0]).toMatchObject({ source: 'fallback', fallbackReason: 'truncated' });
+    // The page, and its links to the two pages the crawl didn't see (asked about in the same request).
+    expect(out.truncated).toBe(3);
+    expect(out.overBudget).toBe(0);
+    expect(out.notes).toEqual([expect.stringContaining('fixed rules planned 3 items')]);
+    expect(out.notes[0]).toContain('The AI model stopped before it finished answering');
+    expect(out.notes.join(' ')).not.toContain('Budget');
+  });
+
+  it('asks the AI only about links to pages the crawl didn’t see', async () => {
+    const unseen: PageLink = { name: 'Careers', selector: 'role=link[name="Careers"]', to: '/careers' };
+    const ai = new ScriptedAI(goodAnswer);
+    const out = await planPagesAndMenus(plannerInput([page('/', [unseen]), page('/about')]), ai);
+    const pagesPrompt = ai.prompts.find((p) => p.includes('Pages:'))!;
+    expect(pagesPrompt).toContain('Careers');
+    expect(pagesPrompt).not.toContain('"to":"/about"');
+    expect(out.navigation.find((n) => n.linkName === 'Careers')).toMatchObject({ source: 'ai', expectation: 'The Careers page' });
   });
 
   it('opens a folded menu first where narrow screens hide a link, and skips sizes where nothing shows it', async () => {
@@ -221,6 +258,77 @@ describe('PacedAI', () => {
     await expect(ai.generateText([])).rejects.toBeInstanceOf(BudgetSpentError);
     expect(calls).toBe(4);
   });
+
+  it('moves on to the next model, without waiting, when a model’s shared free pool is busy', async () => {
+    const asked: Array<string | undefined> = [];
+    const waits: number[] = [];
+    const inner: AIProvider = {
+      providerType: 'openrouter',
+      async generateText() {
+        return '';
+      },
+      async complete(_m: AIMessage[], options?: AICompletionOptions): Promise<AICompletion> {
+        asked.push(options?.model);
+        if (options?.model === 'vendor/busy') {
+          throw new Error('OpenAI/OpenRouter API error (429): vendor/busy is temporarily rate-limited upstream. Please retry shortly');
+        }
+        return { text: '{}', finishReason: 'stop' };
+      },
+    };
+    const ai = new PacedAI(inner, Infinity, { gapMs: 0, sleep: async (ms) => void waits.push(ms), model: 'vendor/busy', fallbackModels: ['vendor/free'] });
+    expect((await ai.complete([], { stage: 'journeys' })).text).toBe('{}');
+    expect(asked).toEqual(['vendor/busy', 'vendor/free']);
+    expect(waits).toEqual([]);
+    expect(ai.models['vendor/busy']).toMatchObject({ failed: 1 });
+  });
+
+  it('asks for fewer, shorter journeys when the answer is cut off, instead of repeating the same request', async () => {
+    const prompts: string[] = [];
+    const ai: AIProvider = {
+      providerType: 'openrouter',
+      async generateText() {
+        throw new Error('complete() is used');
+      },
+      async complete(messages: AIMessage[]): Promise<AICompletion> {
+        const prompt = messages.map((m) => m.content).join('\n');
+        prompts.push(prompt);
+        return prompt.includes('Keep the answer short')
+          ? { text: JSON.stringify({ flows: [] }), finishReason: 'stop' }
+          : { text: '{"flows": [{"id": "FLOW-001", "name": "Buy', finishReason: 'length' };
+      },
+    };
+    const out = await planJourneys(
+      { targetUrl: 'https://shop.example/', productId: 'shop', promptPages: shop().slice(0, 2), spider: { pages: shop(), forms: [] }, roles: [], siteType: 'shop', redact: (t) => t },
+      ai
+    );
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('at most 3 flows');
+    expect(out.usedFallback).toBe(false);
+  });
+
+  it('switches to the next model when one answers nothing, and adds up tokens per stage and outcomes per model', async () => {
+    const asked: Array<string | undefined> = [];
+    const inner: AIProvider = {
+      providerType: 'openrouter',
+      async generateText() {
+        return '';
+      },
+      async complete(_m: AIMessage[], options?: AICompletionOptions): Promise<AICompletion> {
+        asked.push(options?.model);
+        return options?.model === 'vendor/thinker'
+          ? { text: '', finishReason: 'length', usage: { promptTokens: 100, completionTokens: 4096, reasoningTokens: 4096 } }
+          : { text: '{}', finishReason: 'stop', usage: { promptTokens: 100, completionTokens: 10 } };
+      },
+    };
+    const ai = new PacedAI(inner, Infinity, { gapMs: 0, model: 'vendor/thinker', fallbackModels: ['vendor/plain'] });
+    expect((await ai.complete([], { stage: 'planning' })).text).toBe('{}');
+    expect((await ai.complete([], { stage: 'journeys' })).text).toBe('{}');
+    expect(asked).toEqual(['vendor/thinker', 'vendor/plain', 'vendor/plain']);
+    expect(ai.used).toBe(3);
+    expect(ai.tokens.planning).toMatchObject({ requests: 2, completionTokens: 4106, reasoningTokens: 4096, truncated: 1 });
+    expect(ai.tokens.journeys).toMatchObject({ requests: 1 });
+    expect(ai.models).toEqual({ 'vendor/thinker': { ok: 0, truncated: 1, failed: 0 }, 'vendor/plain': { ok: 2, truncated: 0, failed: 0 } });
+  });
 });
 
 describe('From Plan to tests', () => {
@@ -252,16 +360,18 @@ describe('From Plan to tests', () => {
     // 2 shared menu links left (About is off) + 6 product links on /products.
     expect(kinds('navigation')).toHaveLength(8);
     expect(kinds('navigation')[0].expectations).toMatchObject({ url: { pattern: '/' }, pageWorks: {} });
+    // A link goes to the same place at every width: it's clicked once, at the widest size.
+    expect(kinds('navigation').every((tc) => JSON.stringify(tc.breakpoints) === JSON.stringify(['1440px']))).toBe(true);
     expect(testCases.every((tc) => tc.planItemId)).toBe(true);
     expect(testCases.some((tc) => tc.startPage === '/products/red-wool-scarf-2')).toBe(false);
-    expect(wontRun).toEqual([expect.objectContaining({ what: 'AI menu: About', reason: 'Switched off in the review.' })]);
+    expect(wontRun).toEqual([expect.objectContaining({ what: 'Menu: “About” opens /about', reason: 'Switched off in the review.' })]);
 
-    // (7 + 4 + 8) tests at 2 sizes, and the link check once.
-    expect(summary.tests).toBe(19 * 2 + 1);
+    // (7 + 4) tests at 2 sizes, the 8 Navigation Checks and the link check once.
+    expect(summary.tests).toBe(11 * 2 + 8 + 1);
     expect(summary.pages).toBe(7);
     expect(summary.pagesListed).toBe(10);
     expect(summary.lines.map((l) => l.text)).toEqual([
-      '39 tests on 7 pages at 2 screen sizes (375px, 1440px)',
+      '31 tests on 7 pages at 2 screen sizes (375px, 1440px)',
       '3 pages are covered by Sample Pages and not visited',
       '1 question will use the safe answer',
       '1 item won’t run',

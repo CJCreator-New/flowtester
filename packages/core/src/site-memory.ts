@@ -52,6 +52,10 @@ export interface SiteMemory {
   staging?: boolean;
   /** The answer to "I own this site or it's a test copy" last time, so the next check-up starts with it. */
   owner?: boolean;
+  /** Whether to check how search engines see the site, as last chosen. */
+  searchChecks?: boolean;
+  /** Sign-ins the person asked to remember for the site. Passwords are kept in the OS keychain, never here. */
+  signIns?: Array<{ role: string; username: string; loginPath?: string }>;
   /** Pages found in the last run. */
   pages: string[];
   /** Journeys in the last run, by journey key, with a fingerprint of their steps. */
@@ -96,6 +100,22 @@ export async function loadSiteMemory(dataDir: string, host: string): Promise<Sit
   } catch {
     return null;
   }
+}
+
+/** Every site remembered on this computer. */
+export async function listSiteMemories(dataDir: string): Promise<SiteMemory[]> {
+  const dir = path.join(dataDir, 'sites');
+  const names = await fs.readdir(dir).catch(() => [] as string[]);
+  const sites: SiteMemory[] = [];
+  for (const name of names.filter((n) => n.endsWith('.json'))) {
+    try {
+      const memory = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as SiteMemory;
+      if (memory.host) sites.push({ ...emptySiteMemory(memory.host), ...memory });
+    } catch {
+      // not a site's memory
+    }
+  }
+  return sites.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function saveSiteMemory(dataDir: string, memory: SiteMemory): Promise<void> {

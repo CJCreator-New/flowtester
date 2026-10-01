@@ -257,6 +257,11 @@ export class PerformanceChecker {
         const interactives = Array.from(document.querySelectorAll('button, a, input, select, textarea'))
           .filter((el): el is HTMLElement => {
             if (typeof el.getBoundingClientRect !== 'function') return false;
+            if (el.classList.contains('sr-only') || el.closest('.sr-only')) return false;
+            if (el.closest('details:not([open])')) return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+            if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
             const r = el.getBoundingClientRect();
             return r.width > 0 && r.height > 0;
           });
@@ -274,6 +279,15 @@ export class PerformanceChecker {
                 (Math.min(rA.right, rB.right) - Math.max(rA.left, rB.left)) *
                 (Math.min(rA.bottom, rB.bottom) - Math.max(rA.top, rB.top));
               if (area > 80) {
+                // Verify that at least one of the elements is actually hit-tested at the overlap center
+                const midX = (Math.max(rA.left, rB.left) + Math.min(rA.right, rB.right)) / 2;
+                const midY = (Math.max(rA.top, rB.top) + Math.min(rA.bottom, rB.bottom)) / 2;
+                const topEl = document.elementFromPoint(midX, midY);
+                if (!topEl || (!a.contains(topEl) && !b.contains(topEl))) {
+                  // Both elements are clipped by an overflow container or hidden behind another layer
+                  continue;
+                }
+
                 const selA = a.getAttribute('data-testid') ? `[data-testid="${a.getAttribute('data-testid')}"]` : a.tagName.toLowerCase();
                 const selB = b.getAttribute('data-testid') ? `[data-testid="${b.getAttribute('data-testid')}"]` : b.tagName.toLowerCase();
                 overlappingElements.push({ tag: a.tagName.toLowerCase(), selector: selA, overlapsWith: selB });

@@ -30,7 +30,7 @@ export function Badge({ tone = 'quiet', children, title }: { tone?: 'quiet' | 's
     fail: 'border-fail/50 text-fail',
   };
   return (
-    <span title={title} className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wide ${tones[tone]}`}>
+    <span title={title} className={`inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-bold ${tones[tone]}`}>
       {children}
     </span>
   );
@@ -49,18 +49,20 @@ export function SourceBadge({ source }: { source?: 'ai' | 'fallback' | 'person' 
   return null;
 }
 
-/** A Plan Item's on/off switch. */
+/** A Plan Item's on/off switch, with a hit area of at least 24 px (WCAG 2.5.8). */
 export function ItemToggle({ label, on, disabled, onChange }: { label: string; on: boolean; disabled?: boolean; onChange: (on: boolean) => void }) {
   return (
-    <input
-      type="checkbox"
-      aria-label={label}
-      title={on ? 'Included: uncheck to leave it out of the run' : 'Left out: check to include it'}
-      checked={on}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.checked)}
-      className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[#6C9BF2]"
-    />
+    <label className="-m-1 inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-panel">
+      <input
+        type="checkbox"
+        aria-label={label}
+        title={on ? 'Included: uncheck to leave it out of the run' : 'Left out: check to include it'}
+        checked={on}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-5 w-5 cursor-pointer accent-[#6C9BF2]"
+      />
+    </label>
   );
 }
 
@@ -70,7 +72,7 @@ export function ReplanControl({ label, disabled, onReplan }: { label: string; di
   const [text, setText] = useState('');
   if (!open) {
     return (
-      <button type="button" disabled={disabled} onClick={() => setOpen(true)} className="font-mono text-[11px] text-stamp hover:underline disabled:opacity-50" aria-label={label}>
+      <button type="button" disabled={disabled} onClick={() => setOpen(true)} className="min-h-[32px] text-sm font-bold text-stamp hover:underline disabled:opacity-50" aria-label={label}>
         Re-plan with the AI
       </button>
     );
@@ -86,17 +88,17 @@ export function ReplanControl({ label, disabled, onReplan }: { label: string; di
       }}
     >
       <input
-        className="field flex-1 py-1.5 text-xs"
+        className="field flex-1 py-2 text-sm"
         placeholder="What should change? (optional)"
         aria-label={`What should change: ${label}`}
         value={text}
         onChange={(e) => setText(e.target.value)}
         autoFocus
       />
-      <button type="submit" disabled={disabled} className="btn-primary px-3 py-1.5 text-xs">
+      <button type="submit" disabled={disabled} className="btn-primary min-h-[44px] px-4 text-sm">
         Re-plan
       </button>
-      <button type="button" onClick={() => setOpen(false)} className="btn-link text-xs">
+      <button type="button" onClick={() => setOpen(false)} className="btn-link text-sm">
         Cancel
       </button>
     </form>

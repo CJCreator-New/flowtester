@@ -3,10 +3,16 @@
  * crawler gathers the facts, the AI Planner writes the Plan Items, and the Plan is exactly what runs.
  * Terms are defined in CONTEXT.md.
  */
-import type { Breakpoint, TestCaseExpectations, TestCaseStep } from './index.js';
+import type { AIStage, Breakpoint, TestCaseExpectations, TestCaseStep } from './index.js';
 
 /** Who planned a Plan Item: the AI, the Fixed-Rule Fallback when the AI couldn't, or the person. */
 export type PlanItemSource = 'ai' | 'fallback' | 'person';
+
+/**
+ * Why the Fixed-Rule Fallback planned an item: the AI Request Budget ran out, the model stopped
+ * before it answered, the AI service didn't answer, its answer couldn't be used, or there's no AI.
+ */
+export type FallbackReason = 'budget' | 'truncated' | 'no-answer' | 'unusable' | 'no-ai' | 'stopped';
 
 /** A link or navigation button on a page, as the crawler saw it. */
 export interface PageLink {
@@ -85,6 +91,8 @@ export interface PlanPage {
   tests: PlanPageTest[];
   /** Who planned the page's tests. */
   source: PlanItemSource;
+  /** Why fixed rules planned them, when they did. */
+  fallbackReason?: FallbackReason;
   skipped?: boolean;
   /** The person added it by its address. */
   added?: boolean;
@@ -118,6 +126,8 @@ export interface NavigationCheck {
   notAt?: Breakpoint[];
   roles: string[];
   source: PlanItemSource;
+  /** Why fixed rules planned it, when they did. */
+  fallbackReason?: FallbackReason;
   skipped?: boolean;
   isNew?: boolean;
 }
@@ -127,6 +137,8 @@ export interface PlanGradedCheck {
   id: string;
   name: string;
   description: string;
+  /** Why it won't be graded this time, when it can't run (no AI requests left, not a public site). */
+  notGraded?: string;
 }
 
 export interface PlanLayoutGroup {
@@ -151,6 +163,27 @@ export interface AIRequestBudget {
   visualReview?: number;
   /** Plan Items planned by fixed rules because the budget ran out. */
   overBudget?: number;
+  /** Tokens used per stage (planning, repair, journeys…), for the developer details. */
+  tokens?: Partial<Record<AIStage, AIStageUsage>>;
+  /** How each model did: a model that keeps stopping before it answers is avoided next time. */
+  models?: Record<string, AIModelOutcome>;
+}
+
+/** Tokens one stage of AI work used, added up over its requests. */
+export interface AIStageUsage {
+  requests: number;
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+  /** Requests cut off by the output allowance. */
+  truncated: number;
+}
+
+/** Answers a model gave: usable, cut off before it answered, or failed outright. */
+export interface AIModelOutcome {
+  ok: number;
+  truncated: number;
+  failed: number;
 }
 
 /** Something in the Plan that won't run, and why. */
@@ -170,6 +203,8 @@ export interface PlanSummary {
   pagesListed: number;
   screenSizes: Breakpoint[];
   lines: Array<{ text: string; itemIds: string[] }>;
+  /** About how many minutes the tests take. */
+  minutes?: number;
 }
 
 /** Another host the site links to: listed, its links checked for being broken, crawled if ticked. */

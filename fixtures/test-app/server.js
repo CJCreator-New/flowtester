@@ -12,6 +12,30 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (url.pathname === '/robots.txt') {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(`User-agent: *\nAllow: /\n\nUser-agent: GPTBot\nAllow: /\n\nSitemap: http://localhost:${port}/sitemap.xml\n`);
+    return;
+  }
+
+  if (url.pathname === '/sitemap.xml') {
+    res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8' });
+    res.end(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>http://localhost:${port}/</loc></url></urlset>`);
+    return;
+  }
+
+  if (url.pathname === '/llms.txt') {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(`# Fixture QA App\n\n> Test application for verifying QA Flow Tester checks.\n\n- [About](http://localhost:${port}/about): Overview of invoice features.\n`);
+    return;
+  }
+
+  if (url.pathname === '/favicon.ico') {
+    res.writeHead(200, { 'Content-Type': 'image/x-icon' });
+    res.end();
+    return;
+  }
+
   if (url.pathname === '/api/invoices' && req.method === 'POST') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: true, id: 'INV-101' }));

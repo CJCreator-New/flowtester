@@ -1,5 +1,6 @@
 import type { AIProvider } from '../ai-provider.js';
-import type { AIMessage, AICompletionOptions, AIProviderType } from '@qa/types';
+import { DEFAULT_MODELS } from '../default-models.js';
+import type { AICompletion, AIMessage, AICompletionOptions, AIProviderType } from '@qa/types';
 
 export class GeminiProvider implements AIProvider {
   readonly providerType: AIProviderType = 'gemini';
@@ -12,7 +13,11 @@ export class GeminiProvider implements AIProvider {
   }
 
   async generateText(messages: AIMessage[], options: AICompletionOptions = {}): Promise<string> {
-    const model = options.model || this.defaultModel || 'gemini-1.5-flash';
+    return (await this.complete(messages, options)).text;
+  }
+
+  async complete(messages: AIMessage[], options: AICompletionOptions = {}): Promise<AICompletion> {
+    const model = options.model || this.defaultModel || DEFAULT_MODELS.gemini;
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`;
 
     const contents = messages.map((m) => {
@@ -60,7 +65,19 @@ export class GeminiProvider implements AIProvider {
     }
 
     const data = (await res.json()) as any;
-    const candidate = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    return candidate || '';
+    const candidate = data.candidates?.[0];
+    const usage = data.usageMetadata;
+    return {
+      text: candidate?.content?.parts?.[0]?.text || '',
+      finishReason: candidate?.finishReason === 'MAX_TOKENS' ? 'length' : candidate?.finishReason,
+      model,
+      usage: usage
+        ? {
+            promptTokens: usage.promptTokenCount ?? 0,
+            completionTokens: (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0),
+            reasoningTokens: usage.thoughtsTokenCount ?? undefined,
+          }
+        : undefined,
+    };
   }
 }

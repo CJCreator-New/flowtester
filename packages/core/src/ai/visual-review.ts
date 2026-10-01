@@ -1,5 +1,7 @@
 import type { Breakpoint, Finding, FindingSeverity } from '@qa/types';
-import type { AIProvider } from './ai-provider.js';
+import { promises as fs } from 'fs';
+import path from 'path';
+import { completeWith, type AIProvider } from './ai-provider.js';
 
 export interface VisualReviewItemInput {
   layoutGroup: string;
@@ -28,6 +30,8 @@ export interface VisualReviewResult {
   remainingScreens: VisualReviewItemInput[];
   note?: string;
   aiModel?: string;
+  /** Why it stopped before the end: the AI Request Budget ran out, or the service failed. */
+  stoppedBy?: Error;
 }
 
 export class VisualReviewer {
@@ -61,10 +65,19 @@ export class VisualReviewer {
     const remaining = screens.slice(maxCalls);
     const findings: Finding[] = [];
     let reviewedCount = 0;
+    /** Why the review stopped early, when it did. */
+    let stoppedBy: Error | undefined;
+    /** Screens whose screenshots couldn't be read: dropped, as they never will be. */
+    let unreadable = 0;
 
     for (const screen of toReview) {
       try {
         const issues = await this.reviewSingleScreen(screen, aiProvider, options?.model);
+        // No screenshot could be read: nothing was looked at, so it doesn't count as reviewed.
+        if (issues === null) {
+          unreadable++;
+          continue;
+        }
         for (let i = 0; i < issues.length; i++) {
           const issue = issues[i];
           findings.push({
@@ -95,23 +108,27 @@ export class VisualReviewer {
           });
         }
         reviewedCount++;
-      } catch (err: any) {
-        // Stop cleanly on API budget or limit errors
+      } catch (err) {
+        // The AI Request Budget ran out or the service failed: what's left can be finished later.
+        stoppedBy = err instanceof Error ? err : new Error(String(err));
+        console.warn(`[VisualReviewer] Stopped at ${screen.urlPath}: ${stoppedBy.message.slice(0, 300)}`);
         break;
       }
     }
 
-    const isPartial = reviewedCount < totalCount && remaining.length > 0;
+    const looked = reviewedCount + unreadable;
+    const isPartial = looked < totalCount && remaining.length > 0;
     const note = isPartial
-      ? `Reviewed ${reviewedCount} of ${totalCount} screens — free AI limit reached`
-      : `Reviewed ${reviewedCount} of ${totalCount} screens`;
+      ? `The AI looked at ${reviewedCount} of ${totalCount} screens; the rest can be finished from the report.`
+      : `The AI looked at ${reviewedCount} of ${totalCount} screens.`;
 
     return {
       status: isPartial ? 'partial' : 'completed',
       reviewedCount,
       totalCount,
       findings,
-      remainingScreens: screens.slice(reviewedCount),
+      remainingScreens: screens.slice(looked),
+      stoppedBy,
       note,
     };
   }
@@ -120,16 +137,21 @@ export class VisualReviewer {
     screen: VisualReviewItemInput,
     aiProvider: AIProvider,
     model?: string
-  ): Promise<VisualReviewIssue[]> {
+  ): Promise<VisualReviewIssue[] | null> {
     const images: string[] = [];
     for (const s of screen.screenshots) {
-      if (s.base64Data) {
-        images.push(s.base64Data);
+      if (s.base64Data) images.push(s.base64Data);
+      else if (s.imagePath) {
+        const data = await fs.readFile(s.imagePath).catch(() => null);
+        const type = path.extname(s.imagePath).toLowerCase() === '.png' ? 'png' : 'jpeg';
+        if (data) images.push(`data:image/${type};base64,${data.toString('base64')}`);
       }
     }
+    // Nothing to look at: not worth a request.
+    if (images.length === 0) return null;
 
     const prompt = `You are a design and typography reviewer. Inspect the provided layout group "${screen.layoutGroup}" on page "${screen.urlPath}" at responsive breakpoints (375px mobile, 768px tablet, 1440px desktop).
-Identify any awkward text wrapping, unaligned elements, cramped padding, or copy clarity problems.
+Identify any awkward text wrapping, unaligned elements, cramped padding, or copy clarity problems. Report at most 3 issues, the most important first.
 Respond ONLY with a JSON object:
 {
   "issues": [
@@ -144,16 +166,17 @@ Respond ONLY with a JSON object:
   ]
 }`;
 
-    const response = await aiProvider.generateText(
+    const { text: response } = await completeWith(
+      aiProvider,
       [
         { role: 'system', content: 'You are an expert UX and visual design auditor. Output valid JSON only.' },
         { role: 'user', content: prompt, images: images.length > 0 ? images : undefined },
       ],
-      { model, responseFormat: 'json', temperature: 0.1 }
+      { model, responseFormat: 'json', temperature: 0.1, stage: 'visual-review' }
     );
 
     try {
-      const parsed = JSON.parse(response);
+      const parsed = JSON.parse(response.replace(/```json/gi, '').replace(/```/g, '').trim());
       return Array.isArray(parsed?.issues) ? parsed.issues : [];
     } catch {
       return [];

@@ -23,7 +23,7 @@ export class SuppressionsManager {
   async saveSuppression(rule: SuppressionRule): Promise<void> {
     const list = await this.loadSuppressions();
     const existingIndex = list.findIndex(
-      (r) => r.findingTitle === rule.findingTitle && r.urlPath === rule.urlPath
+      (r) => r.findingTitle === rule.findingTitle && r.urlPath === rule.urlPath && r.host === rule.host
     );
     if (existingIndex >= 0) {
       list[existingIndex] = rule;
@@ -34,7 +34,17 @@ export class SuppressionsManager {
     await fs.writeFile(this.suppressionsFilePath, JSON.stringify(list, null, 2), 'utf8');
   }
 
-  async applySuppressions(findings: Finding[]): Promise<{
+  /** Forgets the rules for these titles on a site: the problems count again from the next check-up. */
+  async removeSuppressions(titles: string[], host?: string): Promise<void> {
+    const list = await this.loadSuppressions();
+    const kept = list.filter((r) => !(titles.includes(r.findingTitle) && r.host === host));
+    if (kept.length === list.length) return;
+    await fs.mkdir(path.dirname(this.suppressionsFilePath), { recursive: true });
+    await fs.writeFile(this.suppressionsFilePath, JSON.stringify(kept, null, 2), 'utf8');
+  }
+
+  /** Marks the findings a rule covers. `host`: only that site's rules (and rules for every site) apply. */
+  async applySuppressions(findings: Finding[], host?: string): Promise<{
     activeFindings: Finding[];
     suppressedFindings: Finding[];
   }> {
@@ -44,6 +54,7 @@ export class SuppressionsManager {
 
     for (const finding of findings) {
       const matchedRule = rules.find((r) => {
+        if (r.host && host && r.host !== host) return false;
         const titleMatch = r.findingTitle === finding.title;
         const urlMatch = !r.urlPath || r.urlPath === finding.where.urlPath;
         const checkerMatch = !r.checker || r.checker === finding.checker;
@@ -52,6 +63,7 @@ export class SuppressionsManager {
 
       if (matchedRule) {
         finding.triageStatus = matchedRule.triageStatus;
+        finding.triageReason = matchedRule.reason;
         suppressedFindings.push(finding);
       } else {
         if (!finding.triageStatus) {

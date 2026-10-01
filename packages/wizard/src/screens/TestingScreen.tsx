@@ -56,6 +56,21 @@ export function TestingScreen({
   const position = test ? Math.min(test.index + 1, total) : 0;
   const left = timeLeft(secondsLeft(feed, now));
   const found = selected ? feed.found.filter((f) => f.urlPath === selected) : feed.found;
+  // The same problem seen on several pages or at several sizes is one line, with where it was seen.
+  const problems = useMemo(() => {
+    const byTitle = new Map<string, { key: string; title: string; serious: boolean; pages: string[]; sizes: string[]; count: number }>();
+    for (const f of found) {
+      const title = plainTitleText(f.title) || 'A problem';
+      const key = title.toLowerCase();
+      const entry = byTitle.get(key) ?? { key, title, serious: false, pages: [], sizes: [], count: 0 };
+      byTitle.set(key, entry);
+      entry.count++;
+      entry.serious ||= SERIOUS.has(f.severity);
+      if (f.urlPath && !entry.pages.includes(f.urlPath)) entry.pages.push(f.urlPath);
+      if (f.breakpoint && !entry.sizes.includes(f.breakpoint)) entry.sizes.push(f.breakpoint);
+    }
+    return [...byTitle.values()];
+  }, [found]);
 
   return (
     <div className="flex min-h-[calc(100vh-7rem)] flex-col">
@@ -105,9 +120,9 @@ export function TestingScreen({
         )}
       </div>
 
-      <div className="flex flex-1 flex-col md:flex-row">
-        {/* The map is wider than a phone: phones get the panel on its own. */}
-        <div className="hidden min-h-[32rem] md:flex md:min-w-0 md:flex-1">
+      <div className="flex flex-1 flex-col overflow-x-hidden lg:flex-row">
+        {/* The map is wider than a phone: phones and tablets get the panel on its own. */}
+        <div className="hidden min-h-[32rem] overflow-hidden lg:flex lg:min-w-0 lg:flex-1">
           <SiteMap
             pages={pages}
             flows={flows}
@@ -119,7 +134,10 @@ export function TestingScreen({
           />
         </div>
 
-        <aside aria-label="What’s happening" className="w-full space-y-6 bg-panel p-4 sm:p-6 md:w-96 md:shrink-0 md:border-l md:border-rule">
+        <aside
+          aria-label="What’s happening"
+          className="w-full space-y-6 bg-panel p-4 sm:p-6 lg:sticky lg:top-0 lg:max-h-[calc(100vh-7rem)] lg:w-96 lg:shrink-0 lg:overflow-y-auto lg:border-l lg:border-rule"
+        >
           <section>
             <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-ink-soft">Now testing</h2>
             {feed.currentPage ? (
@@ -146,7 +164,7 @@ export function TestingScreen({
                   alt={`The latest screen${feed.screenshot.page ? `, on ${feed.screenshot.page}` : ''}`}
                   className="w-full rounded border border-rule bg-canvas"
                 />
-                {feed.screenshot.page && <figcaption className="mt-1 break-all font-mono text-xs text-ink-soft">{feed.screenshot.page}</figcaption>}
+                {feed.screenshot.page && <figcaption className="mt-1 break-all font-mono text-sm text-ink-soft">{feed.screenshot.page}</figcaption>}
               </figure>
             ) : (
               <p className="text-sm text-ink-soft">The latest screen shows here once a test has taken one.</p>
@@ -155,7 +173,7 @@ export function TestingScreen({
 
           <section aria-labelledby="found-title">
             <h2 id="found-title" className="mb-2 text-sm font-bold uppercase tracking-wide text-ink-soft">
-              Found so far: {count(feed.findings, 'problem', 'problems')}
+              Found so far: {count(problems.length, 'problem', 'problems')}
             </h2>
             {selected && (
               <p className="mb-2 text-sm text-ink">
@@ -165,19 +183,19 @@ export function TestingScreen({
                 </button>
               </p>
             )}
-            {found.length === 0 ? (
+            {problems.length === 0 ? (
               <p className="text-sm text-ink-soft">{selected ? 'Nothing found on this page so far.' : 'Nothing yet.'}</p>
             ) : (
-              <ul className="space-y-2">
-                {found.slice(0, 20).map((problem) => (
-                  <li
-                    key={problem.id}
-                    className={`rounded border-l-4 bg-surface px-3 py-2 text-sm ${SERIOUS.has(problem.severity) ? 'border-l-fail' : 'border-l-warn'}`}
-                  >
-                    <span className="block text-ink">{plainTitleText(problem.title) || 'A problem'}</span>
-                    <span className="block break-all font-mono text-xs text-ink-soft">
-                      {problem.urlPath}
-                      {problem.breakpoint ? ` · ${problem.breakpoint}` : ''}
+              <ul className="max-h-[28rem] space-y-2 overflow-y-auto lg:max-h-none">
+                {problems.slice(0, 20).map((problem) => (
+                  <li key={problem.key} className={`rounded border-l-4 bg-surface px-3 py-2 text-sm ${problem.serious ? 'border-l-fail' : 'border-l-warn'}`}>
+                    <span className="block text-ink">
+                      {problem.title}
+                      {problem.count > 1 && <span className="text-ink-soft"> ×{problem.count}</span>}
+                    </span>
+                    <span className="block break-all text-sm text-ink-soft">
+                      {problem.pages.length === 1 ? <span className="font-mono">{problem.pages[0]}</span> : `${problem.pages.length} pages`}
+                      {problem.sizes.length > 0 ? ` · at ${problem.sizes.join(', ')}` : ''}
                     </span>
                   </li>
                 ))}

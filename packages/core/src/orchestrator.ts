@@ -106,6 +106,29 @@ function pathOf(url: string): string {
   }
 }
 
+/** The site a run is for, as rules about it are kept: "localhost:3050". */
+function siteHostOf(targetUrl: string): string | undefined {
+  try {
+    return new URL(targetUrl).host;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Where a finding was, as a path on the site: "/dashboard", never "http://localhost:3050/dashboard",
+ * so one page is never counted as two. A page on another host keeps its full address.
+ */
+export function sitePathOf(urlPath: string, targetUrl: string): string {
+  try {
+    const target = new URL(targetUrl);
+    const url = new URL(urlPath, target);
+    return url.host === target.host ? url.pathname : url.origin + url.pathname;
+  } catch {
+    return urlPath;
+  }
+}
+
 /**
  * Opens a link's address with one request and fails only when the link is broken: the page is
  * gone (404, 410), the server fails (5xx), or nothing answers. Sites that turn automated requests
@@ -125,7 +148,7 @@ async function checkLink(page: Page, address: string): Promise<void> {
 /** The checks a test point runs, in plain words, and how each went. */
 function checksRun(
   findings: Finding[],
-  ran: { spec: boolean; permissions: boolean; design: boolean; ux: boolean; pageLevel: boolean }
+  ran: { spec: boolean; permissions: boolean; design: boolean; ux: boolean; pageLevel: boolean; search: boolean }
 ): NonNullable<TestPointResult['checks']> {
   const outcome = (checker: Finding['checker']) => {
     const own = findings.filter((f) => f.checker === checker);
@@ -139,9 +162,9 @@ function checksRun(
   if (ran.pageLevel) {
     checks.push(
       { checker: 'security', name: 'Secure connections and headers', outcome: outcome('security') },
-      { checker: 'performance', name: 'Fast and mobile-ready', outcome: outcome('performance') },
-      { checker: 'seo', name: 'Search and link health', outcome: outcome('seo') }
+      { checker: 'performance', name: 'Fast and mobile-ready', outcome: outcome('performance') }
     );
+    if (ran.search) checks.push({ checker: 'seo', name: 'Search and link health', outcome: outcome('seo') });
   }
   if (ran.spec) checks.splice(1, 0, { checker: 'spec-conformance', name: 'Does what was expected', outcome: outcome('spec-conformance') });
   if (ran.permissions) checks.push({ checker: 'permission-matrix', name: 'Only the right people can see it', outcome: outcome('permission-matrix') });
@@ -161,6 +184,11 @@ export interface RunOptions {
   repoRoot?: string;
   enableA11y?: boolean;
   enableSeo?: boolean;
+  /**
+   * Check how search engines and AI assistants see the site (default true). Off for a site that
+   * isn't public, such as a test copy: then only link health is checked.
+   */
+  searchChecks?: boolean;
   enablePerformance?: boolean;
   enableSecurity?: boolean;
   /** Record a video per test point; kept only when the point fails. Default true. */
@@ -185,6 +213,8 @@ export interface RunOptions {
   siteMap?: SiteMapSummary;
   /** Stops the run between steps and test points: the browser closes and run() throws an AbortError. */
   signal?: AbortSignal;
+  /** Finishes early: no more tests start, and the report is made from what's done, marked as partial. */
+  finishSignal?: AbortSignal;
   /** Where sign-in sessions are saved. Default `<outputDir>/auth`. Keep it out of any folder that's served. */
   authDir?: string;
   /** Where suppressions and the previous run's findings (for the delta) live. Default outputDir. */
@@ -307,13 +337,19 @@ export class FlowTestOrchestrator {
     const sizesFor = (tc: TestCase) => (tc.breakpoints ? breakpoints.filter((b) => tc.breakpoints!.includes(b)) : breakpoints);
     const plannedTestPoints = testCasesToRun.reduce((n, tc) => n + sizesFor(tc).length, 0);
 
-    for (const testCase of testCasesToRun) {
+    // Facts about the whole site (its icon, its phone set-up) are reported once per run.
+    const siteWide = new Set<string>();
+    tests: for (const testCase of testCasesToRun) {
       // Which checkers run afterwards depends on the kind of Plan Item (see TestCase.kind).
       const kind = testCase.kind;
       const lightChecks = kind === 'navigation' || kind === 'link';
       const pageLevelChecks = !kind || kind === 'page' || kind === 'journey';
+      // A page's search checks look at its markup, which is the same at every width: one width is enough.
+      const sizes = sizesFor(testCase);
+      const searchSize = sizes.includes('1440px') ? '1440px' : sizes[sizes.length - 1];
       for (const bp of sizesFor(testCase)) {
         await stopHere();
+        if (options.finishSignal?.aborted) break tests;
         onEvent({
           type: 'TEST_POINT_STARTED',
           testCaseId: testCase.id,
@@ -349,6 +385,8 @@ export class FlowTestOrchestrator {
         let testPointPassed = true;
         let stepError: string | undefined;
         let pointResult: TestPointResult | undefined;
+        /** Lists where the planned option wasn't there, and what was picked instead. */
+        const substitutes: Array<{ step: string; planned: string; chosen: string }> = [];
 
         try {
           const startUrl = new URL(testCase.startPage, options.targetUrl).toString();
@@ -392,7 +430,33 @@ export class FlowTestOrchestrator {
                 } else if (step.action === 'select') {
                   const locator = await locateElement(page, step.selector || '');
                   await locator.waitFor({ state: 'visible', timeout: 4000 });
-                  await locator.selectOption(step.value || '', { timeout: 4000 });
+                  try {
+                    await locator.selectOption(step.value || '', { timeout: 2000 });
+                  } catch {
+                    // Resilient fallback: case-insensitive or partial match across options
+                    const targetVal = (step.value || '').trim().toLowerCase();
+                    const matched = await locator
+                      .evaluate((select: HTMLSelectElement, target: string) => {
+                        const options = Array.from(select.options);
+                        const exact = options.find((o) => o.value.toLowerCase() === target || o.text.toLowerCase() === target);
+                        if (exact) return { value: exact.value, text: exact.text, exact: true };
+                        const partial = options.find(
+                          (o) =>
+                            (target && o.value.toLowerCase().includes(target)) ||
+                            (target && o.text.toLowerCase().includes(target)) ||
+                            (o.value && target.includes(o.value.toLowerCase())) ||
+                            (o.text && target.includes(o.text.toLowerCase()))
+                        );
+                        if (partial) return { value: partial.value, text: partial.text, exact: false };
+                        return options.length > 1 ? { value: options[1].value, text: options[1].text, exact: false } : undefined;
+                      }, targetVal)
+                      .catch(() => undefined);
+                    if (!matched) throw new Error(`The list has no option “${step.value}”, and no other option to pick.`);
+                    await locator.selectOption(matched.value, { timeout: 2000 });
+                    // Another option than the planned one: the step goes on, but what follows can't
+                    // say whether the site handles the planned value.
+                    if (!matched.exact) substitutes.push({ step: step.name, planned: step.value || '', chosen: matched.text.trim() || matched.value });
+                  }
                 } else if (step.action === 'navigate') {
                   await page.goto(new URL(step.value || '', options.targetUrl).toString(), {
                     waitUntil: 'domcontentloaded',
@@ -563,8 +627,8 @@ export class FlowTestOrchestrator {
                 );
 
           // 3d. SEO & Link Health
-          const seoFindings =
-            options.enableSeo === false || !pageLevelChecks
+          const searchHere = options.enableSeo !== false && pageLevelChecks && bp === searchSize;
+          const seoFindings = !searchHere
               ? []
               : await this.seoChecker.checkPage(page, {
                   testCaseId: testCase.id,
@@ -573,6 +637,8 @@ export class FlowTestOrchestrator {
                   breakpoint: bp,
                   urlPath: new URL(page.url(), options.targetUrl).pathname,
                   baseUrl: options.targetUrl,
+                  searchChecks: options.searchChecks,
+                  siteWide,
                 });
 
           // 4. Permission Matrix Check
@@ -645,7 +711,24 @@ export class FlowTestOrchestrator {
                 return false;
               }
             });
+          // A test that picked another option than planned couldn't check the planned one.
+          const substituteFindings: Finding[] = substitutes.map((s, n) => ({
+            id: `F-OPTION-${testCase.id}-${bp}-${n + 1}`,
+            testCaseId: testCase.id,
+            flowId: testCase.flowId,
+            severity: 'Minor',
+            checker: 'spec-conformance',
+            title: `“${s.planned}” isn’t in the list, so “${s.chosen}” was picked instead`,
+            where: { urlPath: pathOf(page.url()), role: testCase.role, breakpoint: bp },
+            expectedVsActual: { expected: `The option “${s.planned}” can be picked (${s.step})`, actual: `It isn’t there; “${s.chosen}” was picked, so the test can’t say how the planned option works` },
+            stepsToReproduce: [`Open ${testCase.startPage} as ${testCase.role} at ${bp}`, `${s.step}: look for “${s.planned}”`],
+            evidence: {},
+            resolution: `Check the plan’s value for this step, or whether “${s.planned}” should be offered.`,
+            verifyCommand: `qa-test verify F-OPTION-${testCase.id}-${bp}-${n + 1}`,
+            needsConfirmation: true,
+          }));
           const keptFindings = [
+            ...substituteFindings,
             ...bugFindings,
             ...specFindings,
             ...uxFindings,
@@ -660,6 +743,7 @@ export class FlowTestOrchestrator {
 
           // Enrich findings with Source Code Locator and Repro Script
           for (const f of keptFindings) {
+            f.where.urlPath = sitePathOf(f.where.urlPath, options.targetUrl);
             if (f.where.dataTestId) {
               const srcLoc = await sourceLocator.findByTestId(f.where.dataTestId);
               if (srcLoc) {
@@ -698,6 +782,7 @@ export class FlowTestOrchestrator {
             checks: checksRun(keptFindings, {
               ux: !lightChecks,
               pageLevel: pageLevelChecks,
+              search: searchHere && options.searchChecks !== false,
               spec: !sentData && Object.keys(testCase.expectations || {}).some((k) => k !== 'origin'),
               permissions: !!permChecker,
               design: (!!designTokens && pageLevelChecks) || designFindings.length > 0,
@@ -773,6 +858,11 @@ export class FlowTestOrchestrator {
     }
 
     await this.browserManager.close();
+    if (options.finishSignal?.aborted) {
+      notes.unshift(
+        `A partial check-up: testing was stopped after ${results.length} of ${plannedTestPoints} tests, so what wasn’t tested isn’t in this report.`
+      );
+    }
 
     // Planned tests that weren't run still appear, with the reason, so nothing silently disappears.
     for (const skippedTest of options.notRun || []) {
@@ -815,7 +905,7 @@ export class FlowTestOrchestrator {
     // Apply Suppressions & Compute Delta
     // One problem, one finding, however many test points, widths or roles ran into it.
     const uniqueFindings = mergeDuplicateFindings(allFindings);
-    await suppressionsManager.applySuppressions(uniqueFindings);
+    await suppressionsManager.applySuppressions(uniqueFindings, siteHostOf(options.targetUrl));
     const delta = await suppressionsManager.computeDelta(uniqueFindings);
     const activeSuppressions = await suppressionsManager.loadSuppressions();
 
@@ -874,6 +964,7 @@ export class FlowTestOrchestrator {
       suppressions: activeSuppressions,
       delta,
       notes: notes.length > 0 ? notes : undefined,
+      partial: options.finishSignal?.aborted ? { done: results.filter((r) => r.status !== 'Skipped' || !r.skipReason).length, planned: plannedTestPoints } : undefined,
       aiModels: options.aiModels,
       scanMode: options.readOnly ? 'read-only' : undefined,
       siteMap: options.siteMap,

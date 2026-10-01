@@ -8,7 +8,9 @@ import {
   getPlan,
   getStatus,
   listRuns,
+  listWaitingPlans,
   readRunText,
+  resumeWaitingPlan,
   RunnerError,
   startRun,
   STREAM_URL,
@@ -16,6 +18,7 @@ import {
   type RunnerStatus,
   type SiteFacts,
   type StartRunRequest,
+  type WaitingPlan,
 } from './api';
 import { useConfirm } from './components/ConfirmDialog';
 import { NothingInProgress } from './components/RunStates';
@@ -24,10 +27,11 @@ import { Spinner } from './components/text';
 import { TopBar } from './components/TopBar';
 import { useRunnerConnection } from './hooks/useRunnerConnection';
 import { useRunnerStream } from './hooks/useRunnerStream';
-import { DEFAULT_MAX_PAGES, EMPTY_FORM, productContextOf, type CheckupForm } from './lib/form';
+import { DEFAULT_MAX_PAGES, EMPTY_FORM, productContextOf, rolesOf, type CheckupForm } from './lib/form';
 import { isCheckRoute, matchRoute, navigate, PATHS, usePathname, type Route } from './lib/router';
 import { useDocumentTitle } from './lib/title';
 import { initialFeed, plainFailure, reduceFeed, type FeedState, type RunnerEvent } from './lib/translate';
+import { count } from './lib/format';
 import { displayHost, hostOf } from './lib/url';
 import { ConnectionScreen } from './screens/ConnectionScreen';
 import { NewCheckupScreen, type StartFacts } from './screens/NewCheckupScreen';
@@ -96,7 +100,7 @@ export default function App() {
   const { reachable, checks } = useRunnerConnection();
   const pathname = usePathname();
   const route = matchRoute(pathname);
-  const { confirm, dialog } = useConfirm();
+  const { confirm, choose, dialog } = useConfirm();
 
   const [status, setStatus] = useState<RunnerStatus | null>(null);
   const [ai, setAi] = useState<AiSetup | null>(null);
@@ -112,6 +116,7 @@ export default function App() {
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [recent, setRecent] = useState<RunSummary[] | null>(null);
+  const [waitingPlans, setWaitingPlans] = useState<WaitingPlan[]>([]);
 
   /** Goes up with every start, stop and approval: a status read begun before one is out of date. */
   const epoch = useRef(0);
@@ -121,6 +126,7 @@ export default function App() {
     listRuns()
       .then(setRecent)
       .catch(() => {});
+    void listWaitingPlans().then(setWaitingPlans);
   }, []);
 
   /**
@@ -161,9 +167,9 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [reachable, pathname, checkAddress, inProgress, reconcile]);
 
-  // The plan waiting for review, fetched whenever the runner has one this page doesn't.
+  // The plan waiting for review (or being tested), fetched whenever the runner has one this page doesn't.
   useEffect(() => {
-    if (status?.phase !== 'awaiting-review') return;
+    if (status?.phase !== 'awaiting-review' && status?.phase !== 'testing') return;
     if (plan && plan.runId === status.runId) return;
     let cancelled = false;
     getPlan()
@@ -202,7 +208,16 @@ export default function App() {
           // Time left, from how long the AI requests so far took.
           const elapsed = planningStartedAt.current ? (at - planningStartedAt.current) / 1000 : 0;
           const secondsLeft = p.stage === 'planning' && p.done && p.total ? (elapsed / p.done) * Math.max(0, p.total - p.done) : undefined;
-          setScan((before) => ({ ...before, ...p, pagesFound: p.pagesFound ?? before?.pagesFound, secondsLeft }));
+          // The same request asked about again keeps its start time; a new one starts its own.
+          const askingSince = p.asking ? (before: ScanProgress | null) => (before?.asking && before.what === p.what ? before.askingSince : at) : () => undefined;
+          setScan((before) => ({
+            ...before,
+            ...p,
+            pagesFound: p.pagesFound ?? before?.pagesFound,
+            secondsLeft: p.asking ? before?.secondsLeft : secondsLeft,
+            askingSince: askingSince(before),
+            asking: p.asking || undefined,
+          }));
           return;
         }
 
@@ -313,19 +328,19 @@ export default function App() {
     try {
       let runId: string;
       try {
-        runId = await startRun(request);
+        runId = await startRun({ aiProvider: ai?.provider, ...request });
       } catch (err) {
         if (!(err instanceof RunnerError) || err.code !== 'ERR_PLAN_WAITING') throw err;
         const waiting = (await getStatus())?.targetUrl;
         const ok = await confirm({
           title: 'Start a new check-up?',
-          body: <p>The plan for {waiting ? hostOf(waiting) : 'your site'} that’s waiting for your review will be thrown away.</p>,
+          body: <p>The plan for {waiting ? hostOf(waiting) : 'this site'} that’s waiting for your review will be thrown away. (Plans for other sites are kept.)</p>,
           confirmLabel: 'Start a new check-up',
           cancelLabel: 'Keep the plan',
           danger: true,
         });
         if (!ok) return;
-        runId = await startRun({ ...request, replacePlan: true });
+        runId = await startRun({ aiProvider: ai?.provider, ...request, replacePlan: true });
       }
       epoch.current++;
       resetRun();
@@ -357,15 +372,22 @@ export default function App() {
     }
   };
 
-  const startFromForm = (facts: StartFacts) =>
+  const startFromForm = (facts: StartFacts) => {
+    const roles = rolesOf(form);
     void start({
       targetUrl: facts.url,
       owner: form.owner,
       stagingHost: facts.stagingHost,
+      searchChecks: facts.searchChecks,
       productContext: productContextOf(form),
       designNotes: form.designNotes.trim() || undefined,
       maxPages: form.maxPages !== DEFAULT_MAX_PAGES ? form.maxPages : undefined,
+      roles: roles.length > 0 ? roles : undefined,
+      rememberSignIns: roles.length > 0 && form.rememberSignIns,
+      useSavedSignIns: roles.length === 0 && form.useSavedSignIns,
+      planWithoutAI: form.planWithoutAI || undefined,
     });
+  };
 
   /** The address as the person typed it for a finished check-up (a report holds the one connected to). */
   const typedAddressOf = async (runId: string, fallback: string): Promise<string> => {
@@ -386,7 +408,7 @@ export default function App() {
     }));
     // The specs go along, so anything new is planned with them and the next Go deeper has them too.
     const productContext = await readRunText(runId, 'product-context.md').catch(() => undefined);
-    await start({ targetUrl, owner: remembered?.owner ?? false, stagingHost: remembered?.markedTestCopy, testAgain: true, productContext });
+    await start({ targetUrl, owner: remembered?.owner ?? false, stagingHost: remembered?.markedTestCopy, testAgain: true, productContext, useSavedSignIns: true });
   };
 
   /** A new check-up of the same site, signed in, with the first one's specs and page limit. */
@@ -421,15 +443,41 @@ export default function App() {
     });
   };
 
+  /** Brings back a plan kept aside for its site; the plan waiting now, if any, is kept aside instead. */
+  const resumePlan = async (planHost: string) => {
+    setStartError(null);
+    try {
+      const resumed = await resumeWaitingPlan(planHost);
+      epoch.current++;
+      resetRun();
+      setStatus((s) => (s ? { ...s, phase: 'awaiting-review', isRunning: true, hasPlan: true, runId: resumed.runId, targetUrl: resumed.targetUrl } : s));
+      refreshRecent();
+      navigate(PATHS.plan);
+    } catch (err) {
+      setStartError(err instanceof RunnerError ? err.message : 'That plan couldn’t be opened. Try again.');
+    }
+  };
+
   const stopScan = async () => {
-    const ok = await confirm({
+    const choice = await choose({
       title: 'Stop scanning?',
-      body: <p>The pages found so far are thrown away. AI requests already used stay used.</p>,
-      confirmLabel: 'Stop scanning',
+      body: (
+        <p>
+          Plan the {scan?.pagesFound ? count(scan.pagesFound, 'page', 'pages') : 'pages'} found so far, and review them, or throw the scan away. AI requests
+          already used stay used.
+        </p>
+      ),
+      confirmLabel: 'Stop and plan what’s found',
+      altLabel: 'Throw it away',
+      altDanger: true,
       cancelLabel: 'Keep scanning',
-      danger: true,
     });
-    if (!ok) return;
+    if (choice === 'cancel') return;
+    if (choice === 'confirm') {
+      // The scan ends early and plans what it has: the plan arrives as usual.
+      await abortRun(true);
+      return;
+    }
     epoch.current++;
     const result = await abortRun();
     if (!result.aborted) {
@@ -443,14 +491,25 @@ export default function App() {
   };
 
   const stopTesting = async () => {
-    const ok = await confirm({
+    const choice = await choose({
       title: 'Stop testing?',
-      body: <p>Results so far are thrown away. Your plan is kept, so you can change it and approve it again.</p>,
-      confirmLabel: 'Stop testing',
+      body: (
+        <p>
+          Make a report from the tests done so far (marked as a partial check-up), or go back to the plan to change it and approve it again, throwing the results
+          away.
+        </p>
+      ),
+      confirmLabel: 'Make a report from what’s done',
+      altLabel: 'Stop testing and keep the plan',
+      altDanger: true,
       cancelLabel: 'Keep testing',
-      danger: true,
     });
-    if (!ok) return;
+    if (choice === 'cancel') return;
+    if (choice === 'confirm') {
+      // No more tests start; the report arrives as usual.
+      await abortRun(true);
+      return;
+    }
     epoch.current++;
     const result = await abortRun();
     if (!result.aborted) {
@@ -527,6 +586,8 @@ export default function App() {
             startError={startError}
             inProgress={inProgress ? status : null}
             recent={recent}
+            waitingPlans={waitingPlans}
+            onResumePlan={(h) => void resumePlan(h)}
           />
         );
         break;
@@ -550,6 +611,7 @@ export default function App() {
               approveError={approveError}
               approving={approving}
               notice={planNotice}
+              confirm={confirm}
             />
           ) : !status || status.phase === 'awaiting-review' ? (
             <Loading label="Opening the plan…" />
@@ -575,7 +637,7 @@ export default function App() {
         break;
       case 'reports':
         body = (
-          <PastCheckupsScreen confirm={confirm} onTestAgain={(run) => void testAgain(run.runId, run.targetUrl)} starting={starting} actionError={startError} />
+          <PastCheckupsScreen confirm={confirm} onTestAgain={(run) => void testAgain(run.runId, run.targetUrl)} starting={starting || inProgress} actionError={startError} />
         );
         break;
       case 'report':
@@ -585,7 +647,7 @@ export default function App() {
             actions={{
               onTestAgain: (report) => void testAgain(report.runId, report.targetUrl),
               onGoDeeper: (report, signIn) => void goDeeper(report, signIn),
-              starting,
+              starting: starting || inProgress,
               actionError: startError,
             }}
           />
@@ -603,7 +665,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-paper text-ink">
-      <a href="#main" className="sr-only z-[60] rounded bg-stamp px-4 py-2 font-bold text-surface focus:not-sr-only focus:absolute focus:left-4 focus:top-2">
+      <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-[60] focus:inline-flex focus:min-h-[44px] focus:items-center rounded bg-stamp px-4 py-2 font-bold text-surface">
         Skip to the content
       </a>
       <TopBar route={route} hubConnected={!!status?.hubConnected} checkupInProgress={inProgress} />

@@ -4,7 +4,7 @@ import type {
   FindingSeverity,
   RankedRecommendation,
 } from '@qa/types';
-import { ASPECT_CHECKERS } from './scoring.js';
+import { aspectOfFinding, problemKey, SEVERITY_ORDER } from '@qa/types';
 
 interface EffortImpactMapping {
   category: 'quick-win' | 'bigger-change';
@@ -13,18 +13,7 @@ interface EffortImpactMapping {
   suggestedFix: string;
 }
 
-const EFFORT_MULTIPLIERS = {
-  Low: 1.5, // prioritize quick wins with high return
-  Medium: 1.0,
-  High: 0.7,
-};
-
-const SEVERITY_WEIGHTS: Record<FindingSeverity, number> = {
-  Blocker: 40,
-  Major: 25,
-  Minor: 10,
-  Suggestion: 3,
-};
+const EFFORT_ORDER = { Low: 0, Medium: 1, High: 2 };
 
 function classifyFinding(finding: Finding): EffortImpactMapping {
   const title = finding.title.toLowerCase();
@@ -75,25 +64,21 @@ function classifyFinding(finding: Finding): EffortImpactMapping {
   };
 }
 
-function findAspectForChecker(checker: Finding['checker']): AspectType {
-  for (const [aspect, checkers] of Object.entries(ASPECT_CHECKERS)) {
-    if (checkers.includes(checker)) {
-      return aspect as AspectType;
-    }
-  }
-  return 'Works';
-}
+/** Recommendations from one area among the top ones, so one noisy area can't crowd out the rest. */
+const PER_ASPECT_IN_TOP = 2;
+const TOP = 5;
 
 /**
- * Groups findings into ranked recommendations split into Quick Wins and Bigger Changes.
- * Deterministic ranking formula: Severity Weight * min(Affected Pages, 5) * Effort Multiplier.
+ * Groups findings into recommendations, one per problem (see problemKey), ranked by what matters
+ * most: how serious it is first, so a Blocker always leads; then how many pages it's on; then the
+ * least effort. Among the first five, no area has more than two, so the most serious problem of
+ * each area gets seen.
  */
 export function generateRankedRecommendations(findings: Finding[]): RankedRecommendation[] {
   const activeFindings = findings.filter(
     (f) => !f.needsConfirmation && f.triageStatus !== 'False Positive' && f.triageStatus !== 'Intended'
   );
 
-  // Group by title/resolution to consolidate multi-page occurrences into a single actionable recommendation
   const grouped = new Map<
     string,
     {
@@ -109,58 +94,64 @@ export function generateRankedRecommendations(findings: Finding[]): RankedRecomm
   >();
 
   for (const f of activeFindings) {
-    const key = f.title;
-    if (!grouped.has(key)) {
-      const aspect = findAspectForChecker(f.checker);
-      const classification = classifyFinding(f);
+    const key = problemKey(f);
+    const entry = grouped.get(key);
+    if (!entry) {
       grouped.set(key, {
         title: f.title,
-        aspect,
+        aspect: aspectOfFinding(f),
         severity: f.severity,
         pages: new Set([f.where.urlPath]),
         findingIds: [f.id],
         screenshotPath: f.evidence?.screenshotPath,
         summary: f.expectedVsActual?.actual || f.title,
-        classification,
+        classification: classifyFinding(f),
       });
-    } else {
-      const entry = grouped.get(key)!;
-      entry.pages.add(f.where.urlPath);
-      entry.findingIds.push(f.id);
-      if (!entry.screenshotPath && f.evidence?.screenshotPath) {
-        entry.screenshotPath = f.evidence.screenshotPath;
-      }
+      continue;
+    }
+    entry.pages.add(f.where.urlPath);
+    entry.findingIds.push(f.id);
+    entry.screenshotPath ??= f.evidence?.screenshotPath;
+    if (SEVERITY_ORDER.indexOf(f.severity) < SEVERITY_ORDER.indexOf(entry.severity)) {
+      entry.severity = f.severity;
+      entry.classification = classifyFinding(f);
     }
   }
 
-  const recommendations: Array<RankedRecommendation & { score: number }> = [];
-  let index = 1;
+  const ranked = [...grouped.values()].sort(
+    (a, b) =>
+      SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) ||
+      b.pages.size - a.pages.size ||
+      EFFORT_ORDER[a.classification.effort] - EFFORT_ORDER[b.classification.effort] ||
+      a.title.localeCompare(b.title)
+  );
 
-  for (const [, item] of grouped.entries()) {
-    const sevWeight = SEVERITY_WEIGHTS[item.severity] || 10;
-    const spread = Math.min(item.pages.size, 5);
-    const effortMult = EFFORT_MULTIPLIERS[item.classification.effort] || 1.0;
-    const rankScore = Math.round(sevWeight * spread * effortMult);
-
-    recommendations.push({
-      id: `REC-${String(index++).padStart(3, '0')}`,
-      category: item.classification.category,
-      title: item.title,
-      aspect: item.aspect,
-      severity: item.severity,
-      effort: item.classification.effort,
-      impact: item.classification.impact,
-      affectedPages: Array.from(item.pages),
-      findingIds: item.findingIds,
-      screenshotPath: item.screenshotPath,
-      summary: item.summary,
-      suggestedFix: item.classification.suggestedFix,
-      score: rankScore,
-    });
+  // The top five: in rank order, at most two per area while other areas have something to show.
+  const top: typeof ranked = [];
+  const rest: typeof ranked = [];
+  const perAspect = new Map<AspectType, number>();
+  for (const item of ranked) {
+    const n = perAspect.get(item.aspect) ?? 0;
+    if (top.length < TOP && (n < PER_ASPECT_IN_TOP || item.severity === 'Blocker')) {
+      top.push(item);
+      perAspect.set(item.aspect, n + 1);
+    } else rest.push(item);
   }
+  // Too few areas to fill the top five: the next ones in rank order fill it.
+  while (top.length < TOP && rest.length > 0) top.push(rest.shift()!);
 
-  // Sort descending by rank score
-  recommendations.sort((a, b) => b.score - a.score);
-
-  return recommendations.map(({ score, ...rec }) => rec);
+  return [...top, ...rest].map((item, i) => ({
+    id: `REC-${String(i + 1).padStart(3, '0')}`,
+    category: item.classification.category,
+    title: item.title,
+    aspect: item.aspect,
+    severity: item.severity,
+    effort: item.classification.effort,
+    impact: item.classification.impact,
+    affectedPages: Array.from(item.pages),
+    findingIds: item.findingIds,
+    screenshotPath: item.screenshotPath,
+    summary: item.summary,
+    suggestedFix: item.classification.suggestedFix,
+  }));
 }

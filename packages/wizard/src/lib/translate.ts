@@ -288,6 +288,15 @@ export function reduceFeed(state: FeedState, event: RunnerEvent, mode: RunMode):
         progress: state.progress ? { ...state.progress, done: state.progress.total } : null,
       };
 
+    case 'RUN_FINISHING':
+      return {
+        ...state,
+        current: event.phase === 'testing' ? 'Finishing: making a report from the tests done so far…' : 'Finishing: planning the pages found so far…',
+      };
+
+    case 'VISUAL_REVIEW_STARTED':
+      return { ...state, current: 'The AI is looking over the screens…' };
+
     case 'RUN_ABORTED':
       return {
         ...state,

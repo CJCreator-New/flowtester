@@ -63,10 +63,11 @@ describe('Re-runs reuse the approved Plan', () => {
     const discover = (ai: AIProvider, remembered?: Parameters<DiscoveryAgent['discover']>[0]['remembered']) =>
       new DiscoveryAgent().discover({ targetUrl: `${base}/`, productId: 'reuse', outputDir, aiProvider: ai, remembered });
 
-    // First run: every page, the shared menu and the journeys.
+    // First run: every page and the journeys. The shared menu's links all go to pages the crawl saw,
+    // so their checks need nothing from the AI.
     const first = new CountingAI();
     const firstDraft = await discover(first);
-    expect(first.asked).toEqual(['pages', 'menus', 'journeys']);
+    expect(first.asked).toEqual(['pages', 'journeys']);
     const pricingTests = firstDraft.plan!.pages.find((p) => p.urlPath === '/pricing')!.tests;
     expect(pricingTests.map((t) => t.name)).toEqual(['Pressing “Monthly” keeps the page working']);
     firstDraft.plan!.pages.find((p) => p.urlPath === '/about')!.skipped = true;

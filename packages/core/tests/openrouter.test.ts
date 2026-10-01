@@ -5,6 +5,7 @@ import {
   keepOrPickModels,
   pickRecommendedModel,
   pickVisionModel,
+  fallbackModels,
 } from '../src/ai/openrouter.js';
 
 const GOOD_KEY = 'sk-or-v1-good';
@@ -122,6 +123,33 @@ describe('OpenRouterClient.listFreeModels', () => {
     expect(keepOrPickModels(models, { text: 'b', vision: 'b' })).toEqual({ text: 'b', vision: 'b' });
     expect(keepOrPickModels(models, { text: 'gone', vision: 'a' })).toEqual({ text: 'a', vision: 'b' });
     expect(keepOrPickModels([], { text: 'a' })).toEqual({ text: null, vision: null });
+  });
+
+  it('tries models that think before answering last: their thinking uses up the answer allowance', async () => {
+    const { client } = fakeOpenRouter([
+      model('vendor/thinker', { context_length: 900000, supported_parameters: ['response_format', 'reasoning'] }),
+      model('vendor/plain', { context_length: 1000 }),
+    ]);
+    const models = await client.listFreeModels(GOOD_KEY);
+    expect(models.map((m) => [m.id, !!m.thinks])).toEqual([
+      ['vendor/plain', false],
+      ['vendor/thinker', true],
+    ]);
+  });
+
+  it('moves a model that keeps stopping before it answers to the end, unless the person chose it', () => {
+    const models = [
+      { id: 'a', name: 'a', contextLength: 1, supportsJsonOutput: true, supportsImages: false },
+      { id: 'b', name: 'b', contextLength: 1, supportsJsonOutput: true, supportsImages: false },
+      { id: 'c', name: 'c', contextLength: 1, supportsJsonOutput: true, supportsImages: false },
+    ];
+    const record = { a: { ok: 0, truncated: 3, failed: 0 } };
+    expect(pickRecommendedModel(models, record)).toBe('b');
+    expect(keepOrPickModels(models, { text: 'a' }, record).text).toBe('b');
+    expect(keepOrPickModels(models, { text: 'a', chosenBy: 'person' }, record).text).toBe('a');
+    expect(fallbackModels(models, 'b', record)).toEqual(['c']);
+    // One bad answer among many good ones doesn't count against a model.
+    expect(pickRecommendedModel(models, { a: { ok: 5, truncated: 1, failed: 0 } })).toBe('a');
   });
 
   it('returns an empty list, and no recommendation, when nothing is free', async () => {

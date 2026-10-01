@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { FocusHeading } from '../components/text';
 import { RunFailure } from '../components/RunStates';
 import { timeLeft } from '../lib/translate';
@@ -17,6 +18,23 @@ export interface ScanProgress {
   what?: string;
   /** Seconds left, estimated from how long the AI requests so far took. */
   secondsLeft?: number;
+  /** An AI request is on its way: `what` names it. */
+  asking?: boolean;
+  /** 1 for the first request, 2 when the AI is asked again to fix its answer. */
+  attempt?: number;
+  /** When the request on its way was sent (ms). */
+  askingSince?: number;
+}
+
+/** Seconds since a moment, ticking once a second while shown. */
+function useSecondsSince(since: number | undefined): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!since) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [since]);
+  return since ? Math.max(0, Math.round((now - since) / 1000)) : null;
 }
 
 const STAGES: Array<{ id: ScanProgress['stage']; label: string }> = [
@@ -47,6 +65,7 @@ export function ScanningScreen({
   const stageIndex = progress ? STAGES.findIndex((s) => s.id === progress.stage) : -1;
   const planning = progress?.stage === 'planning' && progress.total ? { done: Math.min(progress.done ?? 0, progress.total), total: progress.total } : null;
   const left = timeLeft(progress?.secondsLeft);
+  const waited = useSecondsSince(progress?.asking ? progress.askingSince : undefined);
 
   return (
     <div className="mx-auto max-w-[44rem] px-4 py-10 sm:px-6 sm:py-14">
@@ -67,7 +86,7 @@ export function ScanningScreen({
                 <li key={stage.id} className="flex items-center gap-3" aria-current={state === 'current' ? 'step' : undefined}>
                   <span
                     aria-hidden="true"
-                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold ${
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-sm font-bold ${
                       state === 'done' ? 'border-stamp bg-stamp text-surface' : state === 'current' ? 'border-stamp text-stamp' : 'border-edge text-ink-soft'
                     }`}
                   >
@@ -88,8 +107,11 @@ export function ScanningScreen({
                   ? `Exploring the site${progress.urlPath ? `: just looked at ${progress.urlPath}` : '…'}`
                   : progress.stage === 'narrow-screens'
                     ? 'Looking at the menus on phone and tablet screens…'
-                    : `${progress.what ?? 'Writing the plan'}${planning ? ` (${planning.done} of ${planning.total})` : ''}…`}
-              {left && <span className="font-normal text-ink-soft"> · {left}</span>}
+                    : progress.asking
+                      ? progress.what
+                      : `${progress.what ?? 'Writing the plan'}${planning ? ` (${planning.done} of ${planning.total} requests)` : ''}…`}
+              {waited !== null && waited >= 3 && <span className="font-normal text-ink-soft"> · {waited} s so far</span>}
+              {left && !progress?.asking && <span className="font-normal text-ink-soft"> · {left}</span>}
             </p>
 
             {planning ? (
@@ -114,7 +136,7 @@ export function ScanningScreen({
                 <dt className="text-ink-soft">Pages found</dt>
                 <dd className="font-mono text-xl font-bold text-ink">{progress?.pagesFound ?? 0}</dd>
               </div>
-              {progress?.stage === 'planning' && (
+              {progress?.stage === 'planning' && !!progress.layoutGroups && (
                 <div>
                   <dt className="text-ink-soft">Layouts</dt>
                   <dd className="font-mono text-xl font-bold text-ink">{progress.layoutGroups ?? 0}</dd>

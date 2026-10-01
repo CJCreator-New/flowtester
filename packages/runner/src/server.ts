@@ -19,6 +19,8 @@ import type {
   DiscoveredFlow,
   DiscoveryDraft,
   PageInventoryItem,
+  PageLink,
+  AIRequestBudget,
 } from '@qa/types';
 import {
   FlowTestOrchestrator,
@@ -34,6 +36,12 @@ import {
   pickRecommendedModel,
   pickVisionModel,
   keepOrPickModels,
+  fallbackModels,
+  byTrackRecord,
+  unreliable,
+  completeWith,
+  DEFAULT_MODELS,
+  type ModelRecord,
   PreFlightChecker,
   PlanValidator,
   Redactor,
@@ -45,6 +53,7 @@ import {
   NEEDS_TEST_COPY,
   loadSiteMemory,
   saveSiteMemory,
+  listSiteMemories,
   emptySiteMemory,
   applySiteMemory,
   rememberRun,
@@ -59,6 +68,9 @@ import {
   GRADED_CHECKS,
   planToMarkdown,
   PacedAI,
+  BudgetSpentError,
+  estimateScanRequests,
+  SuppressionsManager,
   replanPage,
   replanMenus,
   replanJourneys,
@@ -140,10 +152,51 @@ function isLoopbackHost(host: string | undefined): boolean {
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'proxy-connection']);
 
 const MAX_RUN_EVENTS = 5000;
+
+/** Every screen size a check-up can test at. */
+const ALL_SCREEN_SIZES: Breakpoint[] = ['375px', '768px', '1440px'];
+
+/** Token use per stage, added together. */
+function addTokens(
+  a: AIRequestBudget['tokens'],
+  b: AIRequestBudget['tokens']
+): AIRequestBudget['tokens'] {
+  if (!b || Object.keys(b).length === 0) return a;
+  const sum: NonNullable<AIRequestBudget['tokens']> = JSON.parse(JSON.stringify(a ?? {}));
+  for (const [stage, u] of Object.entries(b) as Array<[keyof typeof sum, NonNullable<(typeof sum)[keyof typeof sum]>]>) {
+    const s = (sum[stage] ??= { requests: 0, promptTokens: 0, completionTokens: 0, reasoningTokens: 0, truncated: 0 });
+    s.requests += u.requests;
+    s.promptTokens += u.promptTokens;
+    s.completionTokens += u.completionTokens;
+    s.reasoningTokens += u.reasoningTokens;
+    s.truncated += u.truncated;
+  }
+  return sum;
+}
+
+/** The AI settings kept beside the key (not secret), so every browser gets the same setup. */
+interface AiSettings {
+  provider?: AIProviderType;
+  text?: string | null;
+  vision?: string | null;
+  /** The person picked the models in Settings: they're kept while available, even when they struggle. */
+  chosenBy?: 'person';
+  chosenAt?: string;
+}
+
+/** The AI services a key can be added for. OpenRouter's free models cost nothing; the others are paid. */
+const AI_PROVIDERS: Array<{ id: AIProviderType; name: string; free: boolean }> = [
+  { id: 'openrouter', name: 'OpenRouter (free models)', free: true },
+  { id: 'anthropic', name: 'Anthropic (Claude)', free: false },
+  { id: 'openai', name: 'OpenAI', free: false },
+  { id: 'gemini', name: 'Google Gemini', free: false },
+];
 /** AI requests the visual review of a finished run may use: part of the AI Request Budget estimate. */
 const VISUAL_REVIEW_CALLS = 20;
 /** Pages explored on another host the person includes from the review. */
 const INCLUDED_HOST_PAGES = 30;
+/** Pages explored for a sign-in added from the review. */
+const SIGNED_IN_PAGES = 60;
 const DOWNLOADABLE_REPORT_FILES: Record<string, string> = {
   'report.html': 'text/html; charset=utf-8',
   'report.md': 'text/markdown; charset=utf-8',
@@ -194,6 +247,10 @@ export interface TriggerRunBody {
   headless?: boolean;
   /** Login credentials per role, used for pre-flight auth against the target site. */
   roles?: RoleCredential[];
+  /** Remember the sign-ins for the site: names and usernames in its memory, passwords in the OS keychain. */
+  rememberSignIns?: boolean;
+  /** No sign-ins given: sign in with the ones saved for the site. */
+  useSavedSignIns?: boolean;
   /** Explicit test cases to run instead of AI discovery / the default sanity check. */
   specTestCases?: TestCase[];
   /** Raw reference material (PRDs, user flows) handed to AI discovery as Product Context. */
@@ -222,6 +279,16 @@ export interface TriggerRunBody {
   replanAll?: boolean;
   /** Pages the crawl explores at most (default 200; 1 to 1000). */
   maxPages?: number;
+  /**
+   * Check how search engines and AI assistants see the site. Remembered for the site; when never
+   * said, on for a live site and off for a test copy.
+   */
+  searchChecks?: boolean;
+  /**
+   * Plan with fixed rules now, spending no AI requests; the AI is still set up for the review, so
+   * items can be re-planned with it later.
+   */
+  planWithoutAI?: boolean;
   /**
    * A plan is waiting for review: starting another run throws it away, so the caller has to say
    * so. Without it the run is refused with 409 ERR_PLAN_WAITING.
@@ -264,11 +331,55 @@ interface StoredPlanRecord {
     customTestCases?: boolean;
     /** Product context / spec documents provided for discovery. */
     productContext?: string;
+    /** Check how search engines and AI assistants see the site: off for a test copy unless asked. */
+    searchChecks?: boolean;
     /** Design tokens / design notes. */
     designNotes?: string;
     /** Path to product context file on disk if written. */
     contextFilePath?: string;
   };
+}
+
+/**
+ * The plan as the review screen needs it: without each page's raw inventory of controls, and with
+ * its links cut down to where they go (the map's lines). The full plan stays on the server.
+ */
+function planForClient(plan: ReviewPlan): ReviewPlan {
+  const { testCases: _testCases, ...rest } = plan;
+  return {
+    ...rest,
+    pages: plan.pages.map(({ elements: _elements, links, ...page }) => ({
+      ...page,
+      links: links?.filter((l) => !l.leavesSite).map((l) => ({ to: l.to, landsOn: l.landsOn }) as PageLink),
+    })),
+  };
+}
+
+/**
+ * What a PATCH that only switched items, answered questions or changed sizes changed: the summary,
+ * what won't run, the answers, the sizes, and the items touched (a page whole when one of its tests was).
+ */
+function planDelta(plan: ReviewPlan, touched: Set<string>) {
+  const pageTouched = (p: NonNullable<ReviewPlan['planPages']>[number]) => touched.has(p.id) || p.tests.some((t) => touched.has(t.id));
+  return {
+    delta: true as const,
+    summary: plan.summary,
+    wontRun: plan.wontRun,
+    screenSizes: plan.screenSizes,
+    questions: plan.questions,
+    planPages: (plan.planPages || []).filter(pageTouched),
+    navigation: (plan.navigation || []).filter((n) => touched.has(n.id)),
+    flows: plan.flows.filter((f) => touched.has(`journey:${f.id}`)),
+  };
+}
+
+/** An address's host as typed ("localhost:3050"), or the address itself when it isn't one. */
+function hostOfAddress(address: string): string {
+  try {
+    return new URL(address).host;
+  } catch {
+    return address;
+  }
 }
 
 /** Why a run is read-only, in plain words. */
@@ -324,6 +435,10 @@ export class RunnerServer {
   private lastRunError: string | null = null;
   private lastErrorCode: string | null = null;
   private activeAbortController: AbortController | null = null;
+  /** Finishes the scan or test run early: the scan plans what it found, testing reports what it did. */
+  private finishController: AbortController | null = null;
+  /** Plans kept aside for other sites while one is reviewed or tested, by site. Also on disk. */
+  private parkedPlans = new Map<string, StoredPlanRecord>();
   private currentPlanRecord: StoredPlanRecord | null = null;
   /** The run in progress or paused, so a reopened page can pick it up again. */
   private currentRunId: string | null = null;
@@ -344,6 +459,10 @@ export class RunnerServer {
   private runEvents: Array<Record<string, unknown>> = [];
   /** The chosen free models (not secret), kept beside the key so every browser gets the same setup. */
   private aiModelsFile: string;
+  /** How each AI model has done on this machine. */
+  private modelRecordFile: string;
+  /** The defaults a check-up starts with (screen sizes). */
+  private defaultsFile: string;
 
   constructor(options: RunnerServerOptions = {}) {
     this.port = options.port || 3001;
@@ -356,6 +475,8 @@ export class RunnerServer {
     this.authDir = path.join(this.outputDir, 'auth');
     this.planFile = path.join(this.dataDir, '.qa-plan.json');
     this.aiModelsFile = path.join(this.dataDir, '.qa-ai-models.json');
+    this.modelRecordFile = path.join(this.dataDir, '.qa-ai-model-record.json');
+    this.defaultsFile = path.join(this.dataDir, '.qa-settings.json');
     this.keyResolver = options.keyResolver || new KeyResolver(this.dataDir);
     this.openRouter = options.openRouter || new OpenRouterClient();
     this.makeAIProvider =
@@ -560,9 +681,37 @@ export class RunnerServer {
             await this.handleAddPage(req, res);
             return;
           }
+          // GET/POST /api/runner/waiting-plans — plans kept aside for other sites, and bringing one back
+          if (pathname === '/api/runner/waiting-plans') {
+            await this.handleWaitingPlans(req, res);
+            return;
+          }
+          // POST /api/runner/plan/add-sign-in — sign in as a role, explore what it sees, and plan it
+          if (pathname === '/api/runner/plan/add-sign-in' && req.method === 'POST') {
+            await this.handleAddSignIn(req, res);
+            return;
+          }
           // POST /api/runner/plan/include-host — explore another host the site links to, and plan its pages
           if (pathname === '/api/runner/plan/include-host' && req.method === 'POST') {
             await this.handleIncludeHost(req, res);
+            return;
+          }
+
+          // GET /api/sites, POST /api/sites/<host> — what's remembered per site: its choices and saved sign-ins
+          if (pathname === '/api/sites' || pathname.startsWith('/api/sites/')) {
+            await this.handleSites(decodeURIComponent(pathname.slice('/api/sites'.length).replace(/^\//, '')), req, res);
+            return;
+          }
+
+          // GET/POST /api/settings/defaults — the screen sizes a check-up starts with
+          if (pathname === '/api/settings/defaults') {
+            await this.handleDefaults(req, res);
+            return;
+          }
+
+          // POST /api/runner/ai-estimate — about how many AI requests a scan needs, against what's left today
+          if (pathname === '/api/runner/ai-estimate' && req.method === 'POST') {
+            await this.handleAiEstimate(req, res);
             return;
           }
 
@@ -585,6 +734,9 @@ export class RunnerServer {
             return;
           }
 
+          if (pathname.startsWith('/api/ai/') && !pathname.startsWith('/api/ai/openrouter/')) {
+            if (await this.handleAiSettings(pathname.slice('/api/ai/'.length), req, res)) return;
+          }
           if (pathname.startsWith('/api/ai/openrouter/')) {
             await this.handleOpenRouter(pathname.replace('/api/ai/openrouter/', ''), req, res);
             return;
@@ -626,6 +778,11 @@ export class RunnerServer {
               res.writeHead(200, { 'Content-Type': mime });
               res.end(content);
             } catch {
+              if (relPath.endsWith('product-context.md')) {
+                res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end('');
+                return;
+              }
               res.writeHead(404, { 'Content-Type': 'text/plain' });
               res.end(`Evidence file not found: ${relPath}`);
             }
@@ -750,7 +907,14 @@ export class RunnerServer {
     const about = {
       host: typed.host,
       testCopy: isTestHost(typed.hostname, memory?.staging ? [typed.hostname] : []),
-      remembered: memory ? { owner: memory.owner, markedTestCopy: memory.staging || undefined } : undefined,
+      remembered: memory
+        ? {
+            owner: memory.owner,
+            markedTestCopy: memory.staging || undefined,
+            searchChecks: memory.searchChecks,
+            signIns: memory.signIns?.length ? memory.signIns.map((s) => ({ role: s.role, username: s.username })) : undefined,
+          }
+        : undefined,
     };
 
     const check = await new PreFlightChecker().checkUrlReachable(this.resolveTargetUrl(targetUrl));
@@ -770,6 +934,156 @@ export class RunnerServer {
         ...about,
       });
     }
+  }
+
+  /** The keychain account a site's saved sign-in password is kept under. */
+  private signInAccount(host: string, role: string): string {
+    return `signin:${host.toLowerCase()}:${role}`;
+  }
+
+  /**
+   * GET "" lists every remembered site: whether it's a test copy, whether search is checked, and its
+   * saved sign-ins (never their passwords). POST "<host>" { searchChecks?, forgetSignIn? } changes one.
+   */
+  private async handleSites(host: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!host && req.method === 'GET') {
+      const sites = await listSiteMemories(this.dataDir);
+      this.sendJson(res, 200, {
+        sites: sites.map((m) => ({
+          host: m.host,
+          owner: m.owner,
+          markedTestCopy: m.staging || undefined,
+          searchChecks: m.searchChecks,
+          signIns: m.signIns ?? [],
+          updatedAt: m.updatedAt,
+        })),
+      });
+      return;
+    }
+    if (host && req.method === 'POST') {
+      let body: { searchChecks?: boolean | null; forgetSignIn?: string } = {};
+      try {
+        body = await this.readJsonBody(req);
+      } catch {
+        this.sendJson(res, 400, { error: 'Invalid JSON body' });
+        return;
+      }
+      const memory = await loadSiteMemory(this.dataDir, host);
+      if (!memory) {
+        this.sendJson(res, 404, { error: 'That site isn’t remembered.' });
+        return;
+      }
+      if (body.searchChecks !== undefined) memory.searchChecks = body.searchChecks ?? undefined;
+      if (body.forgetSignIn) {
+        memory.signIns = (memory.signIns ?? []).filter((s) => s.role !== body.forgetSignIn);
+        await this.keyResolver.forgetSecret(this.signInAccount(memory.host, body.forgetSignIn));
+      }
+      await saveSiteMemory(this.dataDir, memory);
+      this.sendJson(res, 200, { saved: true });
+      return;
+    }
+    this.sendJson(res, 404, { error: 'Not found' });
+  }
+
+  private async readDefaults(): Promise<{ screenSizes?: Breakpoint[] }> {
+    try {
+      return JSON.parse(await fs.readFile(this.defaultsFile, 'utf8'));
+    } catch {
+      return {};
+    }
+  }
+
+  /** GET: the defaults a check-up starts with. POST { screenSizes }: changes them. */
+  private async handleDefaults(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (req.method === 'GET') {
+      const defaults = await this.readDefaults();
+      this.sendJson(res, 200, { screenSizes: defaults.screenSizes ?? ALL_SCREEN_SIZES });
+      return;
+    }
+    if (req.method === 'POST') {
+      let body: { screenSizes?: string[] } = {};
+      try {
+        body = await this.readJsonBody(req);
+      } catch {
+        // checked below
+      }
+      const sizes = ALL_SCREEN_SIZES.filter((s) => body.screenSizes?.includes(s));
+      if (sizes.length === 0) {
+        this.sendJson(res, 400, { error: 'Choose at least one screen size.' });
+        return;
+      }
+      await fs.mkdir(path.dirname(this.defaultsFile), { recursive: true });
+      await fs.writeFile(this.defaultsFile, JSON.stringify({ ...(await this.readDefaults()), screenSizes: sizes }, null, 2), 'utf8');
+      this.sendJson(res, 200, { screenSizes: sizes });
+      return;
+    }
+    this.sendJson(res, 404, { error: 'Not found' });
+  }
+
+  /**
+   * The sign-ins a check-up uses: the ones given, remembered for the site when asked (passwords in
+   * the OS keychain only); or, when none are given and the person asked for them, the saved ones.
+   */
+  private async signInsFor(body: TriggerRunBody, memory: SiteMemory | null, host: string): Promise<{ roles?: RoleCredential[]; memory: SiteMemory | null; note?: string }> {
+    if (body.roles?.length) {
+      if (!body.rememberSignIns) return { roles: body.roles, memory };
+      const saved: NonNullable<SiteMemory['signIns']> = [];
+      let unsaved = 0;
+      for (const role of body.roles) {
+        if (role.password && !(await this.keyResolver.saveSecret(this.signInAccount(host, role.role), role.password))) {
+          unsaved++;
+          continue;
+        }
+        saved.push({ role: role.role, username: role.username, loginPath: role.loginPath });
+      }
+      const next = { ...(memory ?? emptySiteMemory(host)), signIns: saved };
+      return {
+        roles: body.roles,
+        memory: next,
+        note: unsaved > 0 ? 'This computer has no keychain to keep passwords in, so the sign-ins weren’t remembered.' : undefined,
+      };
+    }
+    if (!body.useSavedSignIns || !memory?.signIns?.length) return { memory };
+    const roles: RoleCredential[] = [];
+    for (const s of memory.signIns) {
+      const password = await this.keyResolver.readSecret(this.signInAccount(host, s.role));
+      if (password) roles.push({ role: s.role, username: s.username, password, loginPath: s.loginPath });
+    }
+    return { roles: roles.length > 0 ? roles : undefined, memory };
+  }
+
+  /**
+   * { targetUrl, maxPages } → about how many AI requests the scan needs (planning, repairs, and the
+   * visual review after the run), and how many the key has left today, before anything starts.
+   */
+  private async handleAiEstimate(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    let body: { targetUrl?: string; maxPages?: number } = {};
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      // estimated for a typical site
+    }
+    let host: string | undefined;
+    try {
+      host = body.targetUrl ? new URL(body.targetUrl).host : undefined;
+    } catch {
+      // estimated for a typical site
+    }
+    const memory = host ? await loadSiteMemory(this.dataDir, host).catch(() => null) : null;
+    const maxPages = typeof body.maxPages === 'number' && body.maxPages > 0 ? Math.min(Math.floor(body.maxPages), 1000) : 200;
+    // Pages whose approved plan is reused aren't asked about again.
+    const planned = memory?.plan ? Object.keys(memory.plan.pages).length : undefined;
+    const estimate = estimateScanRequests({ maxPages, pagesSeenBefore: planned ?? memory?.pages.length, visualReviewCalls: VISUAL_REVIEW_CALLS });
+    const setup = await this.aiSetup();
+    const today = setup.provider === 'openrouter' && setup.key ? await this.openRouter.freeRequestsToday(setup.key).catch(() => null) : null;
+    this.sendJson(res, 200, {
+      ...estimate,
+      seenBefore: !!memory,
+      provider: setup.provider,
+      free: setup.provider === 'openrouter',
+      left: today?.remaining ?? null,
+      limit: today?.limit ?? null,
+    });
   }
 
   /** The folder that holds one run's files: its scan, evidence and reports. */
@@ -842,7 +1156,7 @@ export class RunnerServer {
     const finished = new Set(runs.map((r) => r.runId));
     const root = path.join(this.outputDir, 'runs');
     for (const name of await fs.readdir(root).catch(() => [] as string[])) {
-      if (!isRunId(name) || finished.has(name) || name === this.currentRunId) continue;
+      if (!isRunId(name) || finished.has(name) || name === this.currentRunId || [...this.parkedPlans.values()].some((r) => r.plan.runId === name)) continue;
       await fs.rm(path.join(root, name), { recursive: true, force: true }).catch(() => {});
     }
   }
@@ -884,6 +1198,53 @@ export class RunnerServer {
       const report = await this.readRunReport(runId);
       if (!report) this.sendJson(res, 404, { error: 'That check-up’s report isn’t there any more.' });
       else this.sendJson(res, 200, report);
+      return;
+    }
+
+    // POST triage { titles, status: 'Intended' | 'False Positive' | null, reason? }: the person says a
+    // problem is intended, or not a problem (null undoes it). The report is updated, and the site's
+    // next check-ups remember it.
+    if (action === 'triage' && req.method === 'POST') {
+      let body: { titles?: string[]; status?: 'Intended' | 'False Positive' | null; reason?: string };
+      try {
+        body = await this.readJsonBody(req);
+      } catch {
+        this.sendJson(res, 400, { error: 'Invalid JSON body' });
+        return;
+      }
+      const report = await this.readRunReport(runId);
+      const titles = Array.isArray(body.titles) ? body.titles.filter((t) => typeof t === 'string') : [];
+      if (!report || titles.length === 0) {
+        this.sendJson(res, report ? 400 : 404, { error: report ? 'Say which problem.' : 'That check-up’s report isn’t there any more.' });
+        return;
+      }
+      let host: string | undefined;
+      try {
+        host = new URL(report.targetUrl).host;
+      } catch {
+        // rules for every site
+      }
+      const status = body.status === 'Intended' || body.status === 'False Positive' ? body.status : null;
+      for (const f of report.findings) {
+        if (!titles.includes(f.title)) continue;
+        f.triageStatus = status ?? 'Pending';
+        f.triageReason = status ? body.reason?.trim() || undefined : undefined;
+      }
+      const suppressions = new SuppressionsManager(this.outputDir);
+      if (status) {
+        for (const title of titles) {
+          await suppressions.saveSuppression({ findingTitle: title, triageStatus: status, reason: body.reason?.trim() || undefined, dateAdded: new Date().toISOString(), host });
+        }
+      } else {
+        await suppressions.removeSuppressions(titles, host);
+      }
+      // The grades, what to improve and the verdict follow.
+      const ran = report.results.flatMap((r) => (r.checks || []).map((c) => c.checker));
+      report.grades = calculateSiteAspectGrades(report.findings, { checkersRun: ran });
+      report.recommendations = generateRankedRecommendations(report.findings);
+      await this.saveReviewedReport(report);
+      if (this.lastReport?.runId === runId) this.lastReport = report;
+      this.sendJson(res, 200, report);
       return;
     }
 
@@ -975,59 +1336,141 @@ export class RunnerServer {
     }
   }
 
-  public pendingAiScreens: VisualReviewItemInput[] = [];
+  /** Screens of the latest run the visual review hasn't looked at yet: "Finish the visual review" does them. */
+  private pendingAiScreens: { runId: string; screens: VisualReviewItemInput[] } | null = null;
 
-  private async handleAiFinish(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (!this.lastReport) {
+  /**
+   * Finishes the visual review of the latest run: the screens it didn't get to, with the vision
+   * model, within what's left of the AI Request Budget.
+   */
+  private async handleAiFinish(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const report = this.lastReport;
+    if (!report) {
       this.sendJson(res, 404, { error: 'No report available to finish AI review' });
       return;
     }
-    const key = await this.storedOpenRouterKey();
-    const provider = key ? createAIProvider('openrouter', key) : undefined;
-    const reviewer = new VisualReviewer();
-
-    const screens = this.pendingAiScreens.length > 0 ? this.pendingAiScreens : [];
-    if (screens.length === 0) {
-      this.sendJson(res, 200, {
-        completed: true,
-        message: 'No remaining screens to review',
-        reviewedCount: 0,
-        addedFindingsCount: 0,
-        grades: this.lastReport.grades,
-      });
+    const pending = this.pendingAiScreens?.runId === report.runId ? this.pendingAiScreens.screens : [];
+    if (pending.length === 0) {
+      this.sendJson(res, 200, { completed: true, message: 'No remaining screens to review', reviewedCount: 0, remainingCount: 0, addedFindingsCount: 0, grades: report.grades });
       return;
     }
-
-    const result = await reviewer.reviewScreens(screens, provider, { maxCalls: VISUAL_REVIEW_CALLS });
-    this.pendingAiScreens = result.remainingScreens;
-
-    if (result.findings.length > 0) {
-      this.lastReport.findings.push(...result.findings);
-      const ran = this.lastReport.results.flatMap((r) => (r.checks || []).map((c) => c.checker));
-      this.lastReport.grades = calculateSiteAspectGrades(this.lastReport.findings, { checkersRun: [...ran, 'ai-review'] });
-      this.lastReport.recommendations = generateRankedRecommendations(this.lastReport.findings);
-      const dir = this.runDir(this.lastReport.runId);
-      await generateSingleFileHtmlReport(this.lastReport, { outputDir: dir }).catch(() => {});
-      await fs.writeFile(path.join(dir, 'report.json'), JSON.stringify(this.lastReport), 'utf8').catch(() => {});
+    const reviewed = await this.visualReview(report, pending);
+    if (!reviewed) {
+      this.sendJson(res, 409, { error: 'No AI model that reads screenshots is set up. Choose one in Settings.', code: 'ERR_NO_VISION_MODEL' });
+      return;
     }
-
+    await this.saveReviewedReport(report);
     this.sendJson(res, 200, {
-      completed: result.status === 'completed',
-      reviewedCount: result.reviewedCount,
-      remainingCount: this.pendingAiScreens.length,
-      addedFindingsCount: result.findings.length,
-      grades: this.lastReport.grades,
-      note: result.note,
+      completed: reviewed.remaining === 0,
+      reviewedCount: reviewed.reviewed,
+      remainingCount: reviewed.remaining,
+      addedFindingsCount: reviewed.added,
+      grades: report.grades,
+      note: reviewed.note,
     });
+  }
+
+  /**
+   * One screen per Layout Group (its first page visited), with its screenshot at each size: what the
+   * AI's visual review looks at.
+   */
+  private screensForReview(report: ReleaseReport, draft?: DiscoveryDraft): VisualReviewItemInput[] {
+    const groupOf = new Map((draft?.plan?.pages ?? []).map((p) => [p.urlPath, p.layoutGroup || p.urlPath]));
+    const byGroup = new Map<string, VisualReviewItemInput>();
+    for (const result of report.results) {
+      if (result.flowId !== 'page-visit' || !result.breakpoint) continue;
+      const shot = [...result.stepEvidence].reverse().find((s) => s.screenshotPath);
+      if (!shot?.screenshotPath) continue;
+      let urlPath: string;
+      try {
+        urlPath = new URL(shot.urlAfter || shot.urlBefore).pathname;
+      } catch {
+        continue;
+      }
+      const group = groupOf.get(urlPath) ?? urlPath;
+      const screen = byGroup.get(group) ?? { layoutGroup: group, urlPath, screenshots: [] };
+      byGroup.set(group, screen);
+      if (screen.urlPath === urlPath && !screen.screenshots.some((s) => s.breakpoint === result.breakpoint)) {
+        // The report keeps evidence paths relative to the run's folder.
+        screen.screenshots.push({ breakpoint: result.breakpoint, imagePath: path.resolve(this.runDir(report.runId), shot.screenshotPath) });
+      }
+    }
+    return [...byGroup.values()];
+  }
+
+  /**
+   * The AI's visual review of `screens`, added to the report: its findings, the grades again, and
+   * what's left for later. Null when no model that reads screenshots is set up.
+   */
+  private async visualReview(
+    report: ReleaseReport,
+    screens: VisualReviewItemInput[],
+    /** The run's own AI, when it was started with a key and models of its own. */
+    runAi?: { provider: AIProviderType; apiKey?: string; vision?: string }
+  ): Promise<{ reviewed: number; remaining: number; added: number; note?: string; outOfRequests?: boolean } | null> {
+    const saved = await this.aiSetup();
+    // A key given with the run is the one to use; otherwise the one saved on this computer.
+    const setup = runAi?.apiKey ? { provider: runAi.provider, key: runAi.apiKey, vision: runAi.vision } : saved;
+    if (!setup.key || !setup.vision) return null;
+    const budget = await this.aiBudgetFor({ provider: setup.provider }, setup.key);
+    const paced = new PacedAI(this.makeAIProvider(setup.provider, setup.key, setup.vision), Math.min(budget.left ?? Infinity, VISUAL_REVIEW_CALLS), {
+      model: setup.vision,
+    });
+    const result = await new VisualReviewer().reviewScreens(screens, paced, { maxCalls: VISUAL_REVIEW_CALLS });
+    report.aiUsage = addTokens(report.aiUsage, paced.tokens);
+    await this.recordModelOutcomes(paced.models);
+    this.pendingAiScreens = result.remainingScreens.length > 0 ? { runId: report.runId, screens: result.remainingScreens } : null;
+    if (result.findings.length > 0) report.findings.push(...result.findings);
+    if (result.reviewedCount > 0) {
+      const ran = report.results.flatMap((r) => (r.checks || []).map((c) => c.checker));
+      report.grades = calculateSiteAspectGrades(report.findings, { checkersRun: [...ran, 'ai-review'] });
+      report.recommendations = generateRankedRecommendations(report.findings);
+    }
+    report.visualReview = {
+      reviewed: (report.visualReview?.reviewed ?? 0) + result.reviewedCount,
+      total: report.visualReview?.total ?? screens.length,
+      remaining: result.remainingScreens.length,
+    };
+    return {
+      reviewed: result.reviewedCount,
+      remaining: result.remainingScreens.length,
+      added: result.findings.length,
+      note: result.note,
+      outOfRequests: !result.stoppedBy || result.stoppedBy instanceof BudgetSpentError,
+    };
+  }
+
+  /**
+   * Writes a report changed after the run (the visual review finished, a problem marked as intended)
+   * back to its files, and its verdict to the summary Past check-ups lists.
+   */
+  private async saveReviewedReport(report: ReleaseReport): Promise<void> {
+    const dir = this.runDir(report.runId);
+    await generateSingleFileHtmlReport(report, { outputDir: dir }).catch(() => {});
+    await fs.writeFile(path.join(dir, 'report.json'), JSON.stringify(report), 'utf8').catch(() => {});
+    const summaryFile = path.join(dir, 'summary.json');
+    const summary = JSON.parse(await fs.readFile(summaryFile, 'utf8').catch(() => 'null')) as RunSummary | null;
+    if (!summary) return;
+    const verdict = releaseVerdict(report.findings);
+    await fs
+      .writeFile(summaryFile, JSON.stringify({ ...summary, ready: verdict.ready, stamp: verdict.stamp, reason: verdict.reason, counts: verdict.counts }, null, 2), 'utf8')
+      .catch(() => {});
+  }
+
+  /** The key saved on this machine for a provider, if any. Never returned to clients. */
+  private async storedKey(provider: AIProviderType): Promise<string | undefined> {
+    if (provider === 'mock') return 'mock-key';
+    const resolved = await this.keyResolver.resolveKey(provider);
+    return resolved?.provider === provider ? resolved.apiKey : undefined;
   }
 
   /** The OpenRouter key saved on this machine, if any. Never returned to clients. */
   private async storedOpenRouterKey(): Promise<string | undefined> {
-    const resolved = await this.keyResolver.resolveKey('openrouter');
-    return resolved?.provider === 'openrouter' ? resolved.apiKey : undefined;
+    return this.storedKey('openrouter');
   }
 
-  private async readAiModels(): Promise<{ text?: string | null; vision?: string | null }> {
+  /** The AI settings (not secret): the provider, the chosen models, and who chose them. */
+  private async readAiModels(): Promise<AiSettings> {
     try {
       return JSON.parse(await fs.readFile(this.aiModelsFile, 'utf8'));
     } catch {
@@ -1035,12 +1478,169 @@ export class RunnerServer {
     }
   }
 
-  /** Keeps the chosen free models while they are still free, replacing any that has gone. */
-  private async refreshAiModels(apiKey: string): Promise<{ text: string | null; vision: string | null }> {
-    const models = keepOrPickModels(await this.openRouter.listFreeModels(apiKey), await this.readAiModels());
+  private async writeAiModels(settings: AiSettings): Promise<void> {
     await fs.mkdir(path.dirname(this.aiModelsFile), { recursive: true });
-    await fs.writeFile(this.aiModelsFile, JSON.stringify({ ...models, chosenAt: new Date().toISOString() }, null, 2), 'utf8');
-    return models;
+    await fs.writeFile(this.aiModelsFile, JSON.stringify({ ...settings, chosenAt: new Date().toISOString() }, null, 2), 'utf8');
+  }
+
+  /** How each model has done on this machine: a model that keeps stopping before it answers is avoided. */
+  private async readModelRecord(): Promise<ModelRecord> {
+    try {
+      return JSON.parse(await fs.readFile(this.modelRecordFile, 'utf8'));
+    } catch {
+      return {};
+    }
+  }
+
+  /** Adds a scan's per-model outcomes to the record. */
+  private async recordModelOutcomes(outcomes: ModelRecord | undefined): Promise<void> {
+    if (!outcomes || Object.keys(outcomes).length === 0) return;
+    const record = await this.readModelRecord();
+    for (const [model, o] of Object.entries(outcomes)) {
+      const r = (record[model] ??= { ok: 0, truncated: 0, failed: 0 });
+      r.ok += o.ok;
+      r.truncated += o.truncated;
+      r.failed += o.failed;
+    }
+    await fs.mkdir(path.dirname(this.modelRecordFile), { recursive: true });
+    await fs.writeFile(this.modelRecordFile, JSON.stringify(record, null, 2), 'utf8').catch(() => {});
+  }
+
+  /**
+   * Keeps the chosen free models while they're still free (and, when chosen automatically, still
+   * answering), replacing any that has gone. Returns the next best models too, to switch to when
+   * the chosen one stops before answering.
+   */
+  private async refreshAiModels(apiKey: string): Promise<{ text: string | null; vision: string | null; fallbacks: string[] }> {
+    const [free, current, record] = await Promise.all([this.openRouter.listFreeModels(apiKey), this.readAiModels(), this.readModelRecord()]);
+    const models = keepOrPickModels(free, current, record);
+    const chosenBy = current.chosenBy === 'person' && current.text === models.text ? 'person' : undefined;
+    await this.writeAiModels({ ...current, provider: 'openrouter', text: models.text, vision: models.vision, chosenBy });
+    return { ...models, fallbacks: fallbackModels(free, models.text, record) };
+  }
+
+  /** The provider, key and models the AI uses, as saved in Settings. */
+  private async aiSetup(): Promise<{ provider: AIProviderType; key?: string; text?: string; vision?: string; chosenBy?: 'person' }> {
+    const settings = await this.readAiModels();
+    const provider = settings.provider ?? 'openrouter';
+    const key = await this.storedKey(provider);
+    // Paid providers' models all read screenshots: the text model does the visual review too.
+    const text = settings.text ?? (provider === 'openrouter' ? undefined : DEFAULT_MODELS[provider as Exclude<AIProviderType, 'mock'>]);
+    const vision = settings.vision ?? (provider === 'openrouter' ? undefined : text);
+    return { provider, key, text: text ?? undefined, vision: vision ?? undefined, chosenBy: settings.chosenBy };
+  }
+
+  private async handleAiSettings(route: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+    // GET settings: answered from this machine alone, so Settings shows at once.
+    if (route === 'settings' && req.method === 'GET') {
+      const setup = await this.aiSetup();
+      this.sendJson(res, 200, {
+        provider: setup.provider,
+        configured: !!setup.key,
+        model: setup.text ?? null,
+        visionModel: setup.vision ?? null,
+        chosenBy: setup.chosenBy ?? 'auto',
+        providers: AI_PROVIDERS,
+      });
+      return true;
+    }
+
+    // GET usage: today's free requests, one call to OpenRouter (slow): loaded after the settings.
+    if (route === 'usage' && req.method === 'GET') {
+      const setup = await this.aiSetup();
+      const today = setup.provider === 'openrouter' && setup.key ? await this.openRouter.freeRequestsToday(setup.key).catch(() => null) : null;
+      this.sendJson(res, 200, { requestsLeft: today?.remaining ?? null, requestsLimit: today?.limit ?? null, used: today?.used ?? null });
+      return true;
+    }
+
+    // POST settings: { provider, apiKey?, model?, visionModel? }. A key is checked before it's saved;
+    // a model named here was chosen by the person and is kept while it's available.
+    if (route === 'settings' && req.method === 'POST') {
+      let body: { provider?: AIProviderType; apiKey?: string; model?: string | null; visionModel?: string | null };
+      try {
+        body = await this.readJsonBody(req);
+      } catch {
+        this.sendJson(res, 400, { error: 'Invalid JSON body' });
+        return true;
+      }
+      const provider = body.provider ?? (await this.readAiModels()).provider ?? 'openrouter';
+      if (!AI_PROVIDERS.some((p) => p.id === provider)) {
+        this.sendJson(res, 400, { error: `Unknown AI provider “${provider}”.` });
+        return true;
+      }
+      const apiKey = body.apiKey?.trim();
+      if (apiKey) {
+        if (provider === 'openrouter') {
+          const validation = await this.openRouter.validateKey(apiKey);
+          if (!validation.valid) {
+            this.sendJson(res, 400, { saved: false, reason: validation.reason });
+            return true;
+          }
+        }
+        await this.keyResolver.saveByokKey(provider, apiKey);
+      }
+      const current = await this.readAiModels();
+      const sameProvider = (current.provider ?? 'openrouter') === provider;
+      const chosen = body.model !== undefined || body.visionModel !== undefined;
+      await this.writeAiModels({
+        provider,
+        text: body.model !== undefined ? body.model : sameProvider ? current.text : null,
+        vision: body.visionModel !== undefined ? body.visionModel : sameProvider ? current.vision : null,
+        chosenBy: chosen ? 'person' : sameProvider ? current.chosenBy : undefined,
+      });
+      // Without a chosen model, OpenRouter's free models are picked automatically.
+      const key = await this.storedKey(provider);
+      if (provider === 'openrouter' && key && !chosen) await this.refreshAiModels(key).catch(() => null);
+      const setup = await this.aiSetup();
+      this.sendJson(res, 200, { saved: true, provider, configured: !!setup.key, model: setup.text ?? null, visionModel: setup.vision ?? null });
+      return true;
+    }
+
+    // POST test-model: { model? } — one small request to the model, to see that it answers.
+    if (route === 'test-model' && req.method === 'POST') {
+      let body: { model?: string } = {};
+      try {
+        body = await this.readJsonBody(req);
+      } catch {
+        // tests the saved model
+      }
+      const setup = await this.aiSetup();
+      const model = body.model || setup.text;
+      if (!setup.key) {
+        this.sendJson(res, 400, { ok: false, reason: 'Add a key first.' });
+        return true;
+      }
+      const started = Date.now();
+      try {
+        const answer = await completeWith(
+          this.makeAIProvider(setup.provider, setup.key, model),
+          [
+            { role: 'system', content: 'Answer with strictly valid JSON only.' },
+            { role: 'user', content: 'Reply with {"ok": true} and nothing else.' },
+          ],
+          { responseFormat: 'json', reasoning: 'low', maxTokens: 512, temperature: 0 }
+        );
+        const ms = Date.now() - started;
+        const ok = /"ok"\s*:\s*true/.test(answer.text);
+        const reason = ok
+          ? undefined
+          : answer.finishReason === 'length' && !answer.text.trim()
+            ? 'The model spent its whole answer allowance thinking and answered nothing. Choose another model.'
+            : 'The model answered, but not with what was asked. Plans from it may fall back to fixed rules.';
+        if (model) await this.recordModelOutcomes({ [model]: { ok: ok ? 1 : 0, truncated: answer.finishReason === 'length' ? 1 : 0, failed: ok || answer.finishReason === 'length' ? 0 : 1 } });
+        this.sendJson(res, 200, { ok, ms, model: answer.model ?? model, reason, usage: answer.usage });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.sendJson(res, 200, {
+          ok: false,
+          ms: Date.now() - started,
+          model,
+          reason: /\b429\b|rate.?limit/i.test(message) ? 'The AI service is busy or today’s free requests are used up. Try again later.' : `The AI service said: ${message.slice(0, 200)}`,
+        });
+      }
+      return true;
+    }
+    return false;
   }
 
   private async handleOpenRouter(route: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -1058,7 +1658,7 @@ export class RunnerServer {
 
     // GET key: whether a key is saved on this machine (the key itself is never sent back), and the
     // free models chosen for it, so any browser can skip the setup screen. With ?usage=1, also the
-    // free requests the key has left today (one call to OpenRouter), for the Settings page.
+    // free requests the key has left today (one call to OpenRouter).
     if (route === 'key' && req.method === 'GET') {
       const key = await this.storedOpenRouterKey();
       const configured = !!key;
@@ -1090,21 +1690,25 @@ export class RunnerServer {
       }
       await this.keyResolver.saveByokKey('openrouter', apiKey!.trim());
       // Choose the free models now; a null model means none is free right now.
+      const current = await this.readAiModels();
+      if ((current.provider ?? 'openrouter') !== 'openrouter') await this.writeAiModels({ provider: 'openrouter' });
       const models = await this.refreshAiModels(apiKey!.trim()).catch(() => ({ text: null, vision: null }));
       this.sendJson(res, 200, { saved: true, model: models.text, visionModel: models.vision });
       return;
     }
 
-    // GET free-models: key from the Authorization header, else the saved key.
+    // GET free-models: key from the Authorization header, else the saved key. Best first, with
+    // models that keep stopping before they answer at the end.
     if (route === 'free-models' && req.method === 'GET') {
       const header = req.headers.authorization;
       const apiKey = header?.startsWith('Bearer ') ? header.slice(7) : await this.storedOpenRouterKey();
       try {
-        const models = await this.openRouter.listFreeModels(apiKey);
+        const record = await this.readModelRecord();
+        const models = byTrackRecord(await this.openRouter.listFreeModels(apiKey), record);
         this.sendJson(res, 200, {
-          models,
-          recommendedModel: pickRecommendedModel(models),
-          recommendedVisionModel: pickVisionModel(models),
+          models: models.map((m) => ({ ...m, unreliable: unreliable(m.id, record) || undefined })),
+          recommendedModel: pickRecommendedModel(models, record),
+          recommendedVisionModel: pickVisionModel(models, record),
         });
       } catch (err) {
         if (err instanceof OpenRouterAuthError) {
@@ -1156,20 +1760,23 @@ export class RunnerServer {
       return;
     }
 
-    // A new run throws away a plan that's waiting for review, so the caller has to say so.
+    // A plan waiting for review is kept aside when another site is checked (one waiting plan per
+    // site). Only a new check-up of the same site throws it away, so the caller has to say so.
     await this.ensurePlanLoaded();
-    if (this.phase === 'awaiting-review' && this.currentPlanRecord && !body.replacePlan) {
-      let waitingFor = this.currentPlanRecord.plan.targetUrl;
+    const waiting = this.phase === 'awaiting-review' ? this.currentPlanRecord : null;
+    const parkWaiting = !!waiting && this.hostOfPlan(waiting) !== hostOfAddress(body.targetUrl);
+    if (waiting && !parkWaiting && !body.replacePlan) {
+      let waitingFor = waiting.plan.targetUrl;
       try {
         waitingFor = new URL(waitingFor).host;
       } catch {
         // keep it as typed
       }
       this.sendJson(res, 409, {
-        error: `The plan for ${waitingFor} is waiting for your review. Starting a new check-up throws it away.`,
+        error: `The plan for ${waitingFor} is waiting for your review. Starting a new check-up of it throws that plan away.`,
         code: 'ERR_PLAN_WAITING',
         suggestion: 'Open the plan to finish reviewing it, or start again to replace it.',
-        targetUrl: this.currentPlanRecord.plan.targetUrl,
+        targetUrl: waiting.plan.targetUrl,
       });
       return;
     }
@@ -1179,7 +1786,8 @@ export class RunnerServer {
 
     // The wizard's plan is written by the AI (ADR 0009), so its scans need a working AI key.
     const wizardScan = body.owner !== undefined && body.mode !== 'safe-public' && !body.specTestCases?.length;
-    if (wizardScan && body.useAI && (body.aiProvider ?? 'openrouter') === 'openrouter' && !body.apiKey && !(await this.storedOpenRouterKey())) {
+    const wantedProvider = body.aiProvider ?? 'openrouter';
+    if (wizardScan && body.useAI && wantedProvider !== 'mock' && !body.apiKey && !(await this.storedKey(wantedProvider))) {
       this.sendJson(res, 400, {
         error: 'An AI key is needed: the AI writes the plan.',
         code: 'ERR_NO_AI_KEY',
@@ -1188,6 +1796,9 @@ export class RunnerServer {
       return;
     }
 
+    if (parkWaiting && waiting) await this.parkPlan(waiting);
+    // A plan kept aside for this same site is replaced by the new check-up.
+    await this.unparkPlan(hostOfAddress(body.targetUrl));
     await this.clearPlan();
 
     const productId = body.productId || 'default-product';
@@ -1205,6 +1816,7 @@ export class RunnerServer {
     this.lastRunError = null;
     this.lastErrorCode = null;
     this.activeAbortController = new AbortController();
+    this.finishController = new AbortController();
 
     res.writeHead(202, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ runId }));
@@ -1224,8 +1836,17 @@ export class RunnerServer {
     });
   }
 
-  private async handleAbortRun(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleAbortRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const runId = this.currentRunId;
+    // { finish: true }: stop early but keep the work: the scan plans what it found, testing makes a
+    // partial report. Answered at once; the usual events follow.
+    const body = await this.readJsonBody<{ finish?: boolean }>(req).catch(() => ({}) as { finish?: boolean });
+    if (body.finish && (this.phase === 'scanning' || this.phase === 'testing') && this.finishController) {
+      this.finishController.abort();
+      this.broadcastRunnerEvent({ type: 'RUN_FINISHING', runId, phase: this.phase, timestamp: Date.now() });
+      this.sendJson(res, 200, { aborted: false, finishing: true });
+      return;
+    }
     if (!this.isRunning && this.phase === 'idle') {
       this.sendJson(res, 200, { aborted: false, message: 'No run currently active' });
       return;
@@ -1315,32 +1936,40 @@ export class RunnerServer {
     }
 
     try {
-      const profile: ProductProfile | undefined =
-        body.roles && body.roles.length > 0
-          ? { name: productId, productId, roles: body.roles }
-          : undefined;
-
       // Full testing needs the owner's say-so and a test host. Decided here, not by the screen.
       const typed = new URL(body.targetUrl);
       const siteHost = typed.host;
       let memory = await loadSiteMemory(this.dataDir, siteHost);
       // What the person chose for the site is remembered, so the next check-up starts from it.
-      if (body.stagingHost !== undefined || body.owner !== undefined) {
+      if (body.stagingHost !== undefined || body.owner !== undefined || body.searchChecks !== undefined) {
         memory = {
           ...(memory ?? emptySiteMemory(siteHost)),
           ...(body.stagingHost !== undefined ? { staging: body.stagingHost || undefined } : {}),
           ...(body.owner !== undefined ? { owner: body.owner } : {}),
+          ...(body.searchChecks !== undefined ? { searchChecks: body.searchChecks } : {}),
         };
         await saveSiteMemory(this.dataDir, memory);
       }
-      // Test again tests at the screen sizes the plan was approved with, unless told otherwise.
+      // Sign-ins: the ones given (remembered when asked), or the ones saved for the site.
+      const signIns = await this.signInsFor(body, memory, siteHost);
+      if (signIns.memory && signIns.memory !== memory) {
+        memory = signIns.memory;
+        await saveSiteMemory(this.dataDir, memory);
+      }
+      const profile: ProductProfile | undefined = signIns.roles?.length ? { name: productId, productId, roles: signIns.roles } : undefined;
+      // Test again tests at the screen sizes the plan was approved with, unless told otherwise; a
+      // new check-up at the sizes chosen in Settings.
       const breakpoints: Breakpoint[] =
         (body.breakpoints as Breakpoint[] | undefined) ||
-        (body.testAgain && memory?.plan?.screenSizes?.length ? memory.plan.screenSizes : undefined) || ['375px', '768px', '1440px'];
+        (body.testAgain && memory?.plan?.screenSizes?.length ? memory.plan.screenSizes : undefined) ||
+        (await this.readDefaults()).screenSizes ||
+        ALL_SCREEN_SIZES;
       const urlFirst = body.owner !== undefined;
       const owner = body.owner ?? true;
       const testHost = isTestHost(typed.hostname, memory?.staging ? [typed.hostname] : []);
       const readOnly = !(owner && testHost);
+      // How search engines see a site matters on the public site, not on a test copy, unless asked.
+      const searchChecks = body.searchChecks ?? memory?.searchChecks ?? (urlFirst ? !testHost : true);
 
       const context: StoredPlanRecord['context'] = {
         targetUrl,
@@ -1357,6 +1986,7 @@ export class RunnerServer {
         siteHost,
         productContext: body.productContext,
         designNotes: body.designNotes,
+        searchChecks,
       };
 
       if (body.specTestCases && body.specTestCases.length > 0) {
@@ -1369,9 +1999,11 @@ export class RunnerServer {
         return;
       }
 
-      const ai = await this.prepareAI(body);
+      // "Plan with fixed rules now": the AI is still set up, so items can be re-planned with it later.
+      const ai = await this.prepareAI(body.planWithoutAI ? { ...body, useAI: true } : body);
       context.aiModels = ai.models;
       context.ai = ai.settings;
+      if (body.planWithoutAI) ai.provider = undefined;
       const aiBudget = ai.provider ? await this.aiBudgetFor(ai.settings, ai.key) : undefined;
       if (!current()) return;
 
@@ -1394,10 +2026,12 @@ export class RunnerServer {
         outputDir: runDir,
         authDir: this.authDir,
         signal,
+        finishSignal: this.finishController?.signal,
         aiProvider: ai.provider,
         readOnly,
         maxPages: typeof body.maxPages === 'number' && body.maxPages > 0 ? Math.min(Math.floor(body.maxPages), 1000) : undefined,
         aiBudget,
+        aiModels: { model: ai.models?.text, fallbacks: ai.fallbacks },
         onProgress: (progress) => {
           if (current()) this.broadcastRunnerEvent({ type: 'DISCOVERY_PROGRESS', runId, ...progress, timestamp: Date.now() });
         },
@@ -1405,9 +2039,16 @@ export class RunnerServer {
         remembered: body.replanAll ? undefined : memory?.plan,
       });
       if (!current()) return;
+      await this.recordModelOutcomes(draft.plan?.budget?.models);
       const sinceLastRun = applySiteMemory(draft, memory);
       context.draft = draft;
-      context.reportNotes = [...(draft.exploration?.notes || [])];
+      if (body.planWithoutAI && draft.exploration) {
+        draft.exploration.notes = [
+          'Planned with fixed rules, as you chose, so no AI requests were used. Re-plan any item with the AI when you have requests to spare.',
+          ...draft.exploration.notes.filter((n) => !n.startsWith('No AI key is set up')),
+        ];
+      }
+      context.reportNotes = [...(draft.exploration?.notes || []), ...(signIns.note ? [signIns.note] : [])];
       this.broadcastRunnerEvent({ type: 'DISCOVERY_COMPLETED', runId, flowsFound: draft.flows.length, timestamp: Date.now() });
 
       const record: StoredPlanRecord = { plan: this.emptyPlan(runId, body.targetUrl), context };
@@ -1468,37 +2109,51 @@ export class RunnerServer {
    * The text model for a run. Without a key or a free model there's no run: the plan is written by
    * the AI (ADR 0009). `key` is the key used, for reading its AI Request Budget; it isn't saved.
    */
-  private async prepareAI(
-    body: TriggerRunBody
-  ): Promise<{ provider?: AIProvider; models?: { text?: string; vision?: string }; settings?: StoredPlanRecord['context']['ai']; key?: string }> {
+  private async prepareAI(body: TriggerRunBody): Promise<{
+    provider?: AIProvider;
+    models?: { text?: string; vision?: string };
+    settings?: StoredPlanRecord['context']['ai'];
+    key?: string;
+    fallbacks?: string[];
+  }> {
     if (!body.useAI) return {};
+    const saved = await this.aiSetup();
+    // The wizard names the provider saved in Settings; other callers name theirs, or get the mock.
     const providerType: AIProviderType = body.aiProvider || 'mock';
     let apiKey = body.apiKey;
-    if (!apiKey && providerType === 'openrouter') {
-      apiKey = await this.storedOpenRouterKey();
+    if (!apiKey && providerType !== 'mock') {
+      apiKey = await this.storedKey(providerType);
       if (!apiKey) {
-        throw Object.assign(new Error('No OpenRouter key is saved. Add one in Settings, then start the check-up again.'), {
+        const name = AI_PROVIDERS.find((p) => p.id === providerType)?.name ?? providerType;
+        throw Object.assign(new Error(`No ${name} key is saved. Add one in Settings, then start the check-up again.`), {
           code: 'ERR_NO_AI_KEY',
         });
       }
     }
-    // One fixed free model per role (text, vision) chosen by the runner, so every run of a
-    // site is planned by the same model and the report can say which.
+    // One fixed model per role (text, vision), so every run of a site is planned by the same model
+    // and the report can say which. OpenRouter's free ones are chosen by the runner unless the
+    // person chose them in Settings.
     let model = body.aiModel;
     let visionModel: string | null | undefined;
+    let fallbacks: string[] | undefined;
     if (providerType === 'openrouter') {
-      const chosen = await this.refreshAiModels(apiKey!).catch(async () => this.readAiModels());
+      const chosen = await this.refreshAiModels(apiKey!).catch(async () => ({ ...(await this.readAiModels()), fallbacks: [] as string[] }));
       model ??= chosen.text ?? undefined;
       visionModel = chosen.vision;
+      fallbacks = chosen.fallbacks;
       if (!model) {
         throw Object.assign(new Error('No free AI models are available right now — please try again later.'), { code: 'ERR_NO_FREE_MODELS' });
       }
+    } else if (providerType !== 'mock' && saved.provider === providerType) {
+      model ??= saved.text;
+      visionModel = saved.vision;
     }
     return {
       provider: this.makeAIProvider(providerType, apiKey || 'mock-key', model),
       models: model ? { text: model, vision: visionModel ?? undefined } : undefined,
       settings: { provider: providerType, model, apiKey: body.apiKey },
       key: apiKey,
+      fallbacks,
     };
   }
 
@@ -1512,7 +2167,7 @@ export class RunnerServer {
   private async aiFor(context: StoredPlanRecord['context']): Promise<AIProvider | undefined> {
     const settings = context.ai;
     if (!settings) return undefined;
-    const apiKey = settings.apiKey || (settings.provider === 'openrouter' ? await this.storedOpenRouterKey() : 'mock-key');
+    const apiKey = settings.apiKey || (await this.storedKey(settings.provider));
     if (!apiKey) return undefined;
     return this.makeAIProvider(settings.provider, apiKey, settings.model);
   }
@@ -1560,7 +2215,7 @@ export class RunnerServer {
       // The complete Plan (ADR 0009): every Plan Item, what won't run, and what approving runs.
       planPages: draft.plan?.pages.map((p) => ({ ...p, screenshotPath: relative(p.screenshotPath) ?? p.screenshotPath })),
       navigation: draft.plan?.navigation,
-      gradedChecks: draft.plan ? GRADED_CHECKS : undefined,
+      gradedChecks: draft.plan ? this.gradedChecksFor(record) : undefined,
       layoutGroups: draft.plan?.layoutGroups,
       screenSizes: this.screenSizesOf(record.context),
       roles: draft.plan ? [...new Set(draft.pages.flatMap((p) => p.reachedBy?.length ? p.reachedBy : ['visitor']))] : undefined,
@@ -1569,6 +2224,31 @@ export class RunnerServer {
       summary,
       otherHosts: draft.plan?.otherHosts,
     };
+  }
+
+  /** The graded checks, each saying up front when it can't be graded this time. */
+  private gradedChecksFor(record: StoredPlanRecord): ReviewPlan['gradedChecks'] {
+    const { context } = record;
+    const budget = context.draft.plan?.budget;
+    const noVision = !context.aiModels?.vision && context.ai?.provider === 'openrouter';
+    const noRequests = budget?.left !== undefined && budget.left <= 0;
+    const hasDesign = !!context.designNotes?.trim();
+    return GRADED_CHECKS.map((check) => {
+      if (check.id === 'check:looks' && !hasDesign && (!context.ai || noVision || noRequests)) {
+        return {
+          ...check,
+          notGraded: !context.ai
+            ? 'Needs the AI to look over the screens, and no AI is set up.'
+            : noVision
+              ? 'Needs an AI model that reads screenshots, and none is free right now. Choose one in Settings.'
+              : 'Needs AI requests to look over the screens, and none are left today. Finish it from the report later.',
+        };
+      }
+      if (check.id === 'check:findable' && context.searchChecks === false) {
+        return { ...check, notGraded: 'Not checked: this isn’t the public site. Broken links are still checked, under Works.' };
+      }
+      return check;
+    });
   }
 
   /** The screen sizes a run uses. */
@@ -1676,6 +2356,7 @@ export class RunnerServer {
         evidenceUrlPrefix: `/api/evidence/runs/${context.runId}/`,
         dataDir: this.dataDir,
         signal: this.activeAbortController?.signal,
+        finishSignal: this.finishController?.signal,
         breakpoints: context.breakpoints || ['375px', '768px', '1440px'],
         repoRoot: process.cwd(),
         runId: context.runId,
@@ -1685,6 +2366,7 @@ export class RunnerServer {
         notRun,
         siteMap: context.draft ? this.siteMapOf(context.draft, context.runId) : undefined,
         testedWithApprovedPlan: extra.testedWithApprovedPlan,
+        searchChecks: context.searchChecks,
         onEvent: (event) => {
           if (current()) this.forwardRunEvent(event);
         },
@@ -1725,6 +2407,34 @@ export class RunnerServer {
       if (memory) {
         rememberObservations(memory, context.draft, report);
         await saveSiteMemory(this.dataDir, memory).catch(() => {});
+      }
+    }
+
+    report.aiUsage = context.draft?.plan?.budget?.tokens;
+
+    // The AI's visual review of one screen per layout, within what's left of today's AI requests.
+    // What it doesn't get to can be finished from the report.
+    if (context.draft && context.ai && context.ai.provider !== 'mock') {
+      const screens = this.screensForReview(report, context.draft);
+      if (screens.length > 0) {
+        this.broadcastRunnerEvent({ type: 'VISUAL_REVIEW_STARTED', runId: context.runId, screens: screens.length, timestamp: Date.now() });
+        const reviewed = await this.visualReview(report, screens, {
+          provider: context.ai.provider,
+          apiKey: context.ai.apiKey,
+          vision: context.aiModels?.vision,
+        }).catch(() => null);
+        if (!current()) return;
+        if (!reviewed) {
+          report.notes = [...(report.notes || []), 'Looks and reads well wasn’t fully checked: no AI model that reads screenshots is set up. Choose one in Settings.'];
+        } else if (reviewed.remaining > 0) {
+          report.notes = [
+            ...(report.notes || []),
+            reviewed.outOfRequests
+              ? `The AI’s visual review looked at ${reviewed.reviewed} of ${screens.length} screens before today’s AI requests ran out. Finish it from the report when requests are available again.`
+              : `The AI’s visual review stopped after ${reviewed.reviewed} of ${screens.length} screens because the AI service didn’t answer. Finish it from the report later.`,
+          ];
+        }
+        if (reviewed) await this.saveReviewedReport(report);
       }
     }
 
@@ -1777,6 +2487,97 @@ export class RunnerServer {
     return null;
   }
 
+  /** The site a plan is for, as typed ("localhost:3050"). */
+  private hostOfPlan(record: StoredPlanRecord): string {
+    return record.context.siteHost ?? hostOfAddress(record.plan.targetUrl);
+  }
+
+  private parkedFile(host: string): string {
+    return path.join(this.dataDir, 'waiting-plans', `${host.toLowerCase().replace(/[^a-z0-9.-]+/g, '_')}.json`);
+  }
+
+  /** Keeps a waiting plan aside while another site is checked: in memory (with its sign-ins) and on disk (without). */
+  private async parkPlan(record: StoredPlanRecord): Promise<void> {
+    const host = this.hostOfPlan(record);
+    this.parkedPlans.set(host, record);
+    const file = this.parkedFile(host);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify(this.planForDisk(record), null, 2), 'utf8');
+  }
+
+  /** Takes a site's kept-aside plan back out, or null when there's none. */
+  private async unparkPlan(host: string): Promise<StoredPlanRecord | null> {
+    let record = this.parkedPlans.get(host) ?? null;
+    if (!record) {
+      try {
+        record = JSON.parse(await fs.readFile(this.parkedFile(host), 'utf8')) as StoredPlanRecord;
+      } catch {
+        record = null;
+      }
+    }
+    this.parkedPlans.delete(host);
+    await fs.rm(this.parkedFile(host), { force: true }).catch(() => {});
+    return record?.plan && record.context ? record : null;
+  }
+
+  /** Every plan kept aside, for the new check-up screen. */
+  private async listParkedPlans(): Promise<Array<{ host: string; targetUrl: string; runId: string; discoveredAt: string; pages: number }>> {
+    const dir = path.join(this.dataDir, 'waiting-plans');
+    const list: Array<{ host: string; targetUrl: string; runId: string; discoveredAt: string; pages: number }> = [];
+    for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
+      try {
+        const record = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as StoredPlanRecord;
+        list.push({
+          host: this.hostOfPlan(record),
+          targetUrl: record.plan.targetUrl,
+          runId: record.plan.runId,
+          discoveredAt: record.plan.discoveredAt,
+          pages: record.plan.planPages?.length ?? record.plan.pages.length,
+        });
+      } catch {
+        // not a plan
+      }
+    }
+    return list;
+  }
+
+  /**
+   * GET: the plans kept aside. POST { host }: brings one back for review; the plan waiting now, if
+   * any, is kept aside in its place. Not while scanning or testing.
+   */
+  private async handleWaitingPlans(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (req.method === 'GET') {
+      this.sendJson(res, 200, { plans: await this.listParkedPlans() });
+      return;
+    }
+    let body: { host?: string } = {};
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      // checked below
+    }
+    if (this.phase === 'scanning' || this.phase === 'testing') {
+      this.sendJson(res, 409, { error: 'A check-up is running. Wait for it to finish, or stop it first.', code: 'ERR_RUN_IN_PROGRESS' });
+      return;
+    }
+    const record = body.host ? await this.unparkPlan(body.host) : null;
+    if (!record) {
+      this.sendJson(res, 404, { error: 'There’s no plan kept for that site.' });
+      return;
+    }
+    const current = await this.ensurePlanLoaded();
+    if (current && this.phase === 'awaiting-review') await this.parkPlan(current);
+    await this.savePlan(record);
+    this.phase = 'awaiting-review';
+    this.isRunning = true;
+    this.currentRunId = record.plan.runId;
+    this.currentTargetUrl = record.plan.targetUrl;
+    this.runEvents = [];
+    this.runGeneration++;
+    this.broadcastRunnerEvent({ type: 'PLAN_READY', runId: record.plan.runId, resumed: true, timestamp: Date.now() });
+    this.sendJson(res, 200, { resumed: true, runId: record.plan.runId, targetUrl: record.plan.targetUrl });
+  }
+
   private async savePlan(record: StoredPlanRecord): Promise<void> {
     this.currentPlanRecord = record;
     await fs.mkdir(this.dataDir, { recursive: true });
@@ -1812,11 +2613,12 @@ export class RunnerServer {
 
   private async handleGetPlan(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const record = await this.ensurePlanLoaded();
-    if (!record || (this.phase !== 'awaiting-review' && this.phase !== 'scanning')) {
+    // Also while testing: a page reopened mid-run draws the map from the approved plan.
+    if (!record || (this.phase !== 'awaiting-review' && this.phase !== 'scanning' && this.phase !== 'testing')) {
       this.sendJson(res, 404, { error: 'No plan awaiting review' });
       return;
     }
-    this.sendJson(res, 200, record.plan);
+    this.sendJson(res, 200, planForClient(record.plan));
   }
 
   private async handlePatchPlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -1837,6 +2639,13 @@ export class RunnerServer {
       items?: Array<{ id: string; skipped: boolean }>;
       /** The screen sizes the run uses. */
       screenSizes?: Breakpoint[];
+      /**
+       * What a test or journey should lead to, confirmed or reworded by the person: it's theirs now,
+       * not the AI's guess. `expectations` left out confirms the AI's wording as it is.
+       */
+      expectations?: Array<{ id: string; text?: string }>;
+      /** 'quick': desktop only, and only the shared menus' links. */
+      preset?: 'quick';
     }
 
     let body: PatchPlanBody;
@@ -1874,7 +2683,9 @@ export class RunnerServer {
     }
 
     if (body.answers && typeof body.answers === 'object') {
-      for (const [id, answer] of Object.entries(body.answers)) {
+      for (const [id, given] of Object.entries(body.answers)) {
+        // An empty answer clears it: the safe answer is used again.
+        const answer = given || undefined;
         const target = record.plan.questions.find((q) => q.id === id);
         if (target) target.selectedAnswer = answer;
         const draftTarget = record.context.draft?.ambiguityQuestions?.find((q) => q.id === id);
@@ -1935,9 +2746,37 @@ export class RunnerServer {
     const sizes = (body.screenSizes || []).filter((s): s is Breakpoint => ['375px', '768px', '1440px'].includes(s));
     if (sizes.length > 0) record.context.breakpoints = sizes;
 
+    // Confirmed or reworded expectations: the person's own from now on.
+    const touched = new Set((body.items || []).map((i) => i.id));
+    for (const change of Array.isArray(body.expectations) ? body.expectations : []) {
+      touched.add(change.id);
+      const text = change.text?.trim();
+      if (change.id.startsWith('journey:')) {
+        const flow = draft?.flows.find((f) => `journey:${f.id}` === change.id);
+        if (!flow) continue;
+        flow.candidateExpectations = text ? { text: { contains: text }, origin: 'user' } : { ...(flow.candidateExpectations || {}), origin: 'user' };
+        continue;
+      }
+      const test = draft?.plan?.pages.flatMap((pg) => pg.tests).find((t) => t.id === change.id);
+      if (test) test.expectations = text ? { text: { contains: text }, origin: 'user' } : { ...(test.expectations || {}), origin: 'user' };
+    }
+
+    // A quick check: desktop only, and each page's own links left out (the shared menus stay).
+    if (body.preset === 'quick' && draft?.plan) {
+      record.context.breakpoints = ['1440px'];
+      for (const nav of draft.plan.navigation) {
+        if (!nav.shared && !nav.leavesSite) {
+          nav.skipped = true;
+          touched.add(nav.id);
+        }
+      }
+    }
+
     if (draft) this.refreshPlan(record);
     await this.savePlan(record);
-    this.sendJson(res, 200, record.plan);
+    // Only switches, answers and sizes changed: the answer is what changed, not the whole plan.
+    const small = !body.flows && !body.testCases && body.productContext === undefined && body.designNotes === undefined;
+    this.sendJson(res, 200, small ? planDelta(record.plan, touched) : planForClient(record.plan));
   }
 
   private async handlePlanMarkdown(res: http.ServerResponse): Promise<void> {
@@ -2000,7 +2839,7 @@ export class RunnerServer {
       try {
         const provider = await this.aiFor(record.context);
         const budget = provider ? await this.aiBudgetFor(record.context.ai) : undefined;
-        const paced = provider ? new PacedAI(provider, budget?.left ?? Infinity) : undefined;
+        const paced = provider ? new PacedAI(provider, budget?.left ?? Infinity, { model: record.context.ai?.model }) : undefined;
         const notes = await work(record, paced, (step) =>
           this.broadcastRunnerEvent({ type: 'PLAN_UPDATE_PROGRESS', runId, what: step, requestsUsed: paced?.used ?? 0, timestamp: Date.now() })
         );
@@ -2011,10 +2850,12 @@ export class RunnerServer {
           needed: plan.budget?.needed ?? 0,
           ...plan.budget,
           used: (plan.budget?.used ?? 0) + used,
+          tokens: addTokens(plan.budget?.tokens, paced?.tokens),
           left: budget?.left !== undefined ? Math.max(0, budget.left - used) : plan.budget?.left,
           limit: budget?.limit ?? plan.budget?.limit,
         };
         if (draft.exploration) draft.exploration.notes = [...new Set([...draft.exploration.notes, ...notes])];
+        await this.recordModelOutcomes(paced?.models);
         this.refreshPlan(record);
         await this.savePlan(record);
         this.broadcastRunnerEvent({ type: 'PLAN_UPDATED', runId, what, timestamp: Date.now() });
@@ -2136,19 +2977,102 @@ export class RunnerServer {
   }
 
   /**
-   * Crawls more for the review, signed out: a page added by its address, or another host's pages.
-   * It goes as easy on the site as the scan did: robots.txt and a pause between pages on sites we don't own.
+   * { role, username, password, loginPath? }: signs in from the review, explores what that role
+   * sees, and adds it to the plan: pages only it reaches are planned, and pages everyone reaches are
+   * also visited as it. The details stay in memory, like a sign-in given with the scan.
+   */
+  private async handleAddSignIn(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const record = await this.ensurePlanLoaded();
+    let body: Partial<RoleCredential>;
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+    const role = (body.role || 'member').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').slice(0, 40) || 'member';
+    if (!body.username?.trim() || !body.password) {
+      this.sendJson(res, 400, { error: 'Enter the username and password to sign in with.' });
+      return;
+    }
+    if (!record?.context.draft?.plan) {
+      this.sendJson(res, 404, { error: 'No plan awaiting review' });
+      return;
+    }
+    if (record.context.profile?.roles.some((r) => r.role === role)) {
+      this.sendJson(res, 400, { error: `There’s already a sign-in called “${role}”. Give this one another name.` });
+      return;
+    }
+    const credential: RoleCredential = { role, username: body.username.trim(), password: body.password, loginPath: body.loginPath?.trim() || undefined };
+    await this.startPlanUpdate(res, `Adding the sign-in “${role}”`, async (rec, ai, report) => {
+      report(`Signing in as ${role}`);
+      const profile: ProductProfile = { name: rec.context.productId, productId: rec.context.productId, roles: [credential] };
+      const browser = new BrowserManager();
+      let found: Awaited<ReturnType<RunnerServer['crawlMore']>>;
+      try {
+        const signedIn = await new PreFlightChecker().runPreFlight(rec.context.targetUrl, profile, undefined, { browserManager: browser, authDir: this.authDir });
+        const storageState = signedIn.roleStorageStates?.[role];
+        if (!storageState) throw new Error(`Signing in as “${role}” didn’t work. Check the username, password and sign-in page.`);
+        const landing = signedIn.roleLandingPaths?.[role];
+        found = await this.crawlMore(rec, rec.context.targetUrl, {
+          startPaths: landing ? [landing] : [],
+          maxPages: SIGNED_IN_PAGES,
+          exploreClicks: true,
+          storageState,
+          who: role,
+          onPage: (_page, n) => report(`Exploring as ${role}: ${n} ${n === 1 ? 'page' : 'pages'} found`),
+        });
+      } finally {
+        await browser.close();
+      }
+      const draft = rec.context.draft;
+      // The sign-in is part of the check-up now: testing signs in as it too.
+      rec.context.profile = { ...(rec.context.profile ?? { name: rec.context.productId, productId: rec.context.productId, roles: [] }) };
+      rec.context.profile.roles = [...rec.context.profile.roles, credential];
+      // Pages everyone reaches are visited as this role too.
+      const known = new Map(draft.pages.map((p) => [pathOf(p.urlPath), p]));
+      for (const page of found.pages) {
+        const before = known.get(pathOf(page.urlPath));
+        if (!before) continue;
+        before.reachedBy = [...new Set([...(before.reachedBy?.length ? before.reachedBy : ['visitor']), role])];
+        const planned = draft.plan!.pages.find((p) => p.urlPath === before.urlPath);
+        if (planned) planned.reachedBy = [...new Set([...planned.reachedBy, role])];
+      }
+      const out = await addPagesToPlan(draft, found, ai, this.replanOptions(rec, undefined, report));
+      // Pages the sign-in wall kept out, now reached.
+      if (draft.exploration) {
+        const reached = new Set(found.pages.map((p) => pathOf(p.urlPath)));
+        draft.exploration.notReached = draft.exploration.notReached?.filter((p) => !reached.has(pathOf(p)));
+        draft.exploration.signedInAs = [...new Set([...(draft.exploration.signedInAs || []), role])];
+        draft.exploration.notes = draft.exploration.notes.filter((n) => !/not reached|Add a sign-in/i.test(n) || (draft.exploration!.notReached?.length ?? 0) > 0);
+      }
+      return [`Signed in as “${role}”: ${out.pages.length} new ${out.pages.length === 1 ? 'page' : 'pages'} added to the plan.`, ...out.notes];
+    });
+  }
+
+  /**
+   * Crawls more for the review: a page added by its address, another host's pages, or what a new
+   * sign-in sees (`storageState`, as `who`). It goes as easy on the site as the scan did: robots.txt
+   * and a pause between pages on sites we don't own.
    */
   private async crawlMore(
     record: StoredPlanRecord,
     target: string,
-    options: { startPaths?: string[]; maxPages: number; exploreClicks: boolean; onPage?: (page: PageInventoryItem, n: number) => void }
+    options: {
+      startPaths?: string[];
+      maxPages: number;
+      exploreClicks: boolean;
+      onPage?: (page: PageInventoryItem, n: number) => void;
+      storageState?: string;
+      who?: string;
+    }
   ): Promise<{ pages: PageInventoryItem[]; forms: NonNullable<DiscoveryDraft['forms']> }> {
     const browser = new BrowserManager();
     const origin = new URL(target);
     const ownMachine = isPrivateHost(origin.hostname);
+    const who = options.who ?? 'visitor';
     try {
-      const context = await browser.createContext({ baseUrl: target });
+      const context = await browser.createContext({ baseUrl: target, storageState: options.storageState });
       if (record.context.readOnly) await blockChanges(context);
       const result = await new DeterministicSpider(record.context.profile?.forbiddenActions || [], options.maxPages).crawl(context, target, {
         startPaths: options.startPaths,
@@ -2160,7 +3084,7 @@ export class RunnerServer {
         onPage: options.onPage,
       });
       return {
-        pages: result.pages.map((p) => ({ ...p, reachedBy: ['visitor'], links: p.links?.map((l) => ({ ...l, seenBy: ['visitor'] })) })),
+        pages: result.pages.map((p) => ({ ...p, reachedBy: [who], links: p.links?.map((l) => ({ ...l, seenBy: [who] })) })),
         forms: result.forms.map((f) => ({ urlPath: f.urlPath, inputs: f.inputs.map((i) => ({ selector: i.selector })), submitButtonSelector: f.submitButtonSelector, method: f.method })),
       };
     } finally {
@@ -2290,6 +3214,7 @@ export class RunnerServer {
 
     const generation = ++this.runGeneration;
     this.activeAbortController = new AbortController();
+    this.finishController = new AbortController();
     this.lastErrorCode = null;
     this.lastRunError = null;
     // A page that opens during testing catches up on this testing, not on the scan or an earlier try.

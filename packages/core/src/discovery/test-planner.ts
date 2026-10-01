@@ -5,7 +5,8 @@ import { FORM_ANSWERS, isSkipAnswer } from './questions.js';
 /** True when the flow presses the form's send button on the form's page. */
 function submitsForm(flow: DiscoveredFlow, q: AmbiguityQuestion): boolean {
   if (!q.targetElement) return false;
-  const onFormPage = flow.startPage === q.urlPath || flow.steps.some((s) => s.action === 'navigate' && s.value === q.urlPath);
+  const pages = q.urlPaths ?? [q.urlPath];
+  const onFormPage = pages.includes(flow.startPage) || flow.steps.some((s) => s.action === 'navigate' && !!s.value && pages.includes(s.value));
   return onFormPage && flow.steps.some((s) => s.action === 'click' && s.selector === q.targetElement);
 }
 

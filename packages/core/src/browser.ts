@@ -70,6 +70,20 @@ export class BrowserManager {
   }
 }
 
+// If an element is nested inside a closed <details> accordion/disclosure, auto-open it
+async function revealIfInsideDetails(locator: Locator): Promise<void> {
+  await locator.evaluate((el) => {
+    let curr: HTMLElement | null = el as HTMLElement;
+    while (curr) {
+      if (curr.tagName === 'DETAILS' && !(curr as HTMLDetailsElement).open) {
+        (curr as HTMLDetailsElement).open = true;
+        curr.dispatchEvent(new Event('toggle'));
+      }
+      curr = curr.parentElement;
+    }
+  }).catch(() => {});
+}
+
 /**
  * Resilient element locator helper:
  * Prioritizes data-testid, then raw CSS selector, then label / accessible name, then visible text.
@@ -77,14 +91,18 @@ export class BrowserManager {
 export async function locateElement(page: Page, selector: string): Promise<Locator> {
   // If explicitly formatted as a data-testid selector
   if (selector.startsWith('[data-testid=') || selector.startsWith('[data-testid=')) {
-    return page.locator(selector);
+    const loc = page.locator(selector);
+    await revealIfInsideDetails(loc);
+    return loc;
   }
 
   // If provided as raw testid identifier e.g. "submit-btn"
   if (/^[a-zA-Z0-9_\-]+$/.test(selector)) {
     const testIdLocator = page.locator(`[data-testid="${selector}"]`);
     if ((await testIdLocator.count()) > 0) {
-      return testIdLocator.first();
+      const loc = testIdLocator.first();
+      await revealIfInsideDetails(loc);
+      return loc;
     }
   }
 
@@ -93,28 +111,53 @@ export async function locateElement(page: Page, selector: string): Promise<Locat
   if ((await standardLocator.count().catch(() => 0)) > 0) {
     // Sites often have the same link twice (a wide-screen menu and a phone menu): use the one on screen.
     const onScreen = standardLocator.filter({ visible: true });
-    return (await onScreen.count().catch(() => 0)) > 0 ? onScreen.first() : standardLocator.first();
+    const loc = (await onScreen.count().catch(() => 0)) > 0 ? onScreen.first() : standardLocator.first();
+    await revealIfInsideDetails(loc);
+    return loc;
   }
 
-  // Fallback: form control by its <label> / aria-label
-  const labelLocator = page.getByLabel(selector, { exact: false });
-  if ((await labelLocator.count()) > 0) {
-    return labelLocator.first();
+  // Extract quoted text if prompt wrote `Click “...”`
+  const quoted = selector.match(/["“]([^"”]+)["”]/)?.[1];
+  const candidates = [selector];
+  if (quoted && quoted !== selector) candidates.push(quoted);
+
+  // Generate cleaned variants by stripping decorative symbols (e.g. checkmarks, arrows)
+  for (const s of [...candidates]) {
+    const clean = s
+      .replace(/^[✓✕●–!•\s]+/, '')
+      .replace(/[\s→←…><]+$/, '')
+      .trim();
+    if (clean && clean !== s) candidates.push(clean);
   }
 
-  // Fallback: button or link by accessible name
-  const roleLocator = page
-    .getByRole('button', { name: selector })
-    .or(page.getByRole('link', { name: selector }));
-  if ((await roleLocator.count()) > 0) {
-    return roleLocator.first();
+  for (const target of candidates) {
+    // Form control by its <label> / aria-label
+    const labelLocator = page.getByLabel(target, { exact: false });
+    if ((await labelLocator.count()) > 0) {
+      const loc = labelLocator.first();
+      await revealIfInsideDetails(loc);
+      return loc;
+    }
+
+    // Button or link by accessible name
+    const roleLocator = page
+      .getByRole('button', { name: target })
+      .or(page.getByRole('link', { name: target }));
+    if ((await roleLocator.count()) > 0) {
+      const loc = roleLocator.first();
+      await revealIfInsideDetails(loc);
+      return loc;
+    }
+
+    // Visible text
+    const textLocator = page.getByText(target, { exact: false });
+    if ((await textLocator.count()) > 0) {
+      const loc = textLocator.first();
+      await revealIfInsideDetails(loc);
+      return loc;
+    }
   }
 
-  // Fallback: visible text
-  const textLocator = page.getByText(selector, { exact: false });
-  if ((await textLocator.count()) > 0) {
-    return textLocator.first();
-  }
-
+  await revealIfInsideDetails(standardLocator);
   return standardLocator;
 }

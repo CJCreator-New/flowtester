@@ -29,13 +29,49 @@ export const palette = {
   j5: '#FBA35C',
 };
 
+/**
+ * The same tokens for paper: the report can be read and printed light (DESIGN.md: the working
+ * screens stay on the dark board). Checked against WCAG AA in tests/contrast.test.ts too.
+ */
+export const lightPalette = {
+  paper: '#F8FAFC',
+  canvas: '#EEF2F7',
+  surface: '#FFFFFF',
+  panel: '#F1F5F9',
+  ink: '#0F172A',
+  'ink-soft': '#475569',
+  rule: '#CBD5E1',
+  edge: '#64748B',
+  stamp: '#1D4ED8',
+  'stamp-dark': '#1E3A8A',
+  'stamp-tint': '#DBEAFE',
+  pass: '#047857',
+  'pass-tint': '#D1FAE5',
+  fail: '#B91C1C',
+  'fail-tint': '#FEE2E2',
+  warn: '#92400E',
+  'warn-tint': '#FEF3C7',
+  j1: '#6D28D9',
+  j2: '#1D4ED8',
+  j3: '#047857',
+  j4: '#BE185D',
+  j5: '#C2410C',
+};
+
+/** A palette as CSS variables of "r g b", so classes like bg-surface/60 still work. */
+function asVariables(colors) {
+  return Object.fromEntries(
+    Object.entries(colors).map(([name, hex]) => [`--c-${name}`, [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(' ')])
+  );
+}
+
 /** @type {import('tailwindcss').Config} */
 export default {
   // relative: globs resolve from this file, so the dev server works from any working directory
   content: { relative: true, files: ['./index.html', './src/**/*.{ts,tsx}'] },
   theme: {
     extend: {
-      colors: palette,
+      colors: Object.fromEntries(Object.keys(palette).map((name) => [name, `rgb(var(--c-${name}) / <alpha-value>)`])),
       fontFamily: {
         sans: ['"Atkinson Hyperlegible Next Variable"', 'system-ui', 'sans-serif'],
         stamp: ['"Big Shoulders Stencil Display"', 'Impact', 'sans-serif'],
@@ -52,5 +88,12 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    ({ addBase }) =>
+      addBase({
+        ':root': asVariables(palette),
+        '[data-theme="light"]': { ...asVariables(lightPalette), colorScheme: 'light' },
+        '@media print': { ':root': { ...asVariables(lightPalette), colorScheme: 'light' } },
+      }),
+  ],
 };

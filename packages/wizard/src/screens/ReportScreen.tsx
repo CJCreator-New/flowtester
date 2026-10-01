@@ -1,19 +1,36 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { AspectType, Finding, ReleaseReport } from '@qa/types';
-import { downloadRunFile, getRun, RunnerError } from '../api';
+import { downloadRunFile, finishAiReview, getRun, RunnerError, triageProblem } from '../api';
 import { DeveloperDetails } from '../components/DeveloperDetails';
 import { SiteMap } from '../components/SiteMap';
-import { ErrorMessage, FocusHeading, Spinner } from '../components/text';
+import { ErrorMessage, FocusHeading, Notice, Spinner } from '../components/text';
 import { count, formatDay, formatDuration, formatWhen, scrollBehavior } from '../lib/format';
 import { gradeClasses } from '../lib/grades';
 import { Link, PATHS } from '../lib/router';
-import { ASPECTS, BUCKETS, aspectOf, category, groupProblems, pageResults, plainTitle, plainTitleText, summarizeReport, type Bucket, type ProblemGroup } from '../lib/summary';
+import {
+  ASPECTS,
+  BUCKETS,
+  aspectOf,
+  category,
+  groupProblems,
+  howToFix,
+  pageResults,
+  plainTitle,
+  plainTitleText,
+  searchKind,
+  summarizeReport,
+  whyItMatters,
+  type Bucket,
+  type ProblemGroup,
+} from '../lib/summary';
 import { useDocumentTitle } from '../lib/title';
 import { looksTechnical } from '../lib/translate';
 import { hostOf } from '../lib/url';
 
 /** Reports with more problems than this get filters and a search box. */
 const FILTER_ABOVE = 10;
+/** Remembered in this browser: the reader prefers the light, printable report. */
+const LIGHT_KEY = 'qa-report-light';
 
 export interface ReportActions {
   onTestAgain: (report: ReleaseReport) => void;
@@ -61,16 +78,47 @@ export function ReportScreen({ runId, actions }: { runId: string; actions: Repor
       </div>
     );
   }
-  return <Report report={report} actions={actions} />;
+  return <Report report={report} actions={actions} onReportChanged={setReport} />;
 }
 
-function Report({ report, actions }: { report: ReleaseReport; actions: ReportActions }) {
+/** The light, printable report: the whole page turns light while the report is shown, if chosen. */
+function useLightReport(): [boolean, (on: boolean) => void] {
+  const [light, setLight] = useState(() => {
+    try {
+      return window.localStorage.getItem(LIGHT_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    const root = document.documentElement;
+    if (light) root.dataset.theme = 'light';
+    else delete root.dataset.theme;
+    return () => {
+      delete root.dataset.theme;
+    };
+  }, [light]);
+  const set = (on: boolean) => {
+    setLight(on);
+    try {
+      window.localStorage.setItem(LIGHT_KEY, on ? '1' : '0');
+    } catch {
+      // this browser won't remember it
+    }
+  };
+  return [light, set];
+}
+
+function Report({ report, actions, onReportChanged }: { report: ReleaseReport; actions: ReportActions; onReportChanged: (report: ReleaseReport) => void }) {
   const summary = summarizeReport(report);
   const host = hostOf(report.targetUrl);
   const { pages, statuses } = useMemo(() => pageResults(report), [report]);
   const [pageFilter, setPageFilter] = useState<string | null>(null);
   const problemsRef = useRef<HTMLElement>(null);
   const coverage = report.coverage;
+  const [light, setLight] = useLightReport();
+  const mustFix = summary.counts.filter((c) => c.severity === 'Blocker' || c.severity === 'Major').reduce((n, c) => n + c.count, 0);
+  const tokens = Object.entries(report.aiUsage || {});
 
   return (
     <div className="mx-auto max-w-6xl space-y-12 px-4 py-10 sm:px-6 sm:py-12">
@@ -90,7 +138,7 @@ function Report({ report, actions }: { report: ReleaseReport; actions: ReportAct
           </p>
           <p className="mt-1 text-2xl font-bold text-ink">{summary.reason}</p>
           <p className="mt-1 text-ink-soft">
-            {summary.headline}
+            {summary.total === 0 ? summary.headline : `${mustFix} must fix · ${count(summary.total, 'problem', 'problems')} in all`}
             {coverage.totalTestPoints > 0 && ` · ${count(coverage.totalTestPoints, 'test', 'tests')} in ${formatDuration(report.durationMs)}`}
           </p>
           {summary.readOnly && <p className="mt-2 text-sm text-ink">Only looked at: nothing was sent or changed, so forms weren’t tested.</p>}
@@ -98,37 +146,52 @@ function Report({ report, actions }: { report: ReleaseReport; actions: ReportAct
         </div>
       </header>
 
-      <ReportActionsBar report={report} actions={actions} />
+      {report.partial && (
+        <Notice tone="warn" title="A partial check-up">
+          Testing was stopped after {report.partial.done} of {report.partial.planned} tests. What wasn’t tested isn’t in this report, so it can’t say the whole site is
+          ready.
+        </Notice>
+      )}
 
-      <AspectGrades report={report} />
+      <ReportActionsBar report={report} actions={actions} light={light} onLight={setLight} />
 
-      <Improvements report={report} />
+      <VisualReview report={report} onReportChanged={onReportChanged} />
+
+      <Problems report={report} pageFilter={pageFilter} onPageFilter={setPageFilter} sectionRef={problemsRef} onReportChanged={onReportChanged} />
 
       {/* Only once there's an earlier check-up to compare with. */}
       {report.history?.previousTimestamp && <Changes report={report} />}
 
-      <section aria-labelledby="map-title">
-        <h2 id="map-title" className="mb-1 text-2xl font-bold">
-          Map of results
-        </h2>
-        <p className="mb-3 text-ink-soft">Every page that was tested, coloured by what was found on it. Choose a page to see its problems.</p>
-        <div className="flex h-[30rem] overflow-hidden rounded-lg border border-edge">
-          <SiteMap
-            pages={pages}
-            journeys={report.siteMap?.journeys}
-            mode="report"
-            maxCards={12}
-            selectedPagePath={pageFilter}
-            pageStatuses={statuses}
-            onSelectPage={(path) => {
-              setPageFilter(path);
-              problemsRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
-            }}
-          />
-        </div>
-      </section>
+      <Improvements report={report} />
 
-      <Problems report={report} pageFilter={pageFilter} onPageFilter={setPageFilter} sectionRef={problemsRef} />
+      <AspectGrades report={report} />
+
+      <section aria-labelledby="map-title">
+        <details className="rounded-lg border border-edge" open={pages.length <= 6 || undefined}>
+          <summary className="flex min-h-[56px] cursor-pointer items-center px-4 py-3">
+            <h2 id="map-title" className="text-2xl font-bold">
+              Map of results
+            </h2>
+          </summary>
+          <div className="border-t border-rule p-4">
+            <p className="mb-3 text-ink-soft">Every page that was tested, coloured by what was found on it. Choose a page to see its problems.</p>
+            <div className="flex h-[30rem] overflow-hidden rounded-lg border border-edge">
+              <SiteMap
+                pages={pages}
+                journeys={report.siteMap?.journeys}
+                mode="report"
+                maxCards={12}
+                selectedPagePath={pageFilter}
+                pageStatuses={statuses}
+                onSelectPage={(path) => {
+                  setPageFilter(path);
+                  problemsRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+                }}
+              />
+            </div>
+          </div>
+        </details>
+      </section>
 
       {(report.notes?.length ?? 0) > 0 && (
         <section aria-labelledby="notes-title">
@@ -147,14 +210,14 @@ function Report({ report, actions }: { report: ReleaseReport; actions: ReportAct
         <summary className="min-h-[44px] cursor-pointer px-4 py-3 font-bold">Details for developers</summary>
         <div className="space-y-3 border-t border-rule p-4 text-sm">
           <div className="flex flex-wrap gap-3">
-            <button type="button" className="btn-quiet min-h-[40px] px-3 text-sm" onClick={() => void downloadRunFile(report.runId, 'report.md')}>
+            <button type="button" className="btn-quiet min-h-[44px] px-3 text-sm" onClick={() => void downloadRunFile(report.runId, 'report.md')}>
               Download report.md
             </button>
-            <button type="button" className="btn-quiet min-h-[40px] px-3 text-sm" onClick={() => void downloadRunFile(report.runId, 'findings.json')}>
+            <button type="button" className="btn-quiet min-h-[44px] px-3 text-sm" onClick={() => void downloadRunFile(report.runId, 'findings.json')}>
               Download findings.json
             </button>
           </div>
-          <dl className="grid gap-x-4 gap-y-1 font-mono text-xs sm:grid-cols-[10rem_1fr]">
+          <dl className="grid gap-x-4 gap-y-1 font-mono text-sm sm:grid-cols-[12rem_1fr]">
             <dt className="text-ink-soft">Run</dt>
             <dd className="break-all text-ink">{report.runId}</dd>
             <dt className="text-ink-soft">Address</dt>
@@ -162,6 +225,10 @@ function Report({ report, actions }: { report: ReleaseReport; actions: ReportAct
             <dt className="text-ink-soft">Tests</dt>
             <dd className="text-ink">
               {coverage.passed} passed · {coverage.failed} failed · {coverage.blocked} blocked · {coverage.skipped} skipped · {coverage.couldNotVerify} could not verify
+            </dd>
+            <dt className="text-ink-soft">Findings</dt>
+            <dd className="text-ink">
+              {summary.findings} behind the {count(summary.total, 'problem', 'problems')} (the same problem on several pages or sizes is one problem)
             </dd>
             {report.aiModels?.text && (
               <>
@@ -172,6 +239,16 @@ function Report({ report, actions }: { report: ReleaseReport; actions: ReportAct
                 </dd>
               </>
             )}
+            {tokens.map(([stage, u]) => (
+              <div key={stage} className="contents">
+                <dt className="text-ink-soft">AI tokens: {stage}</dt>
+                <dd className="text-ink">
+                  {u!.requests} requests · {u!.promptTokens.toLocaleString()} sent · {u!.completionTokens.toLocaleString()} answered
+                  {u!.reasoningTokens ? ` (${u!.reasoningTokens.toLocaleString()} thinking)` : ''}
+                  {u!.truncated ? ` · ${u!.truncated} cut off` : ''}
+                </dd>
+              </div>
+            ))}
           </dl>
         </div>
       </details>
@@ -179,7 +256,60 @@ function Report({ report, actions }: { report: ReleaseReport; actions: ReportAct
   );
 }
 
-function ReportActionsBar({ report, actions }: { report: ReleaseReport; actions: ReportActions }) {
+/** How far the AI's look over the screens got, and a way to finish it when requests are available again. */
+function VisualReview({ report, onReportChanged }: { report: ReleaseReport; onReportChanged: (report: ReleaseReport) => void }) {
+  const [working, setWorking] = useState(false);
+  const [message, setMessage] = useState<{ tone: 'pass' | 'fail' | 'warn'; text: string } | null>(null);
+  const review = report.visualReview;
+  if (!review || review.remaining === 0) return null;
+  return (
+    <Notice
+      tone="warn"
+      title={`The AI looked over ${review.reviewed} of ${review.total} screens`}
+      actions={
+        <button
+          type="button"
+          className="btn-primary min-h-[44px] px-4 text-sm"
+          disabled={working}
+          onClick={async () => {
+            setWorking(true);
+            setMessage(null);
+            try {
+              const result = await finishAiReview();
+              onReportChanged(await getRun(report.runId));
+              setMessage(
+                result.remainingCount > 0
+                  ? { tone: 'warn', text: `${result.reviewedCount} more looked over; ${result.remainingCount} left for another time.` }
+                  : { tone: 'pass', text: 'All the screens are looked over now.' }
+              );
+            } catch (err) {
+              setMessage({ tone: 'fail', text: err instanceof RunnerError ? err.message : 'That couldn’t be finished. Try again later.' });
+            } finally {
+              setWorking(false);
+            }
+          }}
+        >
+          {working ? <Spinner label="Looking over the screens…" /> : `Look over the other ${count(review.remaining, 'screen', 'screens')}`}
+        </button>
+      }
+    >
+      Today’s AI requests ran out first, so “Looks and reads well” only covers what was looked at.
+      {message && <span className={`mt-1 block font-bold text-${message.tone}`}>{message.text}</span>}
+    </Notice>
+  );
+}
+
+function ReportActionsBar({
+  report,
+  actions,
+  light,
+  onLight,
+}: {
+  report: ReleaseReport;
+  actions: ReportActions;
+  light: boolean;
+  onLight: (on: boolean) => void;
+}) {
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [deeper, setDeeper] = useState(false);
@@ -187,7 +317,7 @@ function ReportActionsBar({ report, actions }: { report: ReleaseReport; actions:
   const [password, setPassword] = useState('');
 
   return (
-    <div>
+    <div className="print:hidden">
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
@@ -213,6 +343,14 @@ function ReportActionsBar({ report, actions }: { report: ReleaseReport; actions:
         <button type="button" className="btn-link" aria-expanded={deeper} onClick={() => setDeeper((d) => !d)}>
           Go deeper: test the signed-in pages
         </button>
+        <span className="flex flex-wrap items-center gap-3 sm:ml-auto">
+          <button type="button" className="btn-link" aria-pressed={light} onClick={() => onLight(!light)}>
+            {light ? 'Dark view' : 'Light view'}
+          </button>
+          <button type="button" className="btn-link" onClick={() => window.print()}>
+            Print
+          </button>
+        </span>
       </div>
       {downloadError && <ErrorMessage>{downloadError}</ErrorMessage>}
       {actions.actionError && <ErrorMessage>{actions.actionError}</ErrorMessage>}
@@ -229,7 +367,7 @@ function ReportActionsBar({ report, actions }: { report: ReleaseReport; actions:
             <h2 className="text-lg font-bold">Test the pages behind a sign-in</h2>
             <p className="text-sm text-ink-soft">
               A new check-up signs in with this account, then scans and plans the pages it can reach. Use a test account, not a real
-              person’s.
+              person’s. Next time you can add a sign-in when you start the check-up, or from the plan.
             </p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -266,21 +404,40 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
         {ASPECTS.map((aspect) => {
           const data = report.grades!.aspects[aspect];
           const checked = data && data.checked !== false;
+          const sub = aspect === 'Findable' ? data?.subBreakdown : undefined;
+          const problems = checked ? groupProblems(report.findings.filter((f) => data.findings.includes(f.id))) : null;
+          const problemCount = problems ? problems['must-fix'].length + problems['should-fix'].length + problems.suggestion.length : 0;
           return (
-            <li key={aspect} className="flex items-center justify-between gap-3 rounded-lg border border-edge bg-surface p-4">
-              <span>
-                <span className="block font-bold text-ink">{aspect}</span>
-                <span className="block text-sm text-ink-soft">
-                  {checked ? count(data.findings.length, 'problem', 'problems') : 'Nothing here was checked this time'}
+            <li key={aspect} className="flex flex-col justify-between gap-3 rounded-lg border border-edge bg-surface p-4">
+              <div className="flex items-center justify-between gap-3">
+                <span>
+                  <span className="block font-bold text-ink">{aspect}</span>
+                  <span className="block text-sm text-ink-soft">{checked ? count(problemCount, 'problem', 'problems') : 'Nothing here was checked this time'}</span>
                 </span>
-              </span>
-              {checked ? (
-                <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-md border-2 text-2xl font-bold ${gradeClasses(data.grade)}`}>
-                  <span className="sr-only">Grade </span>
-                  {data.grade}
-                </span>
-              ) : (
-                <span className="shrink-0 rounded-md border-2 border-edge px-2 py-1 text-sm font-bold text-ink-soft">Not checked</span>
+                {checked ? (
+                  <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-md border-2 text-2xl font-bold ${gradeClasses(data.grade)}`}>
+                    <span className="sr-only">Grade </span>
+                    {data.grade}
+                  </span>
+                ) : (
+                  <span className="shrink-0 rounded-md border-2 border-edge px-2 py-1 text-sm font-bold text-ink-soft">Not checked</span>
+                )}
+              </div>
+              {checked && sub && (
+                <dl className="mt-1 grid grid-cols-3 gap-1 border-t border-rule pt-2 text-sm">
+                  {(
+                    [
+                      ['Search', sub.seo, 'How search engines, such as Google, find and list the site (SEO).'],
+                      ['AI answers', sub.aeo, 'How answer engines and AI assistants pick answers from the site (AEO).'],
+                      ['AI search', sub.geo, 'How AI search tools read and quote the site (GEO).'],
+                    ] as const
+                  ).map(([label, part, hint]) => (
+                    <div key={label} title={hint}>
+                      <dt className="text-ink-soft">{label}</dt>
+                      <dd className="font-bold text-ink">{part?.score ?? 100}%</dd>
+                    </div>
+                  ))}
+                </dl>
               )}
             </li>
           );
@@ -299,27 +456,33 @@ function Improvements({ report }: { report: ReleaseReport }) {
         What to improve first
       </h2>
       <ol className="space-y-3">
-        {recommendations.map((rec) => (
-          <li key={rec.id} className="rounded-lg border border-edge bg-surface p-4">
-            <p className="flex flex-wrap items-center gap-2 text-sm">
-              <span className={`rounded border px-1.5 font-bold ${rec.category === 'quick-win' ? 'border-pass text-pass' : 'border-stamp text-stamp'}`}>
-                {rec.category === 'quick-win' ? 'Quick win' : 'Bigger change'}
-              </span>
-              <span className="text-ink-soft">
-                {rec.aspect} · {rec.effort} effort · {rec.impact} impact
-                {rec.affectedPages.length > 0 && ` · ${count(rec.affectedPages.length, 'page', 'pages')}`}
-              </span>
-            </p>
-            <h3 className="mt-1 font-bold text-ink">{plainTitleText(rec.title)}</h3>
-            {rec.summary && !looksTechnical(rec.summary) && <p className="mt-1 text-sm text-ink-soft">{rec.summary}</p>}
-            {rec.suggestedFix && !looksTechnical(rec.suggestedFix) && (
+        {recommendations.map((rec) => {
+          const plainSummary = rec.summary && !looksTechnical(rec.summary) ? rec.summary : null;
+          const plainFix = rec.suggestedFix && !looksTechnical(rec.suggestedFix) ? rec.suggestedFix : null;
+          return (
+            <li key={rec.id} className="rounded-lg border border-edge bg-surface p-4">
+              <p className="flex flex-wrap items-center gap-2 text-sm">
+                <span className={`rounded border px-1.5 font-bold ${rec.category === 'quick-win' ? 'border-pass text-pass' : 'border-stamp text-stamp'}`}>
+                  {rec.category === 'quick-win' ? 'Quick win' : 'Bigger change'}
+                </span>
+                <span className="text-ink-soft">
+                  {rec.severity === 'Blocker' ? 'Blocks release · ' : rec.severity === 'Major' ? 'Must fix · ' : ''}
+                  {rec.aspect} · {rec.effort} effort · {rec.impact} impact
+                  {rec.affectedPages.length > 0 && ` · ${count(rec.affectedPages.length, 'page', 'pages')}`}
+                </span>
+              </p>
+              <h3 className="mt-1 font-bold text-ink">{plainTitleText(rec.title)}</h3>
+              {/* Technical wording stays in the developer details; a plain line takes its place here. */}
+              <p className="mt-1 text-sm text-ink-soft">
+                {plainSummary ?? whyItMatters({ title: plainTitleText(rec.title), aspect: rec.aspect })}
+              </p>
               <p className="mt-1 text-sm text-ink">
                 <strong>How to fix: </strong>
-                {rec.suggestedFix}
+                {plainFix ?? 'A developer can see exactly what to change under the problem’s “Details for developers”.'}
               </p>
-            )}
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ol>
     </section>
   );
@@ -338,7 +501,7 @@ function Changes({ report }: { report: ReleaseReport }) {
         Since the last check-up
       </h2>
       {history.previousTimestamp && <p className="mb-3 text-ink-soft">Compared with the check-up on {formatDay(history.previousTimestamp)}.</p>}
-      <dl className="grid grid-cols-3 gap-3">
+      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {items.map((item) => (
           <div key={item.label} className="flex flex-col-reverse rounded-lg border border-edge bg-surface p-4 text-center">
             <dt className="text-sm text-ink-soft">{item.label}</dt>
@@ -361,27 +524,36 @@ function Problems({
   pageFilter,
   onPageFilter,
   sectionRef,
+  onReportChanged,
 }: {
   report: ReleaseReport;
   pageFilter: string | null;
   onPageFilter: (page: string | null) => void;
   sectionRef: RefObject<HTMLElement>;
+  onReportChanged: (report: ReleaseReport) => void;
 }) {
   const [filters, setFilters] = useState<Filters>({ search: '', bucket: 'all', aspect: 'all' });
+  const [showHidden, setShowHidden] = useState(false);
   const withFilters = report.findings.length > FILTER_ABOVE;
   const problemPages = useMemo(() => [...new Set(report.findings.map((f) => f.where.urlPath))].sort(), [report.findings]);
+  const dismissed = useMemo(() => report.findings.filter((f) => f.triageStatus === 'Intended' || f.triageStatus === 'False Positive'), [report.findings]);
+  const dismissedTitles = useMemo(() => [...new Set(dismissed.map((f) => f.title))], [dismissed]);
 
   const shown = useMemo(() => {
     const words = filters.search.trim().toLowerCase();
     const matches = (f: Finding) =>
       (!pageFilter || f.where.urlPath === pageFilter || !!f.seenAt?.pages.includes(pageFilter)) &&
-      (filters.aspect === 'all' || aspectOf(f.checker) === filters.aspect) &&
+      (filters.aspect === 'all' || (f.aspect ?? aspectOf(f.checker)) === filters.aspect) &&
       (!words || [plainTitle(f), category(f), f.where.urlPath].join(' ').toLowerCase().includes(words));
     return groupProblems(report.findings.filter(matches));
   }, [report.findings, pageFilter, filters]);
 
   const buckets = BUCKETS.filter((b) => (filters.bucket === 'all' || filters.bucket === b.id) && shown[b.id].length > 0);
   const filtered = !!pageFilter || filters.search.trim() !== '' || filters.bucket !== 'all' || filters.aspect !== 'all';
+
+  const triage = async (titles: string[], status: 'Intended' | 'False Positive' | null, reason?: string) => {
+    onReportChanged(await triageProblem(report.runId, titles, status, reason));
+  };
 
   return (
     <section ref={sectionRef} aria-labelledby="problems-title" className="scroll-mt-20">
@@ -390,7 +562,7 @@ function Problems({
       </h2>
 
       {withFilters && (
-        <div role="search" aria-label="Filter the problems" className="mb-4 grid gap-3 rounded-lg border border-rule bg-panel p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div role="search" aria-label="Filter the problems" className="mb-4 grid gap-3 rounded-lg border border-rule bg-panel p-4 sm:grid-cols-2 lg:grid-cols-4 print:hidden">
           <div>
             <label htmlFor="problem-search" className="mb-1 block text-sm font-bold">
               Search
@@ -458,7 +630,7 @@ function Problems({
       {pageFilter && (
         <p className="mb-4 text-ink">
           Showing the problems on <span className="break-all font-mono">{pageFilter}</span>.{' '}
-          <button type="button" className="btn-link min-h-0" onClick={() => onPageFilter(null)}>
+          <button type="button" className="btn-link inline-flex min-h-[44px] items-center" onClick={() => onPageFilter(null)}>
             Show every page
           </button>
         </p>
@@ -478,11 +650,42 @@ function Problems({
               <p className="mb-3 text-sm text-ink-soft">{bucket.intro}</p>
               <ul className="space-y-2">
                 {shown[bucket.id].map((group) => (
-                  <ProblemItem key={group.key} group={group} report={report} />
+                  <ProblemItem key={group.key} group={group} report={report} onTriage={triage} />
                 ))}
               </ul>
             </section>
           ))}
+        </div>
+      )}
+
+      {dismissedTitles.length > 0 && (
+        <div className="mt-6 text-sm text-ink-soft">
+          <p>
+            {count(dismissedTitles.length, 'problem is', 'problems are')} hidden because you marked {dismissedTitles.length === 1 ? 'it' : 'them'} as intended or not
+            a problem.{' '}
+            <button type="button" className="btn-link text-sm" aria-expanded={showHidden} onClick={() => setShowHidden((s) => !s)}>
+              {showHidden ? 'Hide them' : 'Show them'}
+            </button>
+          </p>
+          {showHidden && (
+            <ul className="mt-2 space-y-1">
+              {dismissedTitles.map((title) => {
+                const f = dismissed.find((d) => d.title === title)!;
+                return (
+                  <li key={title} className="flex flex-wrap items-center gap-x-3">
+                    <span className="text-ink">{plainTitleText(title)}</span>
+                    <span>
+                      ({f.triageStatus === 'Intended' ? 'intended' : 'not a problem'}
+                      {f.triageReason ? `: ${f.triageReason}` : ''})
+                    </span>
+                    <button type="button" className="btn-link text-sm" onClick={() => void triage([title], null)}>
+                      Undo
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       )}
     </section>
@@ -496,11 +699,28 @@ const BUCKET_BORDER: Record<Bucket, string> = {
   'to-confirm': 'border-l-edge',
 };
 
-/** One problem: a button that opens where it was found, and the details for developers. */
-function ProblemItem({ group, report }: { group: ProblemGroup; report: ReleaseReport }) {
+/**
+ * One problem: why it matters and how to fix it, where it was found, the details for developers,
+ * and a way to say it's intended or not a problem.
+ */
+function ProblemItem({
+  group,
+  report,
+  onTriage,
+}: {
+  group: ProblemGroup;
+  report: ReleaseReport;
+  onTriage: (titles: string[], status: 'Intended' | 'False Positive' | null, reason?: string) => Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
+  const [marking, setMarking] = useState<'Intended' | 'False Positive' | null>(null);
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const first = group.findings[0];
   const id = `problem-${group.key.replace(/[^A-Za-z0-9_-]+/g, '_')}`;
+  const kinds = [...new Map(group.findings.map((f) => searchKind(f)).filter((k): k is NonNullable<typeof k> => !!k).map((k) => [k.label, k])).values()];
+  const titles = [...new Set(group.findings.map((f) => f.title))];
   return (
     <li className={`rounded-lg border border-l-4 border-rule bg-surface ${BUCKET_BORDER[group.bucket]}`}>
       <button
@@ -511,9 +731,22 @@ function ProblemItem({ group, report }: { group: ProblemGroup; report: ReleaseRe
         className="flex w-full items-start justify-between gap-3 rounded-lg p-4 text-left hover:bg-panel"
       >
         <span className="min-w-0">
-          <span className="block font-bold text-ink">{group.title}</span>
+          <span className="flex flex-wrap items-center gap-2 font-bold text-ink">
+            {kinds.map((k) => (
+              <span key={k.label} title={k.hint} className="rounded border border-stamp/50 px-1.5 py-0.5 text-xs font-bold text-stamp">
+                {k.label}
+              </span>
+            ))}
+            <span>{group.title}</span>
+          </span>
           <span className="block text-sm text-ink-soft">
-            {group.category} · {group.pages.length === 1 ? <span className="break-all font-mono">{group.pages[0]}</span> : count(group.pages.length, 'page', 'pages')}
+            {/* The tag already names a search category; the line says the rest. */}
+            {group.category
+              .split(' · ')
+              .filter((c) => !kinds.some((k) => k.label === c))
+              .map((c) => `${c} · `)
+              .join('')}
+            {group.pages.length === 1 ? <span className="break-all font-mono">{group.pages[0]}</span> : count(group.pages.length, 'page', 'pages')}
           </span>
         </span>
         <span aria-hidden="true" className="mt-1 shrink-0 text-ink-soft">
@@ -521,15 +754,79 @@ function ProblemItem({ group, report }: { group: ProblemGroup; report: ReleaseRe
         </span>
       </button>
       {open && (
-        <div id={id} className="border-t border-rule px-4 pb-4 pt-3">
-          <p className="text-sm text-ink-soft">Found on:</p>
-          <ul className="mt-1 flex flex-wrap gap-2">
-            {group.pages.map((page) => (
-              <li key={page} className="break-all rounded border border-rule bg-canvas px-2 py-0.5 font-mono text-xs text-ink">
-                {page}
-              </li>
-            ))}
-          </ul>
+        <div id={id} className="space-y-3 border-t border-rule px-4 pb-4 pt-3">
+          <p className="text-sm text-ink">
+            <strong>Why it matters: </strong>
+            {whyItMatters(group)}
+          </p>
+          <p className="text-sm text-ink">
+            <strong>How to fix: </strong>
+            {howToFix(group, looksTechnical)}
+          </p>
+          {group.aspects.length > 1 && <p className="text-sm text-ink-soft">It counts toward {group.aspects.join(' and ')}.</p>}
+          <div>
+            <p className="text-sm text-ink-soft">Found on:</p>
+            <ul className="mt-1 flex flex-wrap gap-2">
+              {group.pages.map((page) => (
+                <li key={page} className="break-all rounded border border-rule bg-canvas px-2 py-0.5 font-mono text-sm text-ink">
+                  {page}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="print:hidden">
+            {marking ? (
+              <form
+                className="flex flex-col gap-2 sm:flex-row"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setSaving(true);
+                  setError(null);
+                  try {
+                    await onTriage(titles, marking, reason);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'That couldn’t be saved.');
+                    setSaving(false);
+                  }
+                }}
+              >
+                <label className="sr-only" htmlFor={`${id}-reason`}>
+                  Why (optional)
+                </label>
+                <input
+                  id={`${id}-reason`}
+                  className="field flex-1 py-2 text-sm"
+                  placeholder="Why? (optional, for whoever reads this later)"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  autoFocus
+                />
+                <button type="submit" className="btn-primary min-h-[44px] px-4 text-sm" disabled={saving}>
+                  {marking === 'Intended' ? 'Mark as intended' : 'Mark as not a problem'}
+                </button>
+                <button type="button" className="btn-link text-sm" onClick={() => setMarking(null)}>
+                  Cancel
+                </button>
+              </form>
+            ) : (
+              <p className="flex flex-wrap gap-x-4 text-sm">
+                <button type="button" className="btn-link text-sm" onClick={() => setMarking('False Positive')}>
+                  Not a problem
+                </button>
+                <button type="button" className="btn-link text-sm" onClick={() => setMarking('Intended')}>
+                  It’s intended
+                </button>
+              </p>
+            )}
+            {marking && <p className="mt-1 text-sm text-ink-soft">It’s hidden from this report and not raised again for this site. You can undo it.</p>}
+            {error && (
+              <p role="alert" className="text-sm text-fail">
+                {error}
+              </p>
+            )}
+          </div>
+
           <DeveloperDetails finding={first} runId={report.runId} targetUrl={report.targetUrl} />
         </div>
       )}

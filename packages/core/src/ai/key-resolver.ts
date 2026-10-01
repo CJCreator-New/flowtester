@@ -74,6 +74,29 @@ export class KeyResolver {
     }
   }
 
+  /**
+   * Keeps another secret, such as a site's sign-in password, in the OS keychain only. Returns
+   * false when there's no keychain: such secrets are never written to a plain file.
+   */
+  async saveSecret(account: string, secret: string): Promise<boolean> {
+    try {
+      await this.store.set(account, secret);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async readSecret(account: string): Promise<string | null> {
+    const secret = await this.store.get(account).catch(() => null);
+    return secret || null;
+  }
+
+  /** Forgets a secret kept with saveSecret. */
+  async forgetSecret(account: string): Promise<void> {
+    await this.store.set(account, '').catch(() => {});
+  }
+
   async resolveKey(preferredProvider?: AIProviderType, explicitKey?: string): Promise<ResolvedKeyInfo | null> {
     // 1. Explicit CLI / Param
     if (explicitKey) {

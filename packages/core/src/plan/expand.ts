@@ -14,6 +14,8 @@ export const GRADED_CHECKS: PlanGradedCheck[] = [
 ];
 
 const SWITCHED_OFF = 'Switched off in the review.';
+/** About how long one test takes, from real check-ups: for "about N minutes". */
+const SECONDS_PER_TEST = 4;
 
 export interface ExpandedPlan {
   /** The tests the runner executes, in order. */
@@ -112,7 +114,12 @@ export function expandPlan(
       continue;
     }
     const hidden = (nav.notAt || []).filter((s) => sizes.includes(s));
-    const at = sizes.filter((s) => !hidden.includes(s));
+    const visible = sizes.filter((s) => !hidden.includes(s));
+    // A link goes to the same place at every width: it's clicked at the widest size where it shows
+    // plainly, and again only where a menu button has to be opened first to reach it.
+    const viaMenu = visible.filter((s) => (nav.menuSteps || []).some((step) => step.onlyAt?.includes(s)));
+    const plain = visible.filter((s) => !viaMenu.includes(s));
+    const at = visible.filter((s) => viaMenu.includes(s) || s === plain[plain.length - 1]);
     if (hidden.length > 0) {
       wontRun.push({
         itemId: nav.id,
@@ -205,5 +212,5 @@ function summarize(
   if (wontRun.length > 0) {
     lines.push({ text: `${plural(wontRun.length, 'item', 'items')} won’t run`, itemIds: wontRun.flatMap((w) => (w.itemId ? [w.itemId] : [])) });
   }
-  return { tests, pages: visited.size, pagesListed: plan.pages.length, screenSizes: sizes, lines };
+  return { tests, pages: visited.size, pagesListed: plan.pages.length, screenSizes: sizes, lines, minutes: Math.max(1, Math.round((tests * SECONDS_PER_TEST) / 60)) };
 }

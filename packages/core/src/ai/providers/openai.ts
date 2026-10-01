@@ -1,5 +1,6 @@
 import type { AIProvider } from '../ai-provider.js';
-import type { AIMessage, AICompletionOptions, AIProviderType } from '@qa/types';
+import { DEFAULT_MODELS } from '../default-models.js';
+import type { AICompletion, AIMessage, AICompletionOptions, AIProviderType } from '@qa/types';
 
 export class OpenAIProvider implements AIProvider {
   readonly providerType: AIProviderType;
@@ -16,6 +17,10 @@ export class OpenAIProvider implements AIProvider {
   }
 
   async generateText(messages: AIMessage[], options: AICompletionOptions = {}): Promise<string> {
+    return (await this.complete(messages, options)).text;
+  }
+
+  async complete(messages: AIMessage[], options: AICompletionOptions = {}): Promise<AICompletion> {
     const formattedMessages = messages.map((m) => {
       if (m.images && m.images.length > 0) {
         const contentParts: any[] = [{ type: 'text', text: m.content }];
@@ -31,7 +36,7 @@ export class OpenAIProvider implements AIProvider {
     });
 
     const body: Record<string, any> = {
-      model: options.model || this.defaultModel || (this.providerType === 'openrouter' ? 'anthropic/claude-sonnet-5' : 'gpt-4o'),
+      model: options.model || this.defaultModel || DEFAULT_MODELS[this.providerType === 'openrouter' ? 'openrouter' : 'openai'],
       temperature: options.temperature ?? 0.2,
       max_tokens: options.maxTokens || 4096,
       messages: formattedMessages,
@@ -40,15 +45,26 @@ export class OpenAIProvider implements AIProvider {
     if (options.responseFormat === 'json') {
       body.response_format = { type: 'json_object' };
     }
+    // OpenRouter: think briefly and leave the reasoning out, so the output allowance goes to the answer.
+    if (options.reasoning === 'low' && this.providerType === 'openrouter') {
+      body.reasoning = { effort: 'low', exclude: true };
+    }
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      // fetch only says "fetch failed"; the reason is in its cause.
+      const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+      throw new Error(`Couldn’t reach the AI service: ${cause?.code || cause?.message || (err instanceof Error ? err.message : String(err))}`);
+    }
 
     if (!res.ok) {
       const errorText = await res.text();
@@ -56,6 +72,19 @@ export class OpenAIProvider implements AIProvider {
     }
 
     const data = (await res.json()) as any;
-    return data.choices?.[0]?.message?.content || '';
+    const choice = data.choices?.[0];
+    const usage = data.usage;
+    return {
+      text: choice?.message?.content || '',
+      finishReason: choice?.finish_reason ?? choice?.native_finish_reason,
+      model: data.model || body.model,
+      usage: usage
+        ? {
+            promptTokens: usage.prompt_tokens ?? 0,
+            completionTokens: usage.completion_tokens ?? 0,
+            reasoningTokens: usage.completion_tokens_details?.reasoning_tokens ?? undefined,
+          }
+        : undefined,
+    };
   }
 }

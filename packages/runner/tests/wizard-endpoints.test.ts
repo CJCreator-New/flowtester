@@ -321,4 +321,57 @@ describe('Runner endpoints for the wizard', () => {
       expect((await fetch(`${runnerUrl}/api/report/download/..%2F..%2Fpackage.json`)).status).toBe(404);
     }, 60000);
   });
+  describe('Settings, the AI estimate, and marking problems', () => {
+    it('answers the AI settings at once, keeps a model the person chose, and estimates a scan before it starts', async () => {
+      openRouter.state.models = [freeModel('vendor/a:free'), freeModel('vendor/b:free')];
+      await post('/api/ai/openrouter/key', { apiKey: GOOD_KEY });
+      const settings = await (await fetch(`${runnerUrl}/api/ai/settings`)).json();
+      expect(settings).toMatchObject({ provider: 'openrouter', configured: true, model: 'vendor/a:free', chosenBy: 'auto' });
+      expect(JSON.stringify(settings)).not.toContain(GOOD_KEY);
+
+      const chosen = await post('/api/ai/settings', { provider: 'openrouter', model: 'vendor/b:free' });
+      expect(await chosen.json()).toMatchObject({ saved: true, model: 'vendor/b:free' });
+      expect(await (await fetch(`${runnerUrl}/api/ai/settings`)).json()).toMatchObject({ model: 'vendor/b:free', chosenBy: 'person' });
+      // A later key check keeps the person's choice while it's free.
+      expect(await (await post('/api/ai/openrouter/key', { apiKey: GOOD_KEY })).json()).toMatchObject({ model: 'vendor/b:free' });
+
+      // A site never seen: 9 pages, three to a request, plus the journeys; up to twice that with repairs.
+      const estimate = await (await post('/api/runner/ai-estimate', { targetUrl: 'http://never-seen.example/', maxPages: 9 })).json();
+      expect(estimate).toMatchObject({ low: 4, high: 10, visualReview: 3, free: true, seenBefore: false });
+    });
+
+    it('keeps the screen sizes a check-up starts with', async () => {
+      expect(await (await fetch(`${runnerUrl}/api/settings/defaults`)).json()).toEqual({ screenSizes: ['375px', '768px', '1440px'] });
+      expect((await post('/api/settings/defaults', { screenSizes: [] })).status).toBe(400);
+      expect(await (await post('/api/settings/defaults', { screenSizes: ['1440px'] })).json()).toEqual({ screenSizes: ['1440px'] });
+      expect(await (await fetch(`${runnerUrl}/api/settings/defaults`)).json()).toEqual({ screenSizes: ['1440px'] });
+      await post('/api/settings/defaults', { screenSizes: ['375px', '768px', '1440px'] });
+    });
+
+    it('marks a problem as not a problem: the report hides it, the site remembers it, and it can be undone', async () => {
+      await post('/api/runner/run', { targetUrl: siteUrl, mode: 'safe-public' });
+      await waitForIdle(runnerUrl);
+      const report = await (await fetch(`${runnerUrl}/api/report`)).json();
+      const title: string = report.findings[0].title;
+
+      const marked = await (await post(`/api/runs/${report.runId}/triage`, { titles: [title], status: 'False Positive', reason: 'Decorative' })).json();
+      const hidden = marked.findings.filter((f: { title: string }) => f.title === title);
+      expect(hidden.every((f: { triageStatus: string; triageReason: string }) => f.triageStatus === 'False Positive' && f.triageReason === 'Decorative')).toBe(true);
+      // Saved with the check-up, and remembered for the site.
+      const saved = await (await fetch(`${runnerUrl}/api/runs/${report.runId}`)).json();
+      expect(saved.findings.find((f: { title: string }) => f.title === title).triageStatus).toBe('False Positive');
+      const rules = JSON.parse(await fs.readFile(path.join(outputDir, 'suppressions.json'), 'utf8'));
+      expect(rules).toEqual([expect.objectContaining({ findingTitle: title, triageStatus: 'False Positive', host: new URL(siteUrl).host })]);
+
+      const undone = await (await post(`/api/runs/${report.runId}/triage`, { titles: [title], status: null })).json();
+      expect(undone.findings.find((f: { title: string }) => f.title === title).triageStatus).toBe('Pending');
+      expect(JSON.parse(await fs.readFile(path.join(outputDir, 'suppressions.json'), 'utf8'))).toEqual([]);
+    }, 60000);
+
+    it('lists remembered sites without passwords', async () => {
+      const { sites } = await (await fetch(`${runnerUrl}/api/sites`)).json();
+      expect(Array.isArray(sites)).toBe(true);
+      expect(JSON.stringify(sites)).not.toMatch(/password/i);
+    });
+  });
 });

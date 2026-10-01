@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RunSummary } from '@qa/types';
-import { checkReachable, RunnerError, type AiSetup, type RunnerStatus, type SiteFacts } from '../api';
+import { checkReachable, estimateAi, RunnerError, type AiEstimate, type AiSetup, type RunnerStatus, type SiteFacts, type WaitingPlan } from '../api';
 import { KeyField } from '../components/KeyField';
 import { ErrorMessage, Notice, Question, Spinner } from '../components/text';
 import { rejectReason } from '../lib/context';
-import { DEFAULT_MAX_PAGES, type CheckupForm } from '../lib/form';
+import { clampMaxPages, EMPTY_SIGN_IN, MAX_PAGES_LIMIT, type CheckupForm } from '../lib/form';
 import { formatWhen } from '../lib/format';
 import { Link, PATHS } from '../lib/router';
 import { hostOf, normalizeUrl } from '../lib/url';
@@ -22,6 +22,8 @@ export interface StartFacts {
   url: string;
   /** Sent only when the address looks live, so the runner remembers the person's answer. */
   stagingHost?: boolean;
+  /** Sent only when the person chose, so the runner remembers it for the site. */
+  searchChecks?: boolean;
 }
 
 const CHECK_DELAY_MS = 600;
@@ -42,6 +44,8 @@ export function NewCheckupScreen({
   startError,
   inProgress,
   recent,
+  waitingPlans = [],
+  onResumePlan,
 }: {
   /** null while it's being read. */
   ai: AiSetup | null;
@@ -54,12 +58,17 @@ export function NewCheckupScreen({
   /** The runner's state, when a check-up is in progress: shown as a Resume card. */
   inProgress: RunnerStatus | null;
   recent: RunSummary[] | null;
+  /** Plans kept aside for other sites, each waiting for review. */
+  waitingPlans?: WaitingPlan[];
+  onResumePlan?: (host: string) => void;
 }) {
   const [check, setCheck] = useState<AddressCheck>({ state: 'empty' });
   const [recheck, setRecheck] = useState(0);
   const latest = useRef(0);
   const keyReady = !!ai?.configured;
   const [keyJustSaved, setKeyJustSaved] = useState(false);
+  const [maxPagesText, setMaxPagesText] = useState(String(form.maxPages));
+  useEffect(() => setMaxPagesText(String(form.maxPages)), [form.maxPages]);
 
   // The address is checked a moment after typing stops, like the key.
   useEffect(() => {
@@ -102,9 +111,17 @@ export function NewCheckupScreen({
     onFormChange((f) =>
       f.choicesFor === checkedHost
         ? f
-        : { ...f, owner: remembered?.owner ?? false, markedTestCopy: remembered?.markedTestCopy ?? false, choicesFor: checkedHost }
+        : {
+            ...f,
+            owner: remembered?.owner ?? false,
+            markedTestCopy: remembered?.markedTestCopy ?? false,
+            searchChecks: remembered?.searchChecks ?? null,
+            // Another site's sign-ins don't carry over.
+            signIns: f.choicesFor ? [] : f.signIns,
+            choicesFor: checkedHost,
+          }
     );
-  }, [checkedHost, remembered?.owner, remembered?.markedTestCopy, onFormChange]);
+  }, [checkedHost, remembered?.owner, remembered?.markedTestCopy, remembered?.searchChecks, onFormChange]);
 
   const hostNow = (() => {
     const normal = normalizeUrl(form.address);
@@ -114,10 +131,12 @@ export function NewCheckupScreen({
     onFormChange((f) => ({ ...f, ...change, choicesFor: hostNow ?? f.choicesFor }));
 
   const kind = check.state === 'ok' ? testCopyOf(check.facts, form) : null;
+  // Search is checked on a live site and not on a test copy, unless the person says otherwise.
+  const searchChecksOn = form.searchChecks ?? !(kind?.isTestCopy && form.owner);
   const canStart = keyReady && check.state === 'ok' && !starting;
   const start = () => {
     if (check.state !== 'ok' || !kind || !canStart) return;
-    onStart({ url: check.url, stagingHost: kind.showMark ? form.markedTestCopy : undefined });
+    onStart({ url: check.url, stagingHost: kind.showMark ? form.markedTestCopy : undefined, searchChecks: form.searchChecks ?? undefined });
   };
 
   const added = [form.specs, form.designNotes, form.journeys].filter((t) => t.trim()).length;
@@ -125,6 +144,23 @@ export function NewCheckupScreen({
   return (
     <div className="mx-auto max-w-[44rem] px-4 py-10 sm:px-6 sm:py-14">
       {inProgress && <ResumeCard status={inProgress} />}
+      {waitingPlans.length > 0 && (
+        <aside aria-label="Plans waiting for review" className="mb-10 space-y-2 rounded-lg border-2 border-edge bg-surface px-5 py-4">
+          <p className="font-bold text-ink">{waitingPlans.length === 1 ? 'A plan is also waiting for your review' : 'Plans are also waiting for your review'}</p>
+          <ul className="space-y-1">
+            {waitingPlans.map((w) => (
+              <li key={w.host} className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-ink">
+                  <span className="font-bold">{w.host}</span> <span className="text-sm text-ink-soft">· {w.pages} pages · scanned {formatWhen(w.discoveredAt)}</span>
+                </span>
+                <button type="button" className="btn-link" onClick={() => onResumePlan?.(w.host)}>
+                  Open this plan
+                </button>
+              </li>
+            ))}
+          </ul>
+        </aside>
+      )}
 
       <Question>Enter the address of the site to check</Question>
       <p className="mb-8 max-w-prose text-ink-soft">
@@ -192,7 +228,7 @@ export function NewCheckupScreen({
                 {kind.isTestCopy && form.owner
                   ? 'Test copy: forms can be filled in and sent.'
                   : kind.isTestCopy
-                    ? 'Only looked at, nothing is sent or changed. Tick “I own this site” below to test it fully.'
+                    ? 'Only looked at, nothing is sent or changed. Choose “Test it fully” below to fill in and send forms.'
                     : 'Live site: only looked at, nothing is sent or changed.'}
               </span>
             </span>
@@ -208,53 +244,25 @@ export function NewCheckupScreen({
           </ErrorMessage>
         )}
 
-        <fieldset className="mt-6 space-y-3">
-          <legend className="sr-only">What the check-up may do</legend>
-          <label className="flex cursor-pointer items-start gap-3 rounded-lg border-2 border-edge bg-surface p-4 hover:border-stamp">
-            <input
-              type="checkbox"
-              className="mt-1 h-5 w-5 shrink-0 accent-[#6C9BF2]"
-              checked={form.owner}
-              onChange={(e) => setChoice({ owner: e.target.checked })}
-              aria-describedby="owner-hint"
-            />
-            <span>
-              <span className="block font-bold">I own this site, or I’m allowed to test it</span>
-              <span id="owner-hint" className="block text-sm text-ink-soft">
-                Forms are only filled in and sent on a test copy you own. Any other site is only looked at.
-              </span>
-            </span>
-          </label>
-          {kind?.showMark && (
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border-2 border-edge bg-surface p-4 hover:border-stamp">
-              <input
-                type="checkbox"
-                className="mt-1 h-5 w-5 shrink-0 accent-[#6C9BF2]"
-                checked={form.markedTestCopy}
-                onChange={(e) => setChoice({ markedTestCopy: e.target.checked })}
-                aria-describedby="test-copy-hint"
-              />
-              <span>
-                <span className="block font-bold">This is a test copy</span>
-                <span id="test-copy-hint" className="block text-sm text-ink-soft">
-                  A copy of your site that’s safe to fill in and send forms on, such as a staging site. Leave it unticked for the real
-                  site.
-                </span>
-              </span>
-            </label>
-          )}
-        </fieldset>
+        {kind && <AccessChoice isTestCopyHost={kind.natural} form={form} onChange={setChoice} />}
 
         <div className="mt-6 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
           <label htmlFor="max-pages">Explore up to</label>
           <input
             id="max-pages"
             type="number"
+            inputMode="numeric"
             min={1}
-            max={1000}
+            max={MAX_PAGES_LIMIT}
             className="field w-24 py-1.5 text-sm"
-            value={form.maxPages}
-            onChange={(e) => onFormChange((f) => ({ ...f, maxPages: Math.min(1000, Math.max(1, Number(e.target.value) || DEFAULT_MAX_PAGES)) }))}
+            value={maxPagesText}
+            // The number is kept as typed, so it can be cleared and retyped; it's checked on leaving the box.
+            onChange={(e) => setMaxPagesText(e.target.value)}
+            onBlur={() => {
+              const n = clampMaxPages(maxPagesText);
+              setMaxPagesText(String(n));
+              onFormChange((f) => ({ ...f, maxPages: n }));
+            }}
             aria-describedby="max-pages-hint"
           />
           <span>pages</span>
@@ -262,6 +270,27 @@ export function NewCheckupScreen({
             Pages that share a layout are tested through a few samples, so big sites stay quick.
           </span>
         </div>
+
+        <SignInsSection form={form} saved={remembered?.signIns} onFormChange={onFormChange} />
+
+        {kind && (
+          <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[#6C9BF2]"
+              checked={searchChecksOn}
+              onChange={(e) => onFormChange((f) => ({ ...f, searchChecks: e.target.checked }))}
+            />
+            <span>
+              <span className="block font-bold">Check how search engines and AI assistants see it</span>
+              <span className="block text-ink-soft">
+                {kind.isTestCopy && form.owner
+                  ? 'Usually only matters on the public site, so it’s off for a test copy.'
+                  : 'Titles, descriptions and the like, for people finding the site.'}
+              </span>
+            </span>
+          </label>
+        )}
 
         <details className="mt-6 rounded-lg border-2 border-edge bg-surface" open={added > 0 || undefined}>
           <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center gap-x-2 px-4 py-3 font-bold">
@@ -297,6 +326,8 @@ export function NewCheckupScreen({
             />
           </div>
         </details>
+
+        {keyReady && check.state === 'ok' && <AiEstimateLine url={check.url} maxPages={form.maxPages} form={form} onFormChange={onFormChange} />}
 
         {startError && <ErrorMessage>{startError}</ErrorMessage>}
 
@@ -426,6 +457,206 @@ function MaterialField({
           {fileError}
         </p>
       )}
+    </div>
+  );
+}
+
+type Access = 'look' | 'live' | 'test';
+
+/**
+ * One question for what the check-up may do. On an address that is a test copy by nature (this
+ * computer, a private network), two answers; on a live-looking one, three.
+ */
+function AccessChoice({
+  isTestCopyHost,
+  form,
+  onChange,
+}: {
+  isTestCopyHost: boolean;
+  form: CheckupForm;
+  onChange: (change: Partial<Pick<CheckupForm, 'owner' | 'markedTestCopy'>>) => void;
+}) {
+  const access: Access = !form.owner ? 'look' : isTestCopyHost || form.markedTestCopy ? 'test' : 'live';
+  const options: Array<{ id: Access; title: string; hint: string; set: Partial<Pick<CheckupForm, 'owner' | 'markedTestCopy'>> }> = isTestCopyHost
+    ? [
+        { id: 'look', title: 'Only look at it', hint: 'Nothing is filled in, sent or changed.', set: { owner: false } },
+        {
+          id: 'test',
+          title: 'Test it fully: it’s my test copy',
+          hint: 'Forms are filled in and sent, as a person would. Nothing is deleted or paid for.',
+          set: { owner: true },
+        },
+      ]
+    : [
+        { id: 'look', title: 'Only look at it', hint: 'Someone else’s site, or you’re not sure. Nothing is sent or changed.', set: { owner: false, markedTestCopy: false } },
+        { id: 'live', title: 'It’s my live site: only look at it', hint: 'Nothing is sent or changed on the real site.', set: { owner: true, markedTestCopy: false } },
+        {
+          id: 'test',
+          title: 'It’s a test copy I’m allowed to test fully',
+          hint: 'A copy that’s safe to fill in and send forms on, such as a staging site.',
+          set: { owner: true, markedTestCopy: true },
+        },
+      ];
+  return (
+    <fieldset className="mt-6 space-y-3">
+      <legend className="label">What may the check-up do?</legend>
+      {options.map((o) => (
+        <label key={o.id} className="flex cursor-pointer items-start gap-3 rounded-lg border-2 border-edge bg-surface p-4 hover:border-stamp">
+          <input
+            type="radio"
+            name="access"
+            className="mt-1 h-5 w-5 shrink-0 accent-[#6C9BF2]"
+            checked={access === o.id}
+            onChange={() => onChange(o.set)}
+            aria-describedby={`access-${o.id}-hint`}
+          />
+          <span>
+            <span className="block font-bold">{o.title}</span>
+            <span id={`access-${o.id}-hint`} className="block text-sm text-ink-soft">
+              {o.hint}
+            </span>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+/** Sign-ins to explore and test the signed-in pages with, from the start: one or more roles. */
+function SignInsSection({
+  form,
+  saved,
+  onFormChange,
+}: {
+  form: CheckupForm;
+  saved?: Array<{ role: string; username: string }>;
+  onFormChange: (update: (form: CheckupForm) => CheckupForm) => void;
+}) {
+  const filled = form.signIns.filter((s) => s.username.trim()).length;
+  const usingSaved = !!saved?.length && form.useSavedSignIns && form.signIns.length === 0;
+  const set = (i: number, change: Partial<CheckupForm['signIns'][number]>) =>
+    onFormChange((f) => ({ ...f, signIns: f.signIns.map((s, n) => (n === i ? { ...s, ...change } : s)) }));
+  return (
+    <details className="mt-6 rounded-lg border-2 border-edge bg-surface" open={filled > 0 || undefined}>
+      <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center gap-x-2 px-4 py-3 font-bold">
+        Test signed-in pages
+        <span className="font-normal text-ink-soft">(optional)</span>
+        {(filled > 0 || usingSaved) && <span className="rounded border border-pass px-1.5 text-xs text-pass">{usingSaved ? 'Saved' : 'Added'}</span>}
+      </summary>
+      <div className="space-y-4 border-t border-rule p-4">
+        <p className="text-sm text-ink-soft">
+          The scan signs in as each role and explores what it sees, so pages behind the sign-in are planned and tested too.
+        </p>
+        {!!saved?.length && (
+          <label className="flex cursor-pointer items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[#6C9BF2]"
+              checked={form.useSavedSignIns}
+              onChange={(e) => onFormChange((f) => ({ ...f, useSavedSignIns: e.target.checked }))}
+            />
+            <span>Sign in as saved for this site: {saved.map((s) => `${s.role} (${s.username})`).join(', ')}</span>
+          </label>
+        )}
+        {form.signIns.map((s, i) => (
+          <fieldset key={i} className="grid gap-3 rounded-md border border-rule p-3 sm:grid-cols-2">
+            <legend className="px-1 text-sm font-bold">Sign-in {i + 1}</legend>
+            <label className="text-sm">
+              <span className="mb-1 block font-bold">Role name</span>
+              <input className="field py-2 text-sm" value={s.role} placeholder={i === 0 ? 'member' : 'admin'} onChange={(e) => set(i, { role: e.target.value })} />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block font-bold">Sign-in page (optional)</span>
+              <input className="field py-2 text-sm" value={s.loginPath} placeholder="/login" onChange={(e) => set(i, { loginPath: e.target.value })} />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block font-bold">Email or username</span>
+              <input className="field py-2 text-sm" autoComplete="off" value={s.username} onChange={(e) => set(i, { username: e.target.value })} />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block font-bold">Password</span>
+              <input className="field py-2 text-sm" type="password" autoComplete="off" value={s.password} onChange={(e) => set(i, { password: e.target.value })} />
+            </label>
+            <button
+              type="button"
+              className="btn-link justify-self-start text-sm"
+              onClick={() => onFormChange((f) => ({ ...f, signIns: f.signIns.filter((_, n) => n !== i) }))}
+            >
+              Remove this sign-in
+            </button>
+          </fieldset>
+        ))}
+        <button type="button" className="btn-quiet" onClick={() => onFormChange((f) => ({ ...f, signIns: [...f.signIns, { ...EMPTY_SIGN_IN }] }))}>
+          {form.signIns.length === 0 ? 'Add a sign-in' : 'Add another sign-in'}
+        </button>
+        {form.signIns.length > 0 && (
+          <label className="flex cursor-pointer items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[#6C9BF2]"
+              checked={form.rememberSignIns}
+              onChange={(e) => onFormChange((f) => ({ ...f, rememberSignIns: e.target.checked }))}
+            />
+            <span>Remember these sign-ins for this site (passwords are kept in this computer’s keychain)</span>
+          </label>
+        )}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * About how many AI requests the scan needs, against what's left today, said before it starts; with
+ * the choice to plan with fixed rules now and re-plan with the AI later.
+ */
+function AiEstimateLine({
+  url,
+  maxPages,
+  form,
+  onFormChange,
+}: {
+  url: string;
+  maxPages: number;
+  form: CheckupForm;
+  onFormChange: (update: (form: CheckupForm) => CheckupForm) => void;
+}) {
+  const [estimate, setEstimate] = useState<AiEstimate | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setEstimate(null);
+    const timer = setTimeout(() => {
+      void estimateAi(url, maxPages).then((e) => !cancelled && setEstimate(e));
+    }, CHECK_DELAY_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [url, maxPages]);
+  if (!estimate) return null;
+  const needed = estimate.low === estimate.high ? `${estimate.low}` : `${estimate.low} to ${estimate.high}`;
+  const short = estimate.left !== null && estimate.left < estimate.high;
+  const leftText =
+    estimate.left !== null
+      ? `You have ${estimate.left} left today${estimate.limit !== null ? ` of ${estimate.limit}` : ''}.`
+      : estimate.free
+        ? ''
+        : 'Your AI account is charged for them.';
+  return (
+    <div className={`mt-6 rounded-md border-l-4 px-4 py-3 text-sm ${short ? 'border-warn bg-warn-tint' : 'border-rule bg-surface'}`} role="status">
+      <p className="text-ink">
+        Planning needs about {needed} AI requests{estimate.seenBefore ? ' (fewer where the site hasn’t changed)' : ''}, and looking over the
+        screens afterwards up to {estimate.visualReview} more. {leftText}
+      </p>
+      {short && <p className="mt-1 text-ink">Past that, fixed rules plan the rest. You can re-plan any part with the AI once requests are available again.</p>}
+      <label className="mt-2 flex cursor-pointer items-start gap-3">
+        <input
+          type="checkbox"
+          className="mt-0.5 h-5 w-5 shrink-0 accent-[#6C9BF2]"
+          checked={form.planWithoutAI}
+          onChange={(e) => onFormChange((f) => ({ ...f, planWithoutAI: e.target.checked }))}
+        />
+        <span>Plan with fixed rules now, using no AI requests, and re-plan with the AI later</span>
+      </label>
     </div>
   );
 }

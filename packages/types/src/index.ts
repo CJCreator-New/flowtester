@@ -202,6 +202,8 @@ export interface Finding {
   resolution: string;
   verifyCommand: string;
   triageStatus?: TriageStatus;
+  /** Why someone marked it intended or not a problem, when they said. */
+  triageReason?: string;
   /** True when this finding originated from a request/resource on a different origin than the page under test (e.g. third-party analytics, fonts, CDNs) rather than a first-party defect. */
   thirdParty?: boolean;
   /**
@@ -209,6 +211,12 @@ export interface Finding {
    * someone confirms or rejects the rule behind it.
    */
   needsConfirmation?: boolean;
+  /** Sub-category tag for fine-grained categorization, such as 'SEO', 'AEO', or 'GEO' under Findable. */
+  categoryTag?: 'SEO' | 'AEO' | 'GEO';
+  /** The area it counts toward, when not its checker's: a missing viewport tag is about phones. */
+  aspect?: AspectType;
+  /** The same problem found by another check has the same key, so the report lists it once (see problems.ts). */
+  issueKey?: string;
   /** How many times the same problem was seen in this run, when more than once. */
   occurrences?: number;
   /** Where else the same problem was seen: pages, widths, roles and test points. */
@@ -308,6 +316,8 @@ export interface SuppressionRule {
   triageStatus: 'Intended' | 'False Positive';
   reason?: string;
   dateAdded: string;
+  /** The site it's for, e.g. "localhost:3050". Rules without one apply to every site. */
+  host?: string;
 }
 
 export interface RunDelta {
@@ -343,6 +353,12 @@ export interface ReleaseReport {
   pages?: VisitedPage[];
   /** The AI models that planned the run (text) and would review screenshots (vision). */
   aiModels?: { text?: string; vision?: string };
+  /** Testing was stopped early and the report made from what was done: a partial check-up. */
+  partial?: { done: number; planned: number };
+  /** The AI's visual review of one screen per layout: how far it got. `remaining` can be finished from the report. */
+  visualReview?: { reviewed: number; total: number; remaining: number };
+  /** AI tokens used per stage (planning, repair, journeys, visual review), for the developer details. */
+  aiUsage?: Partial<Record<AIStage, AIStageUsage>>;
   grades?: SiteAspectGrades;
   recommendations?: RankedRecommendation[];
   history?: SiteHistoryDiff;
@@ -384,6 +400,12 @@ export type AspectType =
 
 export type AspectGrade = 'A' | 'B' | 'C' | 'D' | 'F';
 
+export interface AspectSubBreakdown {
+  score: number;
+  issueCount: number;
+  status: 'Clean' | 'Warning' | 'Failing';
+}
+
 export interface AspectScore {
   grade: AspectGrade;
   score: number;
@@ -393,6 +415,13 @@ export interface AspectScore {
    * overall score. Absent on reports made before this was recorded.
    */
   checked?: boolean;
+  /** Sub-category breakdown (e.g. SEO, AEO, GEO under Findable). */
+  subBreakdown?: {
+    seo?: AspectSubBreakdown;
+    aeo?: AspectSubBreakdown;
+    geo?: AspectSubBreakdown;
+    [key: string]: AspectSubBreakdown | undefined;
+  };
 }
 
 export interface SiteAspectGrades {
@@ -467,11 +496,38 @@ export interface AIMessage {
   images?: string[]; // base64 data URIs
 }
 
+/** What an AI request was for, so token use can be added up per stage. */
+export type AIStage = 'planning' | 'repair' | 'journeys' | 'visual-review' | 'interpret' | 'other';
+
 export interface AICompletionOptions {
   temperature?: number;
   maxTokens?: number;
   model?: string;
   responseFormat?: 'json' | 'text';
+  /**
+   * 'low' asks a reasoning model to think briefly and keep its reasoning out of the answer, so the
+   * output allowance goes to the answer. Services that don't know the setting ignore it.
+   */
+  reasoning?: 'low';
+  stage?: AIStage;
+}
+
+/** Tokens one AI request used, as the service reported them. */
+export interface AIUsage {
+  promptTokens: number;
+  completionTokens: number;
+  /** Part of `completionTokens` spent on hidden reasoning, when the service says. */
+  reasoningTokens?: number;
+}
+
+/** One AI answer with what it cost and why it ended. */
+export interface AICompletion {
+  text: string;
+  /** 'length' means the model hit its output allowance: the answer is cut off or empty. */
+  finishReason?: string;
+  /** The model that answered. */
+  model?: string;
+  usage?: AIUsage;
 }
 
 export interface SensitiveAction {
@@ -498,6 +554,8 @@ export interface AmbiguityQuestion {
   flowId?: string;
   /** Not asked in this site's last reviewed run. */
   isNew?: boolean;
+  /** Every page the question covers, when the same form is on several (a search box in the header). */
+  urlPaths?: string[];
 }
 
 /** One interactive element the crawler saw on a page. Plans may only target elements listed here. */
@@ -574,6 +632,8 @@ export interface DiscoveredFlow {
   needsTestCopy?: boolean;
   /** Who planned it: the AI, the fixed rules used when there's no AI, or the user. */
   source?: 'ai' | 'fallback' | 'user';
+  /** Why fixed rules planned it, when they did. */
+  fallbackReason?: FallbackReason;
   /**
    * Business rules the user added in plain words. A checkable rule becomes its own test: the
    * journey's steps with the rule's check. Others are listed in the report for a person to check.
@@ -631,8 +691,11 @@ export * from './fingerprint.js';
 export * from './site-map.js';
 export * from './plan.js';
 export * from './verdict.js';
+export * from './problems.js';
 import type {
   AIRequestBudget,
+  AIStageUsage,
+  FallbackReason,
   DraftPlan,
   NarrowMenu,
   NavigationCheck,

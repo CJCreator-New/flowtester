@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { palette } from '../tailwind.config.js';
+import { lightPalette, palette } from '../tailwind.config.js';
 import { GRADE_TOKENS } from '../src/lib/grades';
 
 /** WCAG relative luminance and contrast ratio. */
@@ -51,13 +51,16 @@ const NON_TEXT_PAIRS: Array<[Token, Token]> = [
   ['warn', 'canvas'],
 ];
 
-describe('wizard palette meets WCAG 2.2 AA', () => {
+describe.each([
+  ['dark board', palette],
+  ['light, printable', lightPalette],
+])('wizard palette (%s) meets WCAG 2.2 AA', (_name, colors: Record<Token, string>) => {
   it.each(TEXT_PAIRS)('text %s on %s is at least 4.5:1', (fg, bg) => {
-    expect(contrast(palette[fg], palette[bg])).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
   });
 
   it.each(NON_TEXT_PAIRS)('%s against %s is at least 3:1', (fg, bg) => {
-    expect(contrast(palette[fg], palette[bg])).toBeGreaterThanOrEqual(3);
+    expect(contrast(colors[fg], colors[bg])).toBeGreaterThanOrEqual(3);
   });
 });
 

@@ -37,16 +37,23 @@ function fieldList(labels: string[]): string {
   return ` (${named.slice(0, -1).join(', ')} and ${named[named.length - 1]})`;
 }
 
+/**
+ * The question for a form. The same form on several pages (a search box in the header) is one
+ * question: `pages` lists them, and the answer counts for each.
+ */
 export function formQuestion(
   form: { urlPath: string; submitButtonSelector?: string; inputs: Array<{ label: string }> },
-  index: number
+  index: number,
+  pages: string[] = [form.urlPath]
 ): AmbiguityQuestion {
+  const where = pages.length > 1 ? `found on ${pages.length} pages, such as ${pages[0]}` : `on ${form.urlPath}`;
   return {
     id: `Q-FORM-${index}`,
-    key: `form:${form.urlPath}:${form.submitButtonSelector || 'form'}`,
+    key: pages.length > 1 ? `form:shared:${form.submitButtonSelector || 'form'}:${form.inputs.map((i) => i.label).join('|')}` : `form:${form.urlPath}:${form.submitButtonSelector || 'form'}`,
     targetElement: form.submitButtonSelector || 'form',
     urlPath: form.urlPath,
-    question: `What should happen after someone fills in the form on ${form.urlPath}${fieldList(form.inputs.map((i) => i.label))} and sends it?`,
+    urlPaths: pages.length > 1 ? pages : undefined,
+    question: `What should happen after someone fills in the form ${where}${fieldList(form.inputs.map((i) => i.label))} and sends it?`,
     options: [FORM_ANSWERS.confirmationPage, FORM_ANSWERS.successMessage, FORM_ANSWERS.noBreak, FORM_ANSWERS.exclude],
     safeAnswer: FORM_ANSWERS.noBreak,
     category: 'untested_form',

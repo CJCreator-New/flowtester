@@ -32,7 +32,7 @@ function CopyButton({ label, getText }: { label: string; getText: () => Promise<
       {typeof state === 'object' && (
         <div className="mt-2">
           <p className="text-sm text-ink-soft">Your browser wouldn’t copy it. Select the text below and copy it yourself.</p>
-          <textarea readOnly rows={8} className="field mt-1 font-mono text-xs" value={state.manual} aria-label={`${label}: text to copy`} />
+          <textarea readOnly rows={8} className="field mt-1 font-mono text-sm" value={state.manual} aria-label={`${label}: text to copy`} />
         </div>
       )}
     </div>
@@ -61,7 +61,7 @@ export function DeveloperDetails({ finding: f, runId, targetUrl }: { finding: Fi
               loading="lazy"
               className="max-h-80 w-auto rounded border border-rule"
             />
-            <figcaption className="mt-1 text-xs text-ink-soft">
+            <figcaption className="mt-1 text-sm text-ink-soft">
               {f.where.urlPath} at {f.where.breakpoint}, as {f.where.role}
             </figcaption>
           </figure>
@@ -69,17 +69,17 @@ export function DeveloperDetails({ finding: f, runId, targetUrl }: { finding: Fi
 
         <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-[10rem_1fr]">
           <dt className="text-ink-soft">Page</dt>
-          <dd className="break-all font-mono text-xs text-ink">
+          <dd className="break-all font-mono text-sm text-ink">
             {f.where.urlPath} · {f.where.breakpoint} · {f.where.role}
           </dd>
           {element && (
             <>
               <dt className="text-ink-soft">Element</dt>
-              <dd className="break-all font-mono text-xs text-ink">{element}</dd>
+              <dd className="break-all font-mono text-sm text-ink">{element}</dd>
             </>
           )}
           <dt className="text-ink-soft">Check</dt>
-          <dd className="font-mono text-xs text-ink">
+          <dd className="font-mono text-sm text-ink">
             {f.checker} · {f.id} · {f.severity}
           </dd>
           <dt className="text-ink-soft">Expected</dt>
@@ -95,7 +95,7 @@ export function DeveloperDetails({ finding: f, runId, targetUrl }: { finding: Fi
           {f.sourceLocation && (
             <>
               <dt className="text-ink-soft">In the code</dt>
-              <dd className="break-all font-mono text-xs text-ink">
+              <dd className="break-all font-mono text-sm text-ink">
                 {f.sourceLocation.file}
                 {f.sourceLocation.line ? `:${f.sourceLocation.line}` : ''}
               </dd>
@@ -117,14 +117,14 @@ export function DeveloperDetails({ finding: f, runId, targetUrl }: { finding: Fi
         {consoleLines.length > 0 && (
           <div>
             <p className="font-bold text-ink">Console errors</p>
-            <pre className="mt-1 max-h-48 overflow-auto rounded border border-rule bg-canvas p-2 font-mono text-xs text-ink">{consoleLines.join('\n')}</pre>
+            <pre className="mt-1 max-h-48 overflow-auto rounded border border-rule bg-canvas p-2 font-mono text-sm text-ink">{consoleLines.join('\n')}</pre>
           </div>
         )}
 
         {failedRequests.length > 0 && (
           <div>
             <p className="font-bold text-ink">Failed requests</p>
-            <ul className="mt-1 space-y-0.5 font-mono text-xs text-ink">
+            <ul className="mt-1 space-y-0.5 font-mono text-sm text-ink">
               {failedRequests.map((n, i) => (
                 <li key={i} className="break-all">
                   {n.method} {n.url} → {n.status || 'no answer'}
@@ -144,7 +144,7 @@ export function DeveloperDetails({ finding: f, runId, targetUrl }: { finding: Fi
 
         {f.verifyCommand && (
           <p className="text-ink-soft">
-            Check a fix from the command line: <code className="rounded border border-rule bg-canvas px-1.5 py-0.5 font-mono text-xs text-ink">{f.verifyCommand}</code>
+            Check a fix from the command line: <code className="rounded border border-rule bg-canvas px-1.5 py-0.5 font-mono text-sm text-ink">{f.verifyCommand}</code>
           </p>
         )}
       </div>
