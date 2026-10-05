@@ -1,5 +1,6 @@
 import http from 'http';
 import https from 'https';
+import { timingSafeEqual } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { journeyPages, releaseVerdict } from '@qa/types';
@@ -152,6 +153,31 @@ function isLoopbackHost(host: string | undefined): boolean {
   }
 }
 
+/** The cookie that carries the access key once a shared link has been opened. */
+const ACCESS_COOKIE = 'qa_access';
+
+/** One cookie's value from a Cookie header. */
+function cookieValue(header: string | undefined, name: string): string | undefined {
+  for (const part of (header || '').split(';')) {
+    const at = part.indexOf('=');
+    if (at === -1 || part.slice(0, at).trim() !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(at + 1).trim());
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** Compared in constant time, so how long a refusal takes says nothing about the key. */
+function matchesSecret(given: string | null | undefined, secret: string): boolean {
+  if (!given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(secret);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /** Headers that describe one connection, not the message: never passed on to or from the Hub. */
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'proxy-connection']);
 
@@ -235,6 +261,19 @@ export interface RunnerServerOptions {
   ui?: UiApp[];
   /** The Report Hub that /api/v1/* is passed on to. Without one, /api/v1/* answers "Hub not connected". */
   hubUrl?: string;
+  /**
+   * Extra origins (full URL origins, e.g. "https://abc.trycloudflare.com") that are allowed to make
+   * cross-origin requests in addition to localhost. Set via RUNNER_ALLOWED_ORIGINS (comma-separated).
+   * Use only when deliberately sharing this runner over a tunnel or reverse proxy.
+   */
+  allowedOrigins?: string[];
+  /**
+   * A key every request must carry (RUNNER_ACCESS_TOKEN): opening any page with ?access=<key> keeps
+   * it in a cookie, and scripts send it as an X-QA-Access header. `pnpm tunnel` sets one, because a
+   * tunnel reaches this server with a localhost Host header, so the loopback check can't tell this
+   * computer's pages from anyone else's.
+   */
+  accessToken?: string;
 }
 
 export interface TriggerRunBody {
@@ -432,6 +471,8 @@ export class RunnerServer {
   private makeAIProvider: (provider: AIProviderType, apiKey: string, model?: string) => AIProvider;
   private uiApps: UiApp[];
   private hubUrl?: string;
+  private allowedOrigins: Set<string>;
+  private accessToken?: string;
 
   private isRunning = false;
   private phase: RunnerPhase = 'idle';
@@ -493,6 +534,8 @@ export class RunnerServer {
       options.createAIProvider || ((provider, apiKey, model) => createAIProvider(provider, apiKey, undefined, model));
     this.uiApps = options.ui || [];
     this.hubUrl = options.hubUrl?.replace(/\/+$/, '') || undefined;
+    this.allowedOrigins = new Set((options.allowedOrigins || []).map((o) => o.replace(/\/+$/, '')));
+    this.accessToken = options.accessToken || undefined;
   }
 
 
@@ -528,6 +571,41 @@ export class RunnerServer {
     this.broadcastRunnerEvent(event);
   }
 
+  /**
+   * With an access key set, a request gets in only with the key. A link's ?access=<key> is moved into
+   * a cookie and the page reloaded without it, so the key doesn't stay in the address bar or history.
+   * False once the request has been answered here.
+   */
+  private grantAccess(req: http.IncomingMessage, res: http.ServerResponse, url: URL): boolean {
+    const key = this.accessToken;
+    if (!key) return true;
+    if (matchesSecret(cookieValue(req.headers.cookie, ACCESS_COOKIE), key)) return true;
+    const header = req.headers['x-qa-access'];
+    if (matchesSecret(Array.isArray(header) ? header[0] : header, key)) return true;
+
+    if (req.method === 'GET' && matchesSecret(url.searchParams.get('access'), key)) {
+      url.searchParams.delete('access');
+      // Secure only when the visit was https (a tunnel says so): plain-http localhost would drop the cookie.
+      const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+      res.writeHead(303, {
+        'Set-Cookie': `${ACCESS_COOKIE}=${encodeURIComponent(key)}; Path=/; HttpOnly; SameSite=Lax${secure}`,
+        Location: `${url.pathname}${url.search}`,
+        'Cache-Control': 'no-store',
+      });
+      res.end();
+      return false;
+    }
+
+    if (url.pathname.startsWith('/api/')) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'This QA Tool is shared privately: send its access key.' }));
+    } else {
+      res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('This Release check-up is shared privately. Open it with the full link you were given: it includes the access key.');
+    }
+    return false;
+  }
+
   public async start(): Promise<string> {
     await this.moveLegacyData();
     await this.ensurePlanLoaded();
@@ -546,13 +624,15 @@ export class RunnerServer {
             return;
           }
 
-          // Only localhost pages may drive the runner; a wildcard would let any website trigger runs.
+          // Only localhost pages (or explicitly allowed origins) may drive the runner; a wildcard
+          // would let any website trigger runs. Extra origins are set via RUNNER_ALLOWED_ORIGINS.
           const origin = req.headers.origin;
-          if (origin && isLoopbackOrigin(origin)) {
+          const originNorm = origin ? origin.replace(/\/+$/, '') : undefined;
+          if (origin && (isLoopbackOrigin(origin) || (originNorm && this.allowedOrigins.has(originNorm)))) {
             res.setHeader('Access-Control-Allow-Origin', origin);
             res.setHeader('Vary', 'Origin');
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-QA-Access');
           } else if (origin && req.method !== 'GET') {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Cross-origin requests are only accepted from localhost' }));
@@ -564,6 +644,8 @@ export class RunnerServer {
             res.end();
             return;
           }
+
+          if (!this.grantAccess(req, res, url)) return;
 
           // /api/v1/* belongs to the Report Hub, a separate service: passed on when one is set up. So
           // does /hub, the Hub's own dashboard, whose buttons call /api/v1/* on this same address.

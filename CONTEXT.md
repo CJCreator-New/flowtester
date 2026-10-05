@@ -4,6 +4,10 @@ The domain model for automated web application discovery, test planning, and det
 
 ## Language
 
+**App**:
+Anything the tool tests that its team releases on its own: a website, a phone app (its iOS and Android builds together), a desktop app, or a public API. Each App has its own check-ups and its own verdict. The API calls a website makes are tested inside that website's check-up, not as a separate App.
+_Avoid_: Product, project, target; "site" only for web-only ideas such as the Domain Allowlist
+
 **Discovery Agent**:
 The component that runs a scan: it drives the Deterministic Spider for each role, then hands the facts to the AI Planner.
 _Avoid_: Web scraper, spider, bot
@@ -49,7 +53,7 @@ A flow discovered on the live application that was not documented or anticipated
 _Avoid_: Orphan flow, rogue flow, undocumented feature
 
 **Check-up**:
-One pass of the tool over a site, as the person sees it: the scan, the Plan Review, testing and the report. Each finished check-up keeps its report under Past check-ups.
+One pass of the tool over an App, as the person sees it: the scan, the Plan Review, testing and the report. Each finished check-up keeps its report under Past check-ups.
 _Avoid_: Run, scan or check (in UI text; "check" means a Navigation Check or a graded check)
 
 **Plan**:
@@ -117,8 +121,16 @@ A deterministic barrier intercepting and pausing actions matching forbidden keyw
 _Avoid_: Guardrail, sandbox
 
 **Test Copy**:
-A copy of the site that is safe to fill in and send forms on: an address on this computer or a private network, a dev tunnel, or an address the person marked as a test copy. Full testing needs a Test Copy and the owner's say-so; any other site is only looked at.
+A copy of an App that is safe to fill in and send forms on: an address on this computer or a private network, a dev tunnel, or an address the person marked as a test copy. When the tool runs on shared machines instead of the person's own computer, only an address under a Verified Domain can be marked. Full testing and Security Probes need a Test Copy and the owner's say-so; any other App is only looked at.
 _Avoid_: Staging, test host (in UI text), sandbox
+
+**Verified Domain**:
+A domain whose owner has proved control once, with a file, a meta tag or a DNS record. Addresses under it, such as preview URLs, can be marked as Test Copies on shared machines.
+_Avoid_: Claimed site, owned domain
+
+**Security Probe**:
+A security check that sends something the owner could mistake for an attack, such as repeated sign-in attempts, crafted inputs or redirect tricks. Probes run only on a Test Copy; every other security check only reads what the App already sends.
+_Avoid_: Scan, attack, pentest
 
 **Domain Allowlist**:
 The hosts the crawler may follow links into: the host the start address lands on after redirects, its `www` twin, and any other host the person ticks in the Plan Review. Links to any other host are listed as leaving the site and only checked for being broken.

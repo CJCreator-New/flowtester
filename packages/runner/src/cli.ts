@@ -7,8 +7,28 @@ const outputDir = process.env.RUNNER_OUTPUT_DIR || undefined;
 const dataDir = process.env.RUNNER_DATA_DIR || undefined;
 const localhostAlias = process.env.RUNNER_LOCALHOST_ALIAS || undefined;
 const hubUrl = process.env.HUB_API_URL || undefined;
+const allowedOrigins = process.env.RUNNER_ALLOWED_ORIGINS
+  ? process.env.RUNNER_ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+  : undefined;
+const accessToken = process.env.RUNNER_ACCESS_TOKEN || undefined;
 
-const server = new RunnerServer({ port, host, outputDir, dataDir, localhostAlias, hubUrl, ui: defaultUiApps() });
+if (allowedOrigins && !accessToken) {
+  console.warn(
+    '[Release check-up] RUNNER_ALLOWED_ORIGINS is set without RUNNER_ACCESS_TOKEN: anyone who can reach this server can use it, including the saved AI key and sign-ins.'
+  );
+}
+
+const server = new RunnerServer({
+  port,
+  host,
+  outputDir,
+  dataDir,
+  localhostAlias,
+  hubUrl,
+  allowedOrigins,
+  accessToken,
+  ui: defaultUiApps(),
+});
 
 server
   .start()
