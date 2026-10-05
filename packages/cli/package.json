@@ -20,8 +20,9 @@
     "@qa/hub": "workspace:*",
     "@qa/runner": "workspace:*",
     "commander": "^13.0.0",
-    "picocolors": "^1.1.1"
-
+    "picocolors": "^1.1.1",
+    "playwright": "^1.49.1",
+    "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

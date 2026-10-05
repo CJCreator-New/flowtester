@@ -67,7 +67,7 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm --filter @qa/core exec playwright install --with-deps chromium
-          pnpm -r run build
+          pnpm --filter "@qa/runner..." run build
 
       - name: Run the check-up
         run: node .qa-tool/packages/runner/dist/checkup.js
