@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RunSummary } from '@qa/types';
 import { checkReachable, estimateAi, RunnerError, type AiEstimate, type AiSetup, type RunnerStatus, type SiteFacts, type WaitingPlan } from '../api';
+import { HomeInfo } from '../components/HomeInfo';
 import { KeyField } from '../components/KeyField';
 import { ErrorMessage, Notice, Question, Spinner } from '../components/text';
 import { rejectReason } from '../lib/context';
@@ -407,6 +408,7 @@ export function NewCheckupScreen({
           </Link>
         </section>
       )}
+    <HomeInfo />
     </div>
   );
 }

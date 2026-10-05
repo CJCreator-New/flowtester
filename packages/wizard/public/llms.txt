@@ -1,0 +1,26 @@
+﻿# Release check-up
+
+> Release check-up (also called QA Flow Tester) is a local pre-release testing tool for web apps. It scans a site, drafts a test plan, runs real-browser tests and writes a plain-language report with a ship / don't-ship verdict.
+
+## What it checks
+- Functionality: end-to-end user journeys run in a real browser (Playwright)
+- Accessibility: contrast, labels, keyboard and structure problems
+- Performance and security: load timing, headers, exposed secrets and risky patterns
+- SEO: titles, meta descriptions, canonicals, headings, structured data, robots and sitemap
+- AEO (answer engine optimization): question-style headings, FAQ/HowTo markup, concise answers
+- GEO (generative engine optimization): entity clarity, llms.txt, AI-crawler access, citable facts
+
+## How it works
+1. Enter a site address and choose "only look" or full testing of your own test copy.
+2. Review the scan and the drafted plan, then approve it.
+3. Tests run; read the report, fix issues and re-run to confirm.
+
+## Facts
+- Runs on the user's own machine; reports are stored locally.
+- AI features use only the API key the user supplies.
+- "Only look" mode never fills in, sends or changes anything on the target site.
+- Needs no hand-written tests.
+
+## Public pages
+- [Home](%ORIGIN%/): overview, how it works and FAQ
+- [Sitemap](%ORIGIN%/sitemap.xml)
