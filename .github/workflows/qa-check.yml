@@ -1,0 +1,82 @@
+# Release check-up, run on your own GitHub Actions minutes. Nothing is installed on your computer
+# and nothing is hosted for you. Save this file as .github/workflows/qa-check.yml in your repo.
+#
+# Set up once:
+#   1. Settings > Secrets and variables > Actions > New repository secret
+#        QA_AI_API_KEY   your AI key (an OpenRouter free key works). Optional: without it the plan is
+#                        written by fixed rules and no AI is used.
+#   2. Run it: Actions > QA check-up > Run workflow, then type the address to check.
+#      It also runs by itself when a preview or staging deployment succeeds.
+#
+# The report (report.html opens with a double-click, no server needed) is in the run's
+# "qa-report" artifact, and the verdict is on the run's summary page.
+name: QA check-up
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: The address to check
+        required: true
+        default: 'https://cjcreator.github.io/qa-flow-tester/'
+      staging:
+        description: This is a test copy of the site (so forms may be filled in and sent)
+        type: boolean
+        default: false
+  # A preview or staging deployment (Vercel, Netlify, Render and others report it this way).
+  deployment_status:
+
+permissions:
+  contents: read
+
+jobs:
+  checkup:
+    # A deployment event only counts when it succeeded.
+    if: github.event_name == 'workflow_dispatch' || github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Preview deployments are test copies. A Production deployment is checked read-only.
+      QA_TARGET_URL: ${{ inputs.url || github.event.deployment_status.target_url }}
+      QA_STAGING: ${{ inputs.staging || (github.event_name == 'deployment_status' && github.event.deployment.environment != 'Production') }}
+      QA_AI_API_KEY: ${{ secrets.QA_AI_API_KEY }}
+      QA_AI_PROVIDER: openrouter
+      QA_OUTPUT_DIR: qa-report
+      # Fail the build on a Blocker. Use "major" to be stricter, or "none" to only report.
+      QA_FAIL_ON: blocker
+    steps:
+      - name: Get the check-up tool
+        uses: actions/checkout@v4
+        with:
+          repository: CJCreator/qa-flow-tester
+          ref: main
+          path: .qa-tool
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: .qa-tool/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: .qa-tool/pnpm-lock.yaml
+
+      - name: Install and build
+        working-directory: .qa-tool
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @qa/core exec playwright install --with-deps chromium
+          pnpm -r run build
+
+      - name: Run the check-up
+        run: node .qa-tool/packages/runner/dist/checkup.js
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-report
+          path: qa-report
+          if-no-files-found: ignore
+          retention-days: 14
