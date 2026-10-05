@@ -1,0 +1,10 @@
+﻿{
+  "name": "Release check-up",
+  "short_name": "Check-up",
+  "description": "Test your web app before you ship: quality, accessibility, performance, security, SEO, AEO and GEO.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
