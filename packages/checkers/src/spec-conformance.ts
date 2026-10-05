@@ -15,6 +15,23 @@ const ERROR_MESSAGE_SELECTOR = [
 const GUESS_RESOLUTION =
   'This expectation is an AI guess that nobody has confirmed. Confirm or correct it in the plan review; if the site behaves as intended, mark this check as intended.';
 
+/**
+ * Whether one of the addresses matches an expected page. The expectation may be a plain address
+ * ("/inventory-item.html?id=4", where "?" and "." mean themselves), a wildcard ("/invoices/*"), or
+ * a regular expression ("/dashboard|/account", "^/invoices/new$").
+ */
+export function urlMatchesPattern(pattern: string, addresses: string[]): boolean {
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const asWildcard = new RegExp('^' + pattern.split('*').map(escape).join('.*') + '$');
+  let asRegex: RegExp | null = null;
+  try {
+    asRegex = new RegExp('^' + pattern.replace(/\*/g, '.*').replace(/\//g, '\\/') + '$');
+  } catch {
+    // Not a valid regular expression: the plain reading is all there is.
+  }
+  return addresses.some((a) => asWildcard.test(a) || !!asRegex?.test(a));
+}
+
 export class SpecConformanceChecker {
   async check(
     page: Page,
@@ -110,13 +127,12 @@ export class SpecConformanceChecker {
     // 1. URL Pattern Check
     if (testCase.expectations.url) {
       const pattern = testCase.expectations.url.pattern;
-      // Convert glob-like pattern /invoices/* to regex; anything else in an address is taken literally.
-      const regex = new RegExp('^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
-      const urlPath = new URL(currentUrl, context.baseUrl).pathname;
+      const landed = new URL(currentUrl, context.baseUrl);
+      const urlPath = landed.pathname;
       // "/docs" and "/docs/" are the same page.
       const otherSlash = urlPath.length > 1 && urlPath.endsWith('/') ? urlPath.slice(0, -1) : `${urlPath}/`;
 
-      if (!regex.test(urlPath) && !regex.test(otherSlash) && !regex.test(currentUrl)) {
+      if (!urlMatchesPattern(pattern, [urlPath, otherSlash, urlPath + landed.search, currentUrl])) {
         findings.push(asGuess({
           id: `F-SPEC-${testCase.id}-${counter++}`,
           testCaseId: testCase.id,

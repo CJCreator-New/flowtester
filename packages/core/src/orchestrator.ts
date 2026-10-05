@@ -1,5 +1,5 @@
 import path from 'path';
-import type { Page } from 'playwright';
+import type { BrowserContext, Page } from 'playwright';
 import type {
   TestCase,
   ProductProfile,
@@ -370,20 +370,8 @@ export class FlowTestOrchestrator {
 
         const storageState = roleStorageStates[testCase.role];
 
-        const context = await this.browserManager.createContext({
-          headless: options.headless ?? true,
-          viewport: BREAKPOINT_VIEWPORTS[bp],
-          tunnelAuth: options.tunnelAuth,
-          baseUrl: options.targetUrl,
-          storageState,
-          recordVideoDir: recordVideo ? testCaseEvidenceDir : undefined,
-        });
-
-        // On a live site nothing that could change data leaves the browser.
-        const blockedChanges = options.readOnly ? await blockChanges(context) : [];
-        const page = await context.newPage();
-        evidenceCollector.attach(page);
-
+        let context: BrowserContext | undefined;
+        let page: Page | undefined;
         let testPointPassed = true;
         let stepError: string | undefined;
         let pointResult: TestPointResult | undefined;
@@ -391,6 +379,19 @@ export class FlowTestOrchestrator {
         const substitutes: Array<{ step: string; planned: string; chosen: string }> = [];
 
         try {
+          ({ context, page } = await this.browserManager.openPage({
+            headless: options.headless ?? true,
+            viewport: BREAKPOINT_VIEWPORTS[bp],
+            tunnelAuth: options.tunnelAuth,
+            baseUrl: options.targetUrl,
+            storageState,
+            recordVideoDir: recordVideo ? testCaseEvidenceDir : undefined,
+          }));
+
+          // On a live site nothing that could change data leaves the browser.
+          const blockedChanges = options.readOnly ? await blockChanges(context) : [];
+          evidenceCollector.attach(page);
+
           const startUrl = new URL(testCase.startPage, options.targetUrl).toString();
           await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
@@ -568,6 +569,7 @@ export class FlowTestOrchestrator {
             role: testCase.role,
             breakpoint: bp,
             urlPath: page.url(),
+            planIsGuess: testCase.expectations?.origin === 'ai-guess',
           });
 
           // 2. Spec Conformance
@@ -721,7 +723,7 @@ export class FlowTestOrchestrator {
             severity: 'Minor',
             checker: 'spec-conformance',
             title: `“${s.planned}” isn’t in the list, so “${s.chosen}” was picked instead`,
-            where: { urlPath: pathOf(page.url()), role: testCase.role, breakpoint: bp },
+            where: { urlPath: pathOf(page?.url() ?? testCase.startPage), role: testCase.role, breakpoint: bp },
             expectedVsActual: { expected: `The option “${s.planned}” can be picked (${s.step})`, actual: `It isn’t there; “${s.chosen}” was picked, so the test can’t say how the planned option works` },
             stepsToReproduce: [`Open ${testCase.startPage} as ${testCase.role} at ${bp}`, `${s.step}: look for “${s.planned}”`],
             evidence: {},
@@ -761,9 +763,10 @@ export class FlowTestOrchestrator {
           // Unconfirmed AI guesses never fail a test point on their own.
           const hasStepFailure = !testPointPassed && !sentData;
           const hasRealFinding = keptFindings.some((f) => !f.needsConfirmation);
+          const hasGuessedFailure = testCase.expectations?.origin === 'ai-guess' && keptFindings.some((f) => f.needsConfirmation && f.id.startsWith('F-STEP-'));
           const status: TestPointResult['status'] = sentData
             ? 'Skipped'
-            : hasStepFailure || hasRealFinding
+            : hasRealFinding || (hasStepFailure && !hasGuessedFailure)
               ? 'Failed'
               : keptFindings.length > 0
                 ? 'Could not verify'
@@ -828,8 +831,8 @@ export class FlowTestOrchestrator {
           };
         } finally {
           // The video file is only finalized once its context closes.
-          const video = page.video();
-          await context.close().catch(() => {});
+          const video = page?.video();
+          await context?.close().catch(() => {});
           if (video) {
             const videoPath = await video.path().catch(() => undefined);
             if (videoPath && pointResult?.status === 'Failed') {

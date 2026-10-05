@@ -24,7 +24,7 @@ const tool = spawn(process.execPath, [path.join(root, 'scripts/start.mjs'), '--n
 const checks = [
   ['the Wizard at /', '/', (res, body) => res.status === 200 && body.includes('id="root"')],
   ['the Wizard at /reports', '/reports', (res, body) => res.status === 200 && body.includes('id="root"')],
-  ['Studio's old address redirects to /reports', '/studio/', (res) => res.status === 308 && res.headers.get('location') === '/reports'],
+  ["Studio's old address redirects to /reports", '/studio/', (res) => res.status === 308 && res.headers.get('location') === '/reports'],
   ['the API at /api/runner/status', '/api/runner/status', (res, body) => res.status === 200 && 'phase' in JSON.parse(body)],
   ['"Hub not connected" at /api/v1/', '/api/v1/health', (res, body) => res.status === 503 && JSON.parse(body).hubConnected === false],
 ];

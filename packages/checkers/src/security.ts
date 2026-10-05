@@ -37,21 +37,26 @@ const STACK_TRACE_PATTERN =
  * Covers headers, cookies, mixed content, stack traces, and passwords in addresses.
  */
 export class SecurityChecker {
-  /** Pages the run passed through with a password in their address. */
+  /**
+   * Pages the run passed through with a password in their address. The problem is placed on the
+   * page the step started from, where the sign-in form is, so it joins the form check's finding.
+   */
   checkEvidence(stepEvidenceList: StepEvidence[], context: SecurityContext): Finding[] {
     const findings: Finding[] = [];
     const seen = new Set<string>();
     for (const step of stepEvidenceList) {
       if (!step.urlAfter || !urlHasSecretParam(step.urlAfter, true)) continue;
-      const urlPath = safePath(step.urlAfter);
-      if (seen.has(urlPath)) continue;
-      seen.add(urlPath);
+      // Still in the address from an earlier step: already recorded where it first appeared.
+      if (seen.size > 0 && step.urlBefore && urlHasSecretParam(step.urlBefore, true)) continue;
+      const formPath = safePath(step.urlBefore || step.urlAfter);
+      if (seen.has(formPath)) continue;
+      seen.add(formPath);
       findings.push(
-        this.finding(`F-SEC-${context.testCaseId || 'GEN'}-URL-${findings.length + 1}`, context, urlPath, {
+        this.finding(`F-SEC-${context.testCaseId || 'GEN'}-URL-${findings.length + 1}`, context, formPath, {
           title: PASSWORD_IN_ADDRESS,
           severity: 'Major',
           expected: 'Passwords are never part of a page address',
-          actual: `After "${step.stepName}", the address of ${urlPath} contained the password`,
+          actual: `After "${step.stepName}", the address of ${safePath(step.urlAfter)} contained the password`,
           screenshotPath: step.screenshotPath,
           steps: [`Go to ${step.urlBefore}`, `Perform "${step.stepName}"`, 'Look at the address bar'],
           resolution: PASSWORD_IN_ADDRESS_FIX,
@@ -72,11 +77,18 @@ export class SecurityChecker {
   ): Promise<Finding[]> {
     const findings: Finding[] = [];
 
-    // 1. Sign-in forms on the current page that send passwords using GET
+    // 1. Sign-in forms on the current page that send passwords using GET: ones that
+    // say method="get", or name a page to send to without saying how. A form with neither is usually
+    // sent by the page's own script (a single-page app), which the markup can't tell us about;
+    // checkEvidence catches it if the password does end up in an address.
     const hasGetPasswordForm = await page
       .evaluate(() =>
         Array.from(document.querySelectorAll('form'))
-          .some((f) => f.querySelector('input[type="password"]') && (f.getAttribute('method') || 'get').toLowerCase() === 'get')
+          .some((f) => {
+            if (!f.querySelector('input[type="password"]')) return false;
+            const method = f.getAttribute('method')?.trim().toLowerCase();
+            return method === 'get' || (!method && !!f.getAttribute('action')?.trim());
+          })
       )
       .catch(() => false);
 
@@ -86,7 +98,7 @@ export class SecurityChecker {
           title: PASSWORD_IN_ADDRESS,
           severity: 'Major',
           expected: 'A form with a password field is sent with method="post"',
-          actual: 'The form uses GET (or has no method, which means GET), so the password goes into the address',
+          actual: 'The form uses GET (or names a page to send to with no method, which means GET), so the password goes into the address',
           steps: [`Go to ${context.urlPath}`, 'Inspect the sign-in form: it has no method="post"'],
           resolution: PASSWORD_IN_ADDRESS_FIX,
         })

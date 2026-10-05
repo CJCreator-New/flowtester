@@ -46,8 +46,12 @@ export class OpenAIProvider implements AIProvider {
       body.response_format = { type: 'json_object' };
     }
     // OpenRouter: think briefly and leave the reasoning out, so the output allowance goes to the answer.
-    if (options.reasoning === 'low' && this.providerType === 'openrouter') {
-      body.reasoning = { effort: 'low', exclude: true };
+    if (this.providerType === 'openrouter') {
+      if (options.reasoning === 'low') {
+        body.reasoning = { effort: 'low', exclude: true };
+      } else if (!options.reasoning) {
+        body.reasoning = { enabled: false };
+      }
     }
 
     let res: Response;
@@ -73,6 +77,9 @@ export class OpenAIProvider implements AIProvider {
 
     const data = (await res.json()) as any;
     const choice = data.choices?.[0];
+    if (choice?.finish_reason === 'length') {
+      throw new Error(`The AI's answer was cut off at its length limit (${body.max_tokens} tokens) before it finished.`);
+    }
     const usage = data.usage;
     return {
       text: choice?.message?.content || '',

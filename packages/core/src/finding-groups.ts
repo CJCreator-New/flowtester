@@ -11,11 +11,13 @@ export function mergeDuplicateFindings(findings: Finding[]): Finding[] {
     // one element that appears on every page (a small link in the shared header). Anything about
     // a page as a whole (a dead end, a missing title) is one problem per page.
     const isFailedFile = f.checker === 'bug-detection' && (f.evidence.networkLogs?.length ?? 0) > 0;
+    const isConsoleError = f.checker === 'bug-detection' && !isFailedFile && (f.evidence.consoleLogs?.length ?? 0) > 0;
     const rawElement = f.where.dataTestId || f.where.cssSelector;
     const element = rawElement ? normalizeSelector(rawElement) : undefined;
     const normUrlPath = normalizeRoute(f.where.urlPath);
     const where = isFailedFile ? '' : element ? `element:${element}` : `page:${normUrlPath}`;
-    const issueKey = f.issueKey || `${f.checker}|${f.title}|${where}`;
+    const what = isConsoleError ? `console:${f.expectedVsActual.actual}` : f.title;
+    const issueKey = f.issueKey || `${f.checker}|${what}|${where}`;
     const key = issueKey;
     const first = merged.get(key);
     if (!first) {

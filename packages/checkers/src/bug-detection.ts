@@ -11,6 +11,9 @@ function safeOrigin(url: string | undefined): string | null {
 
 const withoutHash = (url: string) => url.split('#')[0];
 
+/** Playwright's ways of saying the control never showed up (as opposed to failing once found). */
+const CONTROL_NOT_FOUND = /waiting for (?:locator|getBy)[\s\S]*to be visible|resolved to 0 elements|element is not visible/i;
+
 export class BugDetectionChecker {
   check(
     stepEvidenceList: StepEvidence[],
@@ -20,6 +23,12 @@ export class BugDetectionChecker {
       role: string;
       breakpoint: Breakpoint;
       urlPath: string;
+      /**
+       * The steps are an AI's plan that nobody has confirmed. A step whose control never showed up
+       * then says more about the plan (a journey started mid-way, a control hidden at this width)
+       * than about the site, so it is "Could not verify", not a failure.
+       */
+      planIsGuess?: boolean;
     }
   ): Finding[] {
     const findings: Finding[] = [];
@@ -143,7 +152,7 @@ export class BugDetectionChecker {
       if (!step.passed && step.error && !/^(Blocked|Skipped):/.test(step.error)) {
         // A link check that failed is a broken link, not a control that couldn't be used.
         const brokenLink = step.action === 'check-link';
-        findings.push({
+        const stepFailure: Finding = {
           id: `F-STEP-${context.testCaseId || 'GEN'}-${findingCounter++}`,
           testCaseId: context.testCaseId,
           flowId: context.flowId,
@@ -171,7 +180,18 @@ export class BugDetectionChecker {
             ? 'Fix or remove the link: the page it points to doesn’t open.'
             : `Verify element is present in the DOM and enabled for action "${step.action}".`,
           verifyCommand: `qa-test verify F-STEP-${context.testCaseId || 'GEN'}-${findingCounter - 1}`,
-        });
+        };
+        if (context.planIsGuess && CONTROL_NOT_FOUND.test(step.error)) {
+          const page = step.urlBefore ? new URL(step.urlBefore, 'http://placeholder').pathname : context.urlPath;
+          Object.assign(stepFailure, {
+            severity: 'Suggestion',
+            needsConfirmation: true,
+            title: `Could not verify: “${step.stepName}” couldn’t be done on ${page}, because what it needs wasn’t there. The journey may need earlier steps, or it may not show at ${context.breakpoint}.`,
+            resolution:
+              'This journey is an AI plan that nobody has confirmed. Check its steps in the plan review; if the control should be there, confirm the journey and run it again.',
+          });
+        }
+        findings.push(stepFailure);
       }
     }
 

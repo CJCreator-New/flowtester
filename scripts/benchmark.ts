@@ -6,6 +6,7 @@
  *   pnpm benchmark                     every site, with AI discovery (needs the saved OpenRouter key)
  *   pnpm benchmark --sites fixture     some sites only (file names without .json)
  *   pnpm benchmark --no-ai             no AI: journeys are skipped, the page sweep still runs
+ *   pnpm benchmark --score-only        re-score the last run's reports, e.g. after labelling an answer key
  *
  * Build first (pnpm build): this uses the compiled runner. Results go to .benchmark/.
  */
@@ -168,9 +169,23 @@ async function runSite(site: string, key: AnswerKey, noAi: boolean): Promise<Sit
   }
 }
 
+/** Scores the report a previous run left in .benchmark/<site>/, without visiting the site again. */
+async function scoreSavedRun(site: string, key: AnswerKey, previous?: SiteScore): Promise<SiteScore> {
+  try {
+    const report = JSON.parse(await fs.readFile(path.join(root, '.benchmark', site, 'findings.json'), 'utf8')) as ReleaseReport;
+    return score(site, key, report, previous?.minutes ?? 0);
+  } catch {
+    return { ...score(site, key, { findings: [], results: [] } as unknown as ReleaseReport, 0), error: 'no saved report for this site' };
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const noAi = args.includes('--no-ai');
+  const scoreOnly = args.includes('--score-only');
+  const previousRun = scoreOnly
+    ? (JSON.parse(await fs.readFile(path.join(root, '.benchmark', 'results.json'), 'utf8').catch(() => '{}')) as { noAi?: boolean; scores?: SiteScore[] })
+    : {};
   const sitesArg = args[args.indexOf('--sites') + 1];
   const keyDir = path.join(root, 'fixtures', 'benchmarks');
   const allSites = (await fs.readdir(keyDir)).filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, ''));
@@ -180,11 +195,16 @@ async function main() {
   for (const site of sites) {
     const key = JSON.parse(await fs.readFile(path.join(keyDir, `${site}.json`), 'utf8')) as AnswerKey;
     console.log(`\n▶ ${key.name} (${key.url === 'fixture' ? 'local fixture' : key.url})…`);
-    const s = await runSite(site, key, noAi);
+    const previous = previousRun.scores?.find((p) => p.site === site);
+    const s = !scoreOnly
+      ? await runSite(site, key, noAi)
+      : previous?.error
+        ? { ...previous, name: key.name } // a site that didn't finish last time has nothing to re-score
+        : await scoreSavedRun(site, key, previous);
     scores.push(s);
     if (s.error) console.log(`  ✗ Couldn’t finish: ${s.error}`);
     console.log(
-      `  ${s.pagesReached} pages · ${s.reported} issues reported · ${s.real} real · ${s.knownFalse} known false · ${s.unlabelled.length} unlabelled · ${s.toConfirm} to confirm · ${s.minutes.toFixed(1)} min`
+      `  ${s.pagesReached} pages · ${s.reported} issues reported · ${s.real} real · ${s.knownFalse} known false · ${s.unlabelled.length} unlabelled · ${s.toConfirm} to confirm${s.minutes ? ` · ${s.minutes.toFixed(1)} min` : ''}`
     );
     if (s.plantedFound.length + s.plantedMissed.length > 0) {
       console.log(`  Planted defects found: ${s.plantedFound.length} of ${s.plantedFound.length + s.plantedMissed.length}${s.plantedMissed.length ? ` (missed: ${s.plantedMissed.join(', ')})` : ''}`);
@@ -203,7 +223,10 @@ async function main() {
   console.log('Unlabelled issues count as not real until someone checks them and adds them to the answer key.');
 
   await fs.mkdir(path.join(root, '.benchmark'), { recursive: true });
-  await fs.writeFile(path.join(root, '.benchmark', 'results.json'), JSON.stringify({ when: new Date().toISOString(), noAi, scores }, null, 2));
+  await fs.writeFile(
+    path.join(root, '.benchmark', 'results.json'),
+    JSON.stringify({ when: new Date().toISOString(), noAi: scoreOnly ? !!previousRun.noAi : noAi, scores }, null, 2)
+  );
 }
 
 main().catch((err) => {

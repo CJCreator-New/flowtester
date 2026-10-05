@@ -85,6 +85,26 @@ describe('mergeDuplicateFindings', () => {
     expect(merged[0].seenAt?.pages).toEqual(['/products']);
     expect(merged[0].seenAt?.roles).toEqual(['visitor', 'admin']);
   });
+
+  it('reports one console error once, however many steps with different names caught it', () => {
+    const consoleError = (stepName: string, id: string, text = 'Simulated Unhandled Runtime Bug') =>
+      finding({
+        urlPath: '/dashboard',
+        testCaseId: id,
+        checker: 'bug-detection',
+        title: `Console Error in step "${stepName}"`,
+        expectedVsActual: { expected: 'Zero unhandled errors', actual: text },
+        evidence: { consoleLogs: [{ type: 'error', text, timestamp: 1 }] },
+      });
+
+    const merged = mergeDuplicateFindings([
+      consoleError('Click Trigger Console Error Button', 'FLOW-006'),
+      consoleError('Try “Trigger Console Error”', 'SWEEP-006'),
+      consoleError('Try “Trigger Console Error”', 'SWEEP-006', 'A different error'),
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0].seenAt?.testCaseIds).toEqual(['FLOW-006', 'SWEEP-006']);
+  });
 });
 
 describe('EvidenceCollector', () => {

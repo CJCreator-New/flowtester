@@ -92,3 +92,29 @@ describe('One problem, one finding', () => {
     expect(findings.map((f) => f.title)).toEqual(['Step failed: "Open menu"']);
   });
 });
+
+describe('Steps of an unconfirmed AI plan', () => {
+  // saucedemo: the AI planned "remove from cart" starting on an empty cart page.
+  const missingRemove = step({
+    stepName: 'Click remove button',
+    action: 'click',
+    urlBefore: 'https://www.saucedemo.com/cart.html',
+    urlAfter: 'https://www.saucedemo.com/cart.html',
+    passed: false,
+    error: 'locator.waitFor: Timeout 4000ms exceeded.\nCall log:\n  - waiting for locator(\'[data-test="remove-sauce-labs-backpack"]\') to be visible\n',
+  });
+
+  it('turn a control that never showed up into "Could not verify", not a failure of the site', () => {
+    const [finding] = checker.check([missingRemove], { ...context, breakpoint: '375px', planIsGuess: true });
+    expect(finding).toMatchObject({ severity: 'Suggestion', needsConfirmation: true });
+    expect(finding.title).toBe(
+      'Could not verify: “Click remove button” couldn’t be done on /cart.html, because what it needs wasn’t there. The journey may need earlier steps, or it may not show at 375px.'
+    );
+  });
+
+  it('still fail the site when a control was there but broke, or when someone confirmed the plan', () => {
+    const brokeWhenClicked = { ...missingRemove, error: 'locator.click: Target closed' };
+    expect(checker.check([brokeWhenClicked], { ...context, planIsGuess: true })[0].severity).toBe('Blocker');
+    expect(checker.check([missingRemove], context)[0]).toMatchObject({ severity: 'Blocker', title: 'Step failed: "Click remove button"' });
+  });
+});
