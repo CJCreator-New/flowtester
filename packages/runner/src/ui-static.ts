@@ -31,6 +31,7 @@ const CONTENT_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
   '.ttf': 'font/ttf',
   '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
   '.webmanifest': 'application/manifest+json',
 };
 
@@ -60,16 +61,46 @@ async function readFileIfPresent(file: string): Promise<Buffer | null> {
   }
 }
 
+/** Files whose `%ORIGIN%` placeholder is filled in with the address the visitor used (canonical, sitemap, llms.txt). */
+const TEMPLATED = new Set(['.html', '.txt', '.xml', '.webmanifest']);
+
+/** Private screens (runs, plans, settings): kept out of search and AI indexes. Only the home page is public. */
+const PUBLIC_PATHS = new Set(['/', '/index.html']);
+
+/**
+ * The public address of this server, for absolute URLs in canonical links, structured data and the
+ * sitemap. PUBLIC_URL wins (set it when serving behind a domain or tunnel); otherwise the request's
+ * own host is used, which the server has already checked to be its own.
+ */
+export function publicOrigin(req: http.IncomingMessage): string {
+  const configured = process.env.PUBLIC_URL?.trim().replace(/\/+$/, '');
+  if (configured && /^https?:\/\/[\w.-]+(:\d+)?$/.test(configured)) return configured;
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost');
+  const safeHost = /^[\w.-]+(:\d+)?$/.test(host) ? host : 'localhost';
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https' ? 'https' : 'http';
+  return `${proto}://${safeHost}`;
+}
+
+function seoHeaders(pathname: string, ext: string): Record<string, string> {
+  const headers: Record<string, string> = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin' };
+  // Pages (no file extension) other than the home page are private app screens.
+  if ((ext === '' || ext === '.html') && !PUBLIC_PATHS.has(pathname.replace(/\/+$/, '') || '/')) {
+    headers['X-Robots-Tag'] = 'noindex, nofollow';
+  }
+  return headers;
+}
+
 function send(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   status: number,
   type: string,
   body: Buffer | string,
-  cacheControl = 'no-cache'
+  cacheControl = 'no-cache',
+  extra: Record<string, string> = {}
 ): void {
   const content = typeof body === 'string' ? Buffer.from(body) : body;
-  res.writeHead(status, { 'Content-Type': type, 'Content-Length': content.length, 'Cache-Control': cacheControl });
+  res.writeHead(status, { 'Content-Type': type, 'Content-Length': content.length, 'Cache-Control': cacheControl, ...extra });
   res.end(req.method === 'HEAD' ? undefined : content);
 }
 
@@ -108,7 +139,9 @@ export async function serveUi(
     const content = await readFileIfPresent(file);
     if (content) {
       const type = CONTENT_TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
-      send(req, res, 200, type, content, relative.startsWith('assets/') ? FOREVER : 'no-cache');
+      const ext = path.extname(file).toLowerCase();
+      const body = TEMPLATED.has(ext) ? Buffer.from(content.toString('utf8').replaceAll('%ORIGIN%', publicOrigin(req))) : content;
+      send(req, res, 200, type, body, relative.startsWith('assets/') ? FOREVER : 'no-cache', seoHeaders(pathname, ext));
       return true;
     }
     // A missing file (it has an extension) is a 404, not the page.
@@ -127,6 +160,7 @@ export async function serveUi(
     );
     return true;
   }
-  send(req, res, 200, 'text/html; charset=utf-8', index);
+  const page = Buffer.from(index.toString('utf8').replaceAll('%ORIGIN%', publicOrigin(req)));
+  send(req, res, 200, 'text/html; charset=utf-8', page, 'no-cache', seoHeaders(pathname, ''));
   return true;
 }

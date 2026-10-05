@@ -1,0 +1,31 @@
+﻿# Release check-up: only the home page is public. Run reports, plans and settings are private.
+User-agent: *
+Allow: /$
+Disallow: /api/
+Disallow: /check/
+Disallow: /reports
+Disallow: /baselines
+Disallow: /benchmark
+Disallow: /settings
+
+# AI answer and generative engines may read the public summary.
+User-agent: GPTBot
+Allow: /$
+Allow: /llms.txt
+User-agent: ChatGPT-User
+Allow: /$
+Allow: /llms.txt
+User-agent: OAI-SearchBot
+Allow: /$
+Allow: /llms.txt
+User-agent: ClaudeBot
+Allow: /$
+Allow: /llms.txt
+User-agent: PerplexityBot
+Allow: /$
+Allow: /llms.txt
+User-agent: Google-Extended
+Allow: /$
+Allow: /llms.txt
+
+Sitemap: %ORIGIN%/sitemap.xml

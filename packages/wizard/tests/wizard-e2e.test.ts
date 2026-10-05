@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Drives Release check-up in Chromium, served by the QA Tool itself as people run it: one server,
  * one address, one app. The site under test is the fixture app. Only the outside world is faked:
  * OpenRouter (key check + model list) and the AI model.
@@ -200,7 +200,7 @@ describe('Release check-up end to end, on the one server', () => {
   it('opens on a new check-up, with the top bar, and every address answers', async () => {
     await page.goto(`${toolUrl}/`);
     await expect.poll(() => heading(page), { timeout: 10000 }).toBe('Enter the address of the site to check');
-    await expect.poll(() => page.title()).toBe('New check-up · Release check-up');
+    await expect.poll(() => page.title()).toBe('Release check-up | Pre-release web app testing: QA, accessibility, SEO, AEO and GEO');
     const topBar = page.getByRole('navigation', { name: 'Main' });
     for (const name of ['New check-up', 'Past check-ups', 'Settings']) expect(await topBar.getByRole('link', { name }).count(), name).toBe(1);
     // No Report Hub is set up, so there's no Team Hub link.

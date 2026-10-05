@@ -1,19 +1,105 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#111827" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='3' y='3' width='26' height='26' rx='3' fill='none' stroke='%236C9BF2' stroke-width='3' transform='rotate(-6 16 16)'/><path d='M10 16.5l4 4 8-9' fill='none' stroke='%236C9BF2' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
-    <title>Release check-up</title>
-    <meta name="description" content="Release check-up tests web apps for functionality, accessibility, performance, and search readiness before shipping." />
-    <meta property="og:title" content="Release check-up" />
-    <meta property="og:description" content="Release check-up tests web apps for functionality, accessibility, performance, and search readiness before shipping." />
+    <title>Release check-up | Pre-release web app testing: QA, accessibility, SEO, AEO and GEO</title>
+    <meta name="description" content="Release check-up scans your web app, drafts a test plan and runs real-browser tests. Get a plain-language report on functionality, accessibility, performance, security, SEO, AEO and GEO before you ship." />
+    <meta name="application-name" content="Release check-up" />
+    <meta name="author" content="Release check-up" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <link rel="canonical" href="%ORIGIN%/" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="alternate" type="text/plain" href="/llms.txt" title="LLM-readable summary" />
+    <meta property="og:site_name" content="Release check-up" />
+    <meta property="og:locale" content="en_US" />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content="/favicon.ico" />
+    <meta property="og:url" content="%ORIGIN%/" />
+    <meta property="og:title" content="Release check-up: test your web app before you ship" />
+    <meta property="og:description" content="Real-browser testing with a plain-language report on quality, accessibility, performance, security, SEO, AEO and GEO." />
+    <meta property="og:image" content="%ORIGIN%/og-image.svg" />
+    <meta property="og:image:alt" content="Release check-up: pre-release testing for web apps" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Release check-up: test your web app before you ship" />
+    <meta name="twitter:description" content="Real-browser testing with a plain-language report on quality, accessibility, performance, security, SEO, AEO and GEO." />
+    <meta name="twitter:image" content="%ORIGIN%/og-image.svg" />
+    <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "%ORIGIN%/#organization",
+      "name": "Release check-up",
+      "url": "%ORIGIN%/",
+      "logo": "%ORIGIN%/favicon.svg"
+    },
+    {
+      "@type": "WebSite",
+      "@id": "%ORIGIN%/#website",
+      "url": "%ORIGIN%/",
+      "name": "Release check-up",
+      "inLanguage": "en",
+      "publisher": { "@id": "%ORIGIN%/#organization" }
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "%ORIGIN%/#app",
+      "name": "Release check-up",
+      "alternateName": "QA Flow Tester",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "Website quality assurance and pre-release testing",
+      "operatingSystem": "Windows, macOS, Linux",
+      "url": "%ORIGIN%/",
+      "description": "Release check-up scans a web app, drafts a test plan, runs real-browser tests and reports functionality, accessibility, performance, security, SEO, answer-engine (AEO) and generative-engine (GEO) readiness in plain language before you ship.",
+      "featureList": [
+        "AI-assisted site discovery and test plan",
+        "Real-browser end-to-end flow testing with Playwright",
+        "Accessibility, performance and security checks",
+        "SEO, AEO and GEO readiness checks",
+        "Visual baselines and competitive flow benchmarks",
+        "Plain-language release report with a ship / don't-ship verdict"
+      ],
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "publisher": { "@id": "%ORIGIN%/#organization" },
+      "isPartOf": { "@id": "%ORIGIN%/#website" }
+    },
+    {
+      "@type": "HowTo",
+      "name": "How to check a web app before release with Release check-up",
+      "step": [
+        { "@type": "HowToStep", "position": 1, "name": "Enter your site address", "text": "Paste the URL of the site or staging copy you want checked and choose how much the tool may interact with it." },
+        { "@type": "HowToStep", "position": 2, "name": "Review the scan and plan", "text": "The tool maps your pages and drafts a test plan of the journeys that matter. Edit it, then approve it." },
+        { "@type": "HowToStep", "position": 3, "name": "Run the tests", "text": "Real-browser tests run the approved plan and watch for functional, accessibility, performance, security and search-readiness problems." },
+        { "@type": "HowToStep", "position": 4, "name": "Read the report", "text": "Get a plain-language verdict, prioritised fixes and evidence such as screenshots, and re-run to confirm fixes." }
+      ]
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        { "@type": "Question", "name": "What is Release check-up?", "acceptedAnswer": { "@type": "Answer", "text": "Release check-up is a pre-release QA tool that scans a web app, drafts a test plan, runs real-browser tests and reports problems with functionality, accessibility, performance, security and search readiness in plain language." } },
+        { "@type": "Question", "name": "Does it check SEO, AEO and GEO?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. It checks classic SEO (titles, descriptions, canonicals, structured data), answer-engine optimization (AEO: question-style headings, FAQ and HowTo markup, concise answers) and generative-engine optimization (GEO: entity clarity, llms.txt, AI-crawler access and citable facts)." } },
+        { "@type": "Question", "name": "Will it change or break my site?", "acceptedAnswer": { "@type": "Answer", "text": "Not unless you allow it. In 'only look' mode nothing is filled in, sent or changed. Full testing is meant for your own test copy." } },
+        { "@type": "Question", "name": "Where does my data go?", "acceptedAnswer": { "@type": "Answer", "text": "Release check-up runs on your own machine. Reports and evidence are stored locally, and AI features use only the API key you provide." } },
+        { "@type": "Question", "name": "Do I need to write tests?", "acceptedAnswer": { "@type": "Answer", "text": "No. The tool discovers your pages and proposes the tests; you only review and approve the plan." } }
+      ]
+    }
+  ]
+}
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <noscript>
+        <main>
+          <h1>Release check-up: test your web app before you ship</h1>
+          <p>Release check-up scans a web app, drafts a test plan, runs real-browser tests and reports problems with functionality, accessibility, performance, security, SEO, AEO and GEO in plain language.</p>
+          <p>This app needs JavaScript. See <a href="/llms.txt">the plain-text summary</a>.</p>
+        </main>
+      </noscript>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
