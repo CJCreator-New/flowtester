@@ -148,7 +148,7 @@ All of these are read-only on a live site unless marked otherwise.
 ### 3.4 API testing tools and their models
 
 - **Postman:**
-  - From 1 March 2026 the Free plan "is limited to one user and can't create a team". Before that, free teams could have up to three users ([blog](https://blog.postman.com/new-capabilities-march-2026/), [community](https://community.postman.com/t/free-user-access-and-team-admin-role-adjustments-in-postman/89149)).
+  - In March 2026 the Free plan became "a single-player plan for individual developers" (Postman community post, 6 March 2026) ([community](https://community.postman.com/t/free-user-access-and-team-admin-role-adjustments-in-postman/89149)). The exact effective date and the old free-team size (earlier drafts said three users) were not confirmed on the cited pages *(unverified)*. The [March 2026 blog](https://blog.postman.com/new-capabilities-march-2026/) only describes Free and Solo as built for individual developers.
   - Free still includes unlimited collection runs and 1,000 monitoring requests a month ([pricing](https://www.postman.com/pricing/)).
 - **Free alternatives:**
   - Bruno: 47k GitHub stars, Pro $6 ([pricing](https://www.usebruno.com/pricing)).
