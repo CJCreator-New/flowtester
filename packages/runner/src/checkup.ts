@@ -136,7 +136,8 @@ export async function runCheckup(args: CheckupArgs): Promise<number> {
         stagingHost: args.staging || undefined,
         useAI: hasKey,
         planWithoutAI: !hasKey,
-        aiProvider: args.provider,
+        // With no key there is no AI to ask for: the fixed-rule plan needs no provider.
+        aiProvider: hasKey ? args.provider : 'mock',
         apiKey: args.apiKey,
         maxPages: args.maxPages,
         skipReview: true,

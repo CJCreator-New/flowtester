@@ -31,13 +31,14 @@ permissions:
 
 jobs:
   checkup:
-    # A deployment event only counts when it succeeded.
-    if: github.event_name == 'workflow_dispatch' || github.event.deployment_status.state == 'success'
+    # A deployment event only counts when it succeeded. GitHub Pages deployments are left out: their
+    # address is a GitHub job page, not a site, and checking it would start another run.
+    if: github.event_name == 'workflow_dispatch' || (github.event.deployment_status.state == 'success' && github.event.deployment_status.environment != 'github-pages')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       # Preview deployments are test copies. A Production deployment is checked read-only.
-      QA_TARGET_URL: ${{ inputs.url || github.event.deployment_status.target_url }}
+      QA_TARGET_URL: ${{ inputs.url || github.event.deployment_status.environment_url || github.event.deployment_status.target_url }}
       QA_STAGING: ${{ inputs.staging || (github.event_name == 'deployment_status' && github.event.deployment.environment != 'Production') }}
       QA_AI_API_KEY: ${{ secrets.QA_AI_API_KEY }}
       QA_AI_PROVIDER: openrouter
