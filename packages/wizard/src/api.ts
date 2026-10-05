@@ -207,7 +207,7 @@ export type Reachability =
 export async function checkReachable(targetUrl: string): Promise<Reachability> {
   const res = await call('/api/runner/preflight', { method: 'POST', body: JSON.stringify({ targetUrl }) }, 15000);
   const body = await json<
-    { reachable: boolean; reason?: string; code?: string; suggestion?: string; statusCode?: number } & SiteFacts
+    { reachable: boolean; reason?: string; code?: string; suggestion?: string; statusCode?: number; error?: string } & SiteFacts
   >(res);
   const facts: SiteFacts = { host: body.host, testCopy: body.testCopy, remembered: body.remembered };
   if (body.reachable) return { ok: true, statusCode: body.statusCode, ...facts };
@@ -228,6 +228,18 @@ export async function checkReachable(targetUrl: string): Promise<Reachability> {
       code: body.code || 'ERR_INVALID_URL',
       suggestion: 'Check the address, for example shop.example.com or localhost:3050.',
       statusCode: body.statusCode,
+      ...facts,
+    };
+  }
+  if (res.status === 401 || res.status === 403 || body.error) {
+    return {
+      ok: false,
+      reason: body.error || 'Access to QA runner was refused.',
+      code: 'ERR_RUNNER_REFUSED',
+      suggestion: res.status === 401
+        ? 'Open the app using the link with ?access= key.'
+        : 'Cross-origin request was refused by the runner.',
+      statusCode: res.status,
       ...facts,
     };
   }

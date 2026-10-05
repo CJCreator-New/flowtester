@@ -16,18 +16,54 @@
  * Usage:
  *   pnpm tunnel              # builds runner if needed, then starts both
  *   pnpm tunnel --no-build   # skip the build step
+ *   pnpm tunnel --beta       # share with outside testers: they bring their own AI key (kept in
+ *                            # memory for their session only), your saved key and sign-ins are
+ *                            # not copied or used, and only public sites can be checked
  */
 
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const noBuild = process.argv.includes('--no-build');
+const keepData = process.argv.includes('--keep-data');
+const beta = process.argv.includes('--beta');
 const isWin = process.platform === 'win32';
 const accessKey = randomBytes(24).toString('base64url');
+const port = Number(process.env.RUNNER_PORT || 3001);
+
+const tunnelDataDir = path.join(root, '.qa-tunnel-data');
+const tunnelOutputDir = path.join(root, '.qa-tunnel-report');
+
+// ── Prepare clean tunnel workspace ──────────────────────────────────────────
+// When sharing a tunnel link, guests should see a clean, fresh check-up screen
+// instead of the developer's locally stored history, waiting plans, or site memory.
+if (!keepData) {
+  try {
+    if (existsSync(tunnelDataDir)) rmSync(tunnelDataDir, { recursive: true, force: true });
+    if (existsSync(tunnelOutputDir)) rmSync(tunnelOutputDir, { recursive: true, force: true });
+  } catch {}
+}
+
+mkdirSync(tunnelDataDir, { recursive: true });
+mkdirSync(tunnelOutputDir, { recursive: true });
+
+// Copy AI keys and settings from main .qa-data so the tunnel user has AI ready.
+// Not in beta mode: testers bring their own key, and yours is never copied.
+const mainDataDir = path.join(root, '.qa-data');
+for (const file of beta ? [] : ['.qa-keys.json', '.qa-settings.json', '.qa-ai-models.json']) {
+  const src = path.join(mainDataDir, file);
+  const dest = path.join(tunnelDataDir, file);
+  if (existsSync(src) && !existsSync(dest)) {
+    try {
+      copyFileSync(src, dest);
+    } catch {}
+  }
+}
 
 function log(msg) {
   process.stdout.write(`\x1b[36m[tunnel]\x1b[0m ${msg}\n`);
@@ -35,6 +71,32 @@ function log(msg) {
 
 function err(msg) {
   process.stderr.write(`\x1b[31m[tunnel]\x1b[0m ${msg}\n`);
+}
+
+function portInUse(targetPort) {
+  return new Promise((resolve) => {
+    const socket = net.connect(targetPort, 'localhost');
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('error', () => resolve(false));
+  });
+}
+
+// ── 0. Pre-flight check: ensure port is free ────────────────────────────────
+if (await portInUse(port)) {
+  err(`Port ${port} is already in use by another process (likely an active 'pnpm start').`);
+  err('');
+  err('Why this happens:');
+  err('  `pnpm tunnel` needs to start its own runner with a generated access key');
+  err('  and origin protections so the public tunnel cannot be abused.');
+  err('');
+  err('How to fix:');
+  err(`  1. Stop the running process on port ${port} (press Ctrl+C in your 'pnpm start' terminal).`);
+  err('  2. Re-run `pnpm tunnel`.');
+  err(`  Or specify another port: (PowerShell: $env:RUNNER_PORT=3002; pnpm tunnel)`);
+  process.exit(1);
 }
 
 // ── 1. Ensure runner is built ──────────────────────────────────────────────
@@ -52,12 +114,12 @@ if (!noBuild && !existsSync(path.join(root, 'packages/runner/dist/cli.js'))) {
 }
 
 // ── 2. Start the Cloudflare tunnel ─────────────────────────────────────────
-log('Starting Cloudflare Quick Tunnel for http://localhost:3001…');
+log(`Starting Cloudflare Quick Tunnel for http://localhost:${port}…`);
 
 // On Windows, .cmd files require shell:true. To avoid DEP0190 (args + shell), we
 // build a single command string when on Windows.
 const tunnelCmd = isWin ? 'pnpm' : 'pnpm';
-const tunnelArgs = ['dlx', 'untun', 'tunnel', '--port', '3001', '--', '--http-host-header', 'localhost:3001'];
+const tunnelArgs = ['dlx', 'untun', 'tunnel', '--port', String(port), '--', '--http-host-header', `localhost:${port}`];
 const tunnelProc = spawn(tunnelCmd, tunnelArgs, {
   cwd: root,
   shell: isWin,
@@ -68,6 +130,11 @@ const tunnelProc = spawn(tunnelCmd, tunnelArgs, {
 let runnerProc = null;
 let tunnelUrl = null;
 let runnerStarted = false;
+let tunnelOutputBuffer = '';
+
+function stripAnsi(str) {
+  return str.replace(/\u001b\[[0-9;]*[a-zA-Z]|\u001b\].*?\u0007/g, '');
+}
 
 // ── 3. Watch tunnel output for the public URL ──────────────────────────────
 function onTunnelData(chunk) {
@@ -75,11 +142,18 @@ function onTunnelData(chunk) {
   process.stdout.write(text);
 
   if (!runnerStarted) {
-    const match = text.match(/Tunnel ready at (https?:\/\/\S+)/i);
+    tunnelOutputBuffer += text;
+    const clean = stripAnsi(tunnelOutputBuffer);
+    const match = clean.match(/Tunnel ready at\s+(https?:\/\/[^\s\x1b]+)/i) || clean.match(/(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/i);
     if (match) {
-      tunnelUrl = match[1].trim();
-      runnerStarted = true;
-      startRunner(tunnelUrl);
+      try {
+        const cleanOrigin = new URL(match[1].trim()).origin;
+        tunnelUrl = cleanOrigin;
+        runnerStarted = true;
+        startRunner(tunnelUrl);
+      } catch {
+        // Continue buffering if URL parsing fails on partial chunk
+      }
     }
   }
 }
@@ -108,8 +182,12 @@ function startRunner(origin) {
     stdio: 'inherit',
     env: {
       ...process.env,
+      RUNNER_PORT: String(port),
       RUNNER_ALLOWED_ORIGINS: origin,
       RUNNER_ACCESS_TOKEN: accessKey,
+      ...(beta ? { RUNNER_BETA: '1', OPENROUTER_API_KEY: '', ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '' } : {}),
+      RUNNER_DATA_DIR: tunnelDataDir,
+      RUNNER_OUTPUT_DIR: tunnelOutputDir,
     },
   });
 
@@ -120,10 +198,16 @@ function startRunner(origin) {
     shutdown();
   });
 
-  log(`\n  Local:  \x1b[32mhttp://localhost:3001/?access=${accessKey}\x1b[0m`);
+  log(`\n  Local:  \x1b[32mhttp://localhost:${port}/?access=${accessKey}\x1b[0m`);
   log(`  Public: \x1b[32m${origin}/?access=${accessKey}\x1b[0m\n`);
-  log('Anyone with the public link can use this QA Tool, including your saved AI key and sign-ins.');
-  log('Share it only with people you trust. Ctrl-C ends the tunnel, and the key stops working.\n');
+  if (beta) {
+    log('BETA: each tester adds their own AI key in Settings (kept in memory for their session only).');
+    log('Only public sites can be checked, one check-up runs at a time, and your own key is not used.');
+    log('Give testers the Public link only. Everyone who has it sees the same reports.\n');
+  } else {
+    log('Shared tunnel link opens a fresh, clean check-up session powered by your AI key.');
+    log('Your local check-up history, stored plans and saved sign-ins remain private.\n');
+  }
 }
 
 // ── 5. Graceful shutdown ───────────────────────────────────────────────────
@@ -134,6 +218,12 @@ function shutdown() {
   log('Shutting down…');
   try { tunnelProc?.kill(); } catch {}
   try { runnerProc?.kill(); } catch {}
+  if (!keepData) {
+    try {
+      if (existsSync(tunnelDataDir)) rmSync(tunnelDataDir, { recursive: true, force: true });
+      if (existsSync(tunnelOutputDir)) rmSync(tunnelOutputDir, { recursive: true, force: true });
+    } catch {}
+  }
 }
 
 process.on('SIGINT', shutdown);

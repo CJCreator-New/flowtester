@@ -8,9 +8,23 @@ const dataDir = process.env.RUNNER_DATA_DIR || undefined;
 const localhostAlias = process.env.RUNNER_LOCALHOST_ALIAS || undefined;
 const hubUrl = process.env.HUB_API_URL || undefined;
 const allowedOrigins = process.env.RUNNER_ALLOWED_ORIGINS
-  ? process.env.RUNNER_ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+  ? process.env.RUNNER_ALLOWED_ORIGINS.split(',')
+      .map((o) => {
+        const clean = o.replace(/\u001b\[[0-9;]*[a-zA-Z]|\u001b\].*?\u0007/g, '').trim();
+        try {
+          return new URL(clean).origin;
+        } catch {
+          return clean;
+        }
+      })
+      .filter(Boolean)
   : undefined;
 const accessToken = process.env.RUNNER_ACCESS_TOKEN || undefined;
+const beta = process.env.RUNNER_BETA === '1';
+
+if (beta && !accessToken) {
+  console.warn('[Release check-up] RUNNER_BETA is set without RUNNER_ACCESS_TOKEN: anyone who can reach this server can use it.');
+}
 
 if (allowedOrigins && !accessToken) {
   console.warn(
@@ -27,6 +41,7 @@ const server = new RunnerServer({
   hubUrl,
   allowedOrigins,
   accessToken,
+  beta,
   ui: defaultUiApps(),
 });
 

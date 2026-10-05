@@ -98,6 +98,7 @@ import {
   type OrchestratorEvent,
 } from '@qa/core';
 import { SchedulerManager, type CheckupSchedule } from './scheduler.js';
+import { SessionKeyResolver, enterSession, refusedTarget, sessionFor } from './beta.js';
 
 function isInside(dir: string, file: string): boolean {
   const rel = path.relative(dir, file);
@@ -123,6 +124,9 @@ async function exists(file: string): Promise<boolean> {
     () => false
   );
 }
+
+/** The largest JSON request accepted (characters). Plans are the biggest, and stay far below this. */
+const MAX_BODY_CHARS = 5_000_000;
 
 /** Check-ups kept per site; older ones are deleted after each run. Their grade history is kept. */
 const RUNS_KEPT_PER_SITE = 10;
@@ -274,6 +278,12 @@ export interface RunnerServerOptions {
    * computer's pages from anyone else's.
    */
   accessToken?: string;
+  /**
+   * Beta mode (RUNNER_BETA=1), for a runner shared with a few outside testers: each tester's AI key and
+   * sign-ins live in memory for their session only, only public sites can be checked, and the routes that
+   * change what other testers see (deleting check-ups, schedules, comparisons) are closed.
+   */
+  beta?: boolean;
 }
 
 export interface TriggerRunBody {
@@ -467,6 +477,8 @@ export class RunnerServer {
   private localhostAlias?: string;
   private hostAliases: Record<string, string>;
   private keyResolver: KeyResolver;
+  /** Shared with outside testers: see RunnerServerOptions.beta. */
+  private beta: boolean;
   private openRouter: OpenRouterClient;
   private makeAIProvider: (provider: AIProviderType, apiKey: string, model?: string) => AIProvider;
   private uiApps: UiApp[];
@@ -528,13 +540,23 @@ export class RunnerServer {
     this.aiModelsFile = path.join(this.dataDir, '.qa-ai-models.json');
     this.modelRecordFile = path.join(this.dataDir, '.qa-ai-model-record.json');
     this.defaultsFile = path.join(this.dataDir, '.qa-settings.json');
-    this.keyResolver = options.keyResolver || new KeyResolver(this.dataDir);
+    this.beta = !!options.beta;
+    this.keyResolver = options.keyResolver || (this.beta ? new SessionKeyResolver() : new KeyResolver(this.dataDir));
     this.openRouter = options.openRouter || new OpenRouterClient();
     this.makeAIProvider =
       options.createAIProvider || ((provider, apiKey, model) => createAIProvider(provider, apiKey, undefined, model));
     this.uiApps = options.ui || [];
     this.hubUrl = options.hubUrl?.replace(/\/+$/, '') || undefined;
-    this.allowedOrigins = new Set((options.allowedOrigins || []).map((o) => o.replace(/\/+$/, '')));
+    this.allowedOrigins = new Set(
+      (options.allowedOrigins || []).map((o) => {
+        const clean = o.replace(/\u001b\[[0-9;]*[a-zA-Z]|\u001b\].*?\u0007/g, '').trim().replace(/\/+$/, '');
+        try {
+          return new URL(clean).origin;
+        } catch {
+          return clean;
+        }
+      })
+    );
     this.accessToken = options.accessToken || undefined;
   }
 
@@ -586,7 +608,12 @@ export class RunnerServer {
     if (req.method === 'GET' && matchesSecret(url.searchParams.get('access'), key)) {
       url.searchParams.delete('access');
       // Secure only when the visit was https (a tunnel says so): plain-http localhost would drop the cookie.
-      const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+      const proto = req.headers['x-forwarded-proto'];
+      const isHttps =
+        (Array.isArray(proto) ? proto[0] : proto)?.includes('https') ||
+        (typeof req.headers['cf-visitor'] === 'string' && req.headers['cf-visitor'].includes('https')) ||
+        Array.from(this.allowedOrigins).some((o) => o.startsWith('https://'));
+      const secure = isHttps ? '; Secure' : '';
       res.writeHead(303, {
         'Set-Cookie': `${ACCESS_COOKIE}=${encodeURIComponent(key)}; Path=/; HttpOnly; SameSite=Lax${secure}`,
         Location: `${url.pathname}${url.search}`,
@@ -616,11 +643,23 @@ export class RunnerServer {
           const url = new URL(req.url || '/', `http://${this.host}:${this.port}`);
           const pathname = url.pathname;
 
-          // Only this computer's own names are answered, so a page can't point a name it controls at
-          // this port (DNS rebinding) and read reports and evidence as if it were this computer.
-          if (!isLoopbackHost(req.headers.host)) {
+          // Only this computer's own names (or explicitly allowed tunnel origins) are answered,
+          // so a page can't point a name it controls at this port (DNS rebinding) and read reports.
+          const hostHeader = req.headers.host;
+          const isAllowedHost =
+            isLoopbackHost(hostHeader) ||
+            (hostHeader &&
+              Array.from(this.allowedOrigins).some((o) => {
+                try {
+                  return new URL(o).hostname.toLowerCase() === hostHeader.split(':')[0].toLowerCase();
+                } catch {
+                  return false;
+                }
+              }));
+
+          if (!isAllowedHost) {
             res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-            res.end(`Release check-up only answers on this computer. Open http://localhost:${this.port}/ instead.`);
+            res.end(`Release check-up only answers on this computer or allowed tunnel hosts. Open http://localhost:${this.port}/ instead.`);
             return;
           }
 
@@ -630,6 +669,7 @@ export class RunnerServer {
           const originNorm = origin ? origin.replace(/\/+$/, '') : undefined;
           if (origin && (isLoopbackOrigin(origin) || (originNorm && this.allowedOrigins.has(originNorm)))) {
             res.setHeader('Access-Control-Allow-Origin', origin);
+            res.setHeader('Access-Control-Allow-Credentials', 'true');
             res.setHeader('Vary', 'Origin');
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
             res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-QA-Access');
@@ -646,6 +686,15 @@ export class RunnerServer {
           }
 
           if (!this.grantAccess(req, res, url)) return;
+
+          if (this.beta) {
+            const proto = req.headers['x-forwarded-proto'];
+            enterSession(sessionFor(req, res, (Array.isArray(proto) ? proto[0] : proto)?.includes('https') ?? false));
+            if (this.closedInBeta(req.method, pathname)) {
+              this.sendJson(res, 403, { error: 'This is closed on the shared beta copy, so testers don’t change each other’s check-ups.', code: 'ERR_BETA' });
+              return;
+            }
+          }
 
           // /api/v1/* belongs to the Report Hub, a separate service: passed on when one is set up. So
           // does /hub, the Hub's own dashboard, whose buttons call /api/v1/* on this same address.
@@ -673,7 +722,8 @@ export class RunnerServer {
             res.writeHead(200, {
               'Content-Type': 'text/event-stream',
               'Cache-Control': 'no-cache, no-transform',
-              Connection: 'keep-alive',
+              'Connection': 'keep-alive',
+              'X-Accel-Buffering': 'no',
             });
             res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
             // A page that opens or reconnects mid-run catches up: this run's events so far, in order.
@@ -1000,8 +1050,25 @@ export class RunnerServer {
     let body = '';
     for await (const chunk of req) {
       body += chunk;
+      if (body.length > MAX_BODY_CHARS) throw new Error('Request body too large');
     }
     return JSON.parse(body) as T;
+  }
+
+  /** Routes that change what every tester sees; shut on a beta copy. */
+  private closedInBeta(method: string | undefined, pathname: string): boolean {
+    if (pathname === '/api/runner/benchmark') return true;
+    if (pathname.startsWith('/api/runner/schedules') && method !== 'GET') return true;
+    return method === 'DELETE' && (pathname.startsWith('/api/runs/') || pathname.startsWith('/api/runner/baselines/'));
+  }
+
+  /** Beta only: answers 400 and returns true when a tester asked for an address that isn't on the public internet. */
+  private async refuseTarget(res: http.ServerResponse, address: string | undefined): Promise<boolean> {
+    if (!this.beta || !address) return false;
+    const reason = await refusedTarget(address);
+    if (!reason) return false;
+    this.sendJson(res, 400, { reachable: false, reason: 'private-address', code: 'ERR_PRIVATE_TARGET', error: reason, suggestion: reason });
+    return true;
   }
 
   private sendJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -1041,6 +1108,8 @@ export class RunnerServer {
       });
       return;
     }
+
+    if (await this.refuseTarget(res, targetUrl)) return;
 
     // Said before the scan: whether this address can be tested fully (a Test Copy), and what was
     // chosen for the site last time, so the screen can start from it.
@@ -1871,9 +1940,9 @@ export class RunnerServer {
   private async handleTriggerRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (this.phase === 'scanning' || this.phase === 'testing') {
       this.sendJson(res, 409, {
-        error: 'Another check-up is running. Wait for it to finish, or stop it first.',
+        error: this.beta ? 'Someone else is running a check-up on this shared copy. Try again in a few minutes.' : 'Another check-up is running. Wait for it to finish, or stop it first.',
         code: 'ERR_RUN_IN_PROGRESS',
-        suggestion: 'Wait for the check-up in progress to finish, or stop it, then start this one.',
+        suggestion: this.beta ? 'Only one check-up runs at a time here. Try again in a few minutes.' : 'Wait for the check-up in progress to finish, or stop it, then start this one.',
       });
       return;
     }
@@ -1904,6 +1973,8 @@ export class RunnerServer {
       );
       return;
     }
+
+    if (await this.refuseTarget(res, body.targetUrl)) return;
 
     // A plan waiting for review is kept aside when another site is checked (one waiting plan per
     // site). Only a new check-up of the same site throws it away, so the caller has to say so.
@@ -3106,6 +3177,7 @@ export class RunnerServer {
       return;
     }
     const origin = new URL(link.to).origin;
+    if (await this.refuseTarget(res, origin)) return;
     await this.startPlanUpdate(res, `Adding ${other.host}`, async (rec, ai, report) => {
       report(`Exploring ${other.host}`);
       const crawled = await this.crawlMore(rec, `${origin}/`, {

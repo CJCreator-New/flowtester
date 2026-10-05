@@ -231,6 +231,25 @@ pnpm dev   # http://localhost:3002, API calls passed on to the QA Tool on 3001
 
 ---
 
+### Sharing with a few testers (beta)
+
+For two to four people you know. Your computer runs the checks and stays on while they test.
+
+```bash
+pnpm tunnel --beta
+```
+
+It prints a **Public** link. Send each tester that link (it carries a private access key, new each time you start). Then:
+
+- Each tester adds **their own AI key** in Settings. It is kept in memory for their session only: never saved to disk, never shared with other testers, gone when you stop the tunnel. Your own saved key and sign-ins are not used.
+- Only **public sites** can be checked. Addresses on your computer or network (`localhost`, `192.168.x.x`) are refused.
+- One check-up runs at a time. Everyone with the link sees the same reports, and deleting check-ups, schedules and comparisons are closed.
+- Testers should only check sites they own. Do not give the link to strangers: there are no accounts or usage limits.
+
+Without `--beta`, `pnpm tunnel` shares **your** saved AI key with whoever has the link.
+
+---
+
 ## 🧪 End-to-End (E2E) Testing Guide
 
 Follow this walkthrough to run and verify a complete test flow end-to-end against the built-in test application.

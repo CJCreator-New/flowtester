@@ -10,12 +10,14 @@ dist/
 
 # The runner's data folder: site memory and history, the saved key's models, a waiting plan
 .qa-data/
+.qa-tunnel-data/
 # Where site data lived before .qa-data/ (the runner moves it there on start)
 /sites/
 
 # Run output (approved .qa-baselines/ are committed)
 .qa-report/
 .qa-runner-report/
+.qa-tunnel-report/
 .qa-compare/
 .qa-cache/
 .qa-hub-storage/
