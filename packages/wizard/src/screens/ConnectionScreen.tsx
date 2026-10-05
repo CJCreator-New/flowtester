@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Lead, Question } from '../components/text';
 import { useDocumentTitle } from '../lib/title';
-import { actionsPageFor, workflowFor, WORKFLOW_PATH } from '../lib/workflow';
+import { actionsPageFor, ONLINE_APP_URL, workflowFor, WORKFLOW_PATH } from '../lib/workflow';
 
 /**
  * Shown when no QA Tool answers this page. Opened from the QA Tool itself that is rare. Opened from
@@ -32,6 +32,21 @@ export function ConnectionScreen({ checks }: { checks: number }) {
       <Lead>
         Release check-up tests a site in a real browser and tells you whether it is ready to release. Pick where it runs.
       </Lead>
+
+      {ONLINE_APP_URL && (
+        <>
+          <h2 className="mb-2 text-lg font-bold">Online: nothing to install</h2>
+          <p className="mb-4 max-w-prose text-ink-soft">
+            Open the full app, add your own AI key in Settings, and check a public site. Your key is kept in memory for your visit only. It is a free shared copy: it sleeps when nobody is using it, so
+            the first page can take about a minute, and only one check-up runs at a time. Sites on your own computer or network can&rsquo;t be reached from here: use one of the options below for those.
+          </p>
+          <p className="mb-10">
+            <a className="btn-primary inline-block" href={ONLINE_APP_URL} rel="noreferrer">
+              Open the online app
+            </a>
+          </p>
+        </>
+      )}
 
       <h2 className="mb-2 text-lg font-bold">In your GitHub repo: nothing to install</h2>
       <p className="mb-4 max-w-prose text-ink-soft">

@@ -231,6 +231,18 @@ pnpm dev   # http://localhost:3002, API calls passed on to the QA Tool on 3001
 
 ---
 
+### Publish the full app online (free, shared beta)
+
+`render.yaml` publishes the runner and wizard together on Render's free plan, so people open one link, add their **own** AI key, and check a public site. Each visitor's key stays in memory for their session only, and only public sites can be checked.
+
+1. On [render.com](https://render.com), choose **New, Blueprint**, and pick this repo. No card is needed for the free plan.
+2. When it is live, copy its address (for example `https://qa-check-up.onrender.com`).
+3. In the GitHub repo, open **Settings, Secrets and variables, Actions, Variables** and add `ONLINE_APP_URL` with that address. Run **Publish wizard** again: the Pages site now shows an **Open the online app** button.
+
+The free plan has 512 MB of memory, sleeps after 15 minutes idle (the first visit then takes about a minute) and runs one check-up at a time. A big site can run out of memory. There are no accounts or limits, so treat it as a beta.
+
+---
+
 ### Run it in your own GitHub repo (nothing to install)
 
 Open the wizard where it is published on GitHub Pages and choose **In your GitHub repo**. It gives you a workflow file (the same one as [templates/qa-check.yml](templates/qa-check.yml)) to save as `.github/workflows/qa-check.yml`. Then:

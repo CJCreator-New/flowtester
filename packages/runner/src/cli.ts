@@ -1,14 +1,17 @@
 import { RunnerServer } from './server.js';
 import { defaultUiApps } from './ui-static.js';
 
-const port = parseInt(process.env.RUNNER_PORT || '3001', 10);
+// Render says which port to listen on with PORT. It is only trusted there, so a PORT set in someone's shell can't move a local runner.
+const port = parseInt((process.env.RENDER && process.env.PORT) || process.env.RUNNER_PORT || '3001', 10);
 const host = process.env.RUNNER_HOST || 'localhost';
 const outputDir = process.env.RUNNER_OUTPUT_DIR || undefined;
 const dataDir = process.env.RUNNER_DATA_DIR || undefined;
 const localhostAlias = process.env.RUNNER_LOCALHOST_ALIAS || undefined;
 const hubUrl = process.env.HUB_API_URL || undefined;
-const allowedOrigins = process.env.RUNNER_ALLOWED_ORIGINS
-  ? process.env.RUNNER_ALLOWED_ORIGINS.split(',')
+// On Render the service's own public address is allowed without setting it by hand.
+const originList = [process.env.RUNNER_ALLOWED_ORIGINS, process.env.RENDER_EXTERNAL_URL].filter(Boolean).join(',');
+const allowedOrigins = originList
+  ? originList.split(',')
       .map((o) => {
         const clean = o.replace(/\u001b\[[0-9;]*[a-zA-Z]|\u001b\].*?\u0007/g, '').trim();
         try {

@@ -36,6 +36,8 @@ jobs:
         run: pnpm --filter @qa/wizard run build
         env:
           VITE_BASE: /${{ github.event.repository.name }}/
+          # The shared online copy, once published (Settings, Secrets and variables, Actions, Variables).
+          VITE_ONLINE_APP_URL: ${{ vars.ONLINE_APP_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: packages/wizard/dist

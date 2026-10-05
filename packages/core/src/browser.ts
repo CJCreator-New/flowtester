@@ -29,7 +29,8 @@ export class BrowserManager {
     if (!this.browser) {
       this.browser = await chromium.launch({
         headless,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+        // Small hosts have little memory: no GPU process or extensions to hold on to.
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-extensions'],
       });
     }
     return this.browser;

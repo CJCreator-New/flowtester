@@ -23,6 +23,17 @@ We rejected, for now:
 
 `pnpm tunnel` stays as the way to share a runner on someone's own computer with a few testers. It is local-only, not hosting, and its beta mode rules (their own key, public sites only) are unchanged.
 
+## Amendment, 2026-10-05: an online copy as well (Option B, beta)
+Opening the published wizard showed setup instructions, not the app. The wanted experience is the local one: add your own AI key, enter a site, test it. A static page cannot do that, so the full app (runner and wizard, in one container) is also published online, as a shared beta copy (`render.yaml`, beta mode: each visitor's key is kept in memory for their session, only public sites can be checked, one check-up at a time). The Pages site links to it. The GitHub Actions route and running on your own computer stay as the fallbacks, and are the way to check private or localhost sites.
+
+Free hosts, checked 2026-10-05, for a container that runs Chromium and needs no card:
+- **Render free:** 512 MB RAM, shared CPU, 750 hours a month, asleep after 15 minutes idle (about a minute to wake). The only one that fits, and 512 MB is tight for Chromium: a large site may run out of memory.
+- **Hugging Face Spaces:** Docker Spaces now need a paid plan. Rejected.
+- **Fly.io:** no free tier for new accounts. Rejected.
+- **Koyeb:** the card-free plan was removed in February 2026. Rejected.
+
+The online copy has no accounts and no usage limits, so anyone with the link can use it. It stays a beta until the abuse and memory limits are known.
+
 ## Consequences
 - The user needs a GitHub repo, and a CI minute budget. A run takes a few minutes to install and build the tool before testing starts, which is part of the 15-minute target to measure.
 - The workflow checks out this repo's `main`. Until releases are pinned, a change here reaches every workflow on its next run. Pin a tag once there is one.

@@ -48,6 +48,13 @@ This file has two parts. **Section 2 is the plan**: phases in order, each with a
 - [ ] Hosting cost is $0, with no card on file. *By design; confirm when Pages is enabled.*
 - [ ] A run on a private preview URL works. *Not tried.*
 
+### Phase 1: the online copy (added after the first Pages review)
+The published wizard showed setup instructions instead of the app. The full app is now also set up to run online (Option B, beta), alongside the Actions route:
+- `render.yaml` (Render free plan, beta mode), a `/healthz` check for the host, `PORT` and `RENDER_EXTERNAL_URL` support in the runner, and lighter Chromium flags for small hosts.
+- The Pages landing screen shows **Open the online app** when `ONLINE_APP_URL` is set as a repo variable.
+- Free-host research is in ADR 0012: only Render's free plan fits (512 MB, sleeps when idle). Hugging Face Docker Spaces, Fly.io and Koyeb no longer have a free option without paying or a card.
+- **Not done:** the Render service has not been created, and nothing has run on it. Whether Chromium fits in 512 MB is unknown and must be tried with a real site.
+
 ### Phase 1: open items
 - **To do by hand:** push this branch, enable Pages (Settings, Pages, Source: GitHub Actions), set a repo secret, and run the workflow once on a real site. Record the minutes and memory it uses here, and in ADR 0012.
 - **The repo must be public** (or the workflow given a token) for another user's job to download the tool. Decide this before sharing the template.

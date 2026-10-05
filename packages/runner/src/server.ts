@@ -643,6 +643,13 @@ export class RunnerServer {
           const url = new URL(req.url || '/', `http://${this.host}:${this.port}`);
           const pathname = url.pathname;
 
+          // A host's health check asks this and nothing else: it says the server is up and shows no data.
+          if (pathname === '/healthz') {
+            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('ok');
+            return;
+          }
+
           // Only this computer's own names (or explicitly allowed tunnel origins) are answered,
           // so a page can't point a name it controls at this port (DNS rebinding) and read reports.
           const hostHeader = req.headers.host;
