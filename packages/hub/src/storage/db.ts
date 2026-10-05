@@ -42,6 +42,8 @@ export interface HubRunRecord {
   durationMs: number;
   createdAt: string;
   status: 'pending' | 'completed';
+  /** Flows in this run that failed once and passed on a clean retry. */
+  flakyFlowsCount?: number;
 }
 
 export interface HubEvidenceRecord {
@@ -70,7 +72,7 @@ export interface IHubDatabase {
   // Runs
   createRun(run: HubRunRecord): Promise<void>;
   getRun(runId: string): Promise<HubRunRecord | null>;
-  updateRunStatus(runId: string, status: 'pending' | 'completed', durationMs?: number): Promise<void>;
+  updateRunStatus(runId: string, status: 'pending' | 'completed', durationMs?: number, flakyFlowsCount?: number): Promise<void>;
   listRunsForRelease(releaseId: string): Promise<HubRunRecord[]>;
 
   // Evidence
@@ -165,12 +167,15 @@ export class MemoryHubDatabase implements IHubDatabase {
     return this.runs.get(runId) || null;
   }
 
-  async updateRunStatus(runId: string, status: 'pending' | 'completed', durationMs?: number): Promise<void> {
+  async updateRunStatus(runId: string, status: 'pending' | 'completed', durationMs?: number, flakyFlowsCount?: number): Promise<void> {
     const run = this.runs.get(runId);
     if (run) {
       run.status = status;
       if (durationMs !== undefined) {
         run.durationMs = durationMs;
+      }
+      if (flakyFlowsCount !== undefined) {
+        run.flakyFlowsCount = flakyFlowsCount;
       }
     }
   }
@@ -233,7 +238,7 @@ export class MemoryHubDatabase implements IHubDatabase {
       verifiedFixed: findings.filter((f) => f.status === 'VERIFIED_FIXED').length,
       regressed: findings.filter((f) => f.status === 'REGRESSED').length,
       acceptedRisk: findings.filter((f) => f.status === 'ACCEPTED_RISK').length,
-      flakyFlowsCount: 0,
+      flakyFlowsCount: runs.reduce((n, r) => n + (r.flakyFlowsCount ?? 0), 0),
     };
 
     return {
@@ -309,6 +314,7 @@ export class PostgresHubDatabase implements IHubDatabase {
         status TEXT NOT NULL DEFAULT 'pending',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS flaky_flows_count INTEGER NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS evidence_artifacts (
         id TEXT PRIMARY KEY,
@@ -499,12 +505,15 @@ export class PostgresHubDatabase implements IHubDatabase {
     };
   }
 
-  async updateRunStatus(runId: string, status: 'pending' | 'completed', durationMs?: number): Promise<void> {
+  async updateRunStatus(runId: string, status: 'pending' | 'completed', durationMs?: number, flakyFlowsCount?: number): Promise<void> {
     await this.ensureSchema();
     if (durationMs !== undefined) {
       await this.pool.query(`UPDATE test_runs SET status = $1, duration_ms = $2 WHERE id = $3`, [status, durationMs, runId]);
     } else {
       await this.pool.query(`UPDATE test_runs SET status = $1 WHERE id = $2`, [status, runId]);
+    }
+    if (flakyFlowsCount !== undefined) {
+      await this.pool.query(`UPDATE test_runs SET flaky_flows_count = $1 WHERE id = $2`, [flakyFlowsCount, runId]);
     }
   }
 
@@ -513,7 +522,7 @@ export class PostgresHubDatabase implements IHubDatabase {
     const res = await this.pool.query(
       `SELECT id, release_id as "releaseId", product_id as "productId", developer_id as "developerId",
               machine_id as "machineId", commit_hash as "commitHash", duration_ms as "durationMs",
-              status, created_at as "createdAt"
+              status, created_at as "createdAt", flaky_flows_count as "flakyFlowsCount"
        FROM test_runs WHERE release_id = $1 ORDER BY created_at DESC`,
       [releaseId]
     );
@@ -527,6 +536,7 @@ export class PostgresHubDatabase implements IHubDatabase {
       durationMs: row.durationMs,
       status: row.status,
       createdAt: new Date(row.createdAt).toISOString(),
+      flakyFlowsCount: row.flakyFlowsCount ?? 0,
     }));
   }
 
@@ -642,7 +652,7 @@ export class PostgresHubDatabase implements IHubDatabase {
       verifiedFixed: findings.filter((f) => f.status === 'VERIFIED_FIXED').length,
       regressed: findings.filter((f) => f.status === 'REGRESSED').length,
       acceptedRisk: findings.filter((f) => f.status === 'ACCEPTED_RISK').length,
-      flakyFlowsCount: 0,
+      flakyFlowsCount: runs.reduce((n, r) => n + (r.flakyFlowsCount ?? 0), 0),
     };
 
     return {

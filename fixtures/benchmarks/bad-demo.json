@@ -6,7 +6,7 @@
     {
       "id": "accessibility",
       "what": "The W3C built these pages to fail accessibility rules, so every WCAG violation on them is real",
-      "match": [{ "checker": "ux-quality", "titleIncludes": "WCAG Violation" }]
+      "match": [{ "checker": "ux-quality", "titleIncludes": "violation:" }]
     },
     {
       "id": "analytics-404",

@@ -183,4 +183,69 @@ describe('SecurityChecker', () => {
     expect(findings.some((f) => f.title.includes('missing the Secure flag'))).toBe(true);
     expect(findings.some((f) => f.title.includes('missing HttpOnly flag'))).toBe(true);
   });
+
+  describe('SameSite cookies', () => {
+    const run = async (cookie: Record<string, unknown>) => {
+      const mockPage = {
+        url: () => 'https://example.com/',
+        evaluate: async () => [],
+        context: () => ({ cookies: async () => [cookie] }),
+      } as unknown as Page;
+      const findings = await checker.checkPage(mockPage, { role: 'visitor', breakpoint: '1440px', urlPath: '/' });
+      return findings.filter((f) => f.title.includes('SameSite'));
+    };
+
+    it('flags SameSite=None on a Secure cookie', async () => {
+      const found = await run({ name: 'prefs', secure: true, httpOnly: true, sameSite: 'None' });
+      expect(found).toHaveLength(1);
+      expect(found[0].severity).toBe('Minor');
+    });
+
+    it('rates SameSite=None on a Secure session cookie as Major', async () => {
+      const found = await run({ name: 'session_id', secure: true, httpOnly: true, sameSite: 'None' });
+      expect(found[0].severity).toBe('Major');
+    });
+
+    it('rates SameSite=None without Secure as Major', async () => {
+      const found = await run({ name: 'prefs', secure: false, httpOnly: true, sameSite: 'None' });
+      expect(found[0].title).toContain('without Secure');
+      expect(found[0].severity).toBe('Major');
+    });
+
+    it('leaves SameSite=Lax alone', async () => {
+      expect(await run({ name: 'prefs', secure: true, httpOnly: true, sameSite: 'Lax' })).toHaveLength(0);
+    });
+  });
+
+  describe('mixed content from CSS and scripts', () => {
+    let browser: Browser;
+    beforeAll(async () => {
+      browser = await chromium.launch();
+    });
+    afterAll(async () => {
+      await browser.close();
+    });
+
+    it('flags an http:// request the page made that no HTML attribute shows', async () => {
+      const page = await (await browser.newContext()).newPage();
+      try {
+        await page.route('**/*', (route) => {
+          const url = route.request().url();
+          if (url === 'https://secure.test/') {
+            return route.fulfill({
+              contentType: 'text/html',
+              body: '<html><body><script>fetch("http://plain.test/data.json").catch(()=>{})</script></body></html>',
+            });
+          }
+          return route.fulfill({ status: 200, contentType: 'application/json', body: '{}', headers: { 'access-control-allow-origin': '*' } });
+        });
+        await page.goto('https://secure.test/');
+        await page.waitForTimeout(300);
+        const findings = await checker.checkPage(page, { role: 'visitor', breakpoint: '1440px', urlPath: '/' });
+        expect(findings.some((f) => f.expectedVsActual.actual.includes('http://plain.test/data.json'))).toBe(true);
+      } finally {
+        await page.context().close();
+      }
+    });
+  });
 });

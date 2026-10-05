@@ -81,7 +81,7 @@ flowchart TD
 1. **AI Discovery Agent**: Crawls the whole site (up to 200 pages), records which page links to which, and has the AI plan every page, link and journey from what it found (see [ADR 0009](docs/adr/0009-ai-plans-every-plan-item.md)).
 2. **Complete plan review**: The plan lists everything a run will do and what won't run, and is exactly what runs. Review it, change it and approve it before anything is tested.
 3. **Deterministic Checkers**:
-   - **Accessibility**: WCAG 2.1 AA audits via `axe-core`.
+   - **Accessibility**: WCAG 2.2 AA audits via `axe-core`.
    - **Design Token Conformance**: Validates live `getComputedStyle()` against committed `design-tokens.json` (colors, radii, typography).
    - **Visual Baselines**: Perceptual visual diffing across multiple breakpoints (`375px`, `768px`, `1440px`).
    - **Runtime Health**: Intercepts unhandled console errors and failed HTTP network calls.
@@ -231,7 +231,27 @@ pnpm dev   # http://localhost:3002, API calls passed on to the QA Tool on 3001
 
 ---
 
+### Run it in your own GitHub repo (nothing to install)
+
+Open the wizard where it is published on GitHub Pages and choose **In your GitHub repo**. It gives you a workflow file (the same one as [templates/qa-check.yml](templates/qa-check.yml)) to save as `.github/workflows/qa-check.yml`. Then:
+
+1. Add your AI key as a repo secret named `QA_AI_API_KEY` (optional: without it the plan is written by fixed rules).
+2. Run **QA check-up** from the Actions tab and type the address. It also runs when a preview or staging deployment succeeds.
+3. The verdict is on the run's summary page. Download the **qa-report** artifact and open `report.html`.
+
+It runs on your own Actions minutes (free for public repos, 2,000 a month for private repos on the free plan). A preview or staging address is tested as a test copy; any other address is checked read-only. To run the same thing yourself:
+
+```bash
+node packages/runner/dist/checkup.js https://preview.example.com --staging --fail-on blocker
+```
+
+See [ADR 0012](docs/adr/0012-hosted-runner-github-actions.md) for why.
+
+---
+
 ### Sharing with a few testers (beta)
+
+`pnpm tunnel` is for sharing your own computer with testers. It is not hosting.
 
 For two to four people you know. Your computer runs the checks and stays on while they test.
 
@@ -286,7 +306,7 @@ node packages/cli/dist/index.js run \
 2. Authenticates as user `manager@example.com` (from `fixtures/config.yaml`).
 3. Executes test cases in `fixtures/spec.json` (Create Invoice, Health Telemetry).
 4. Runs automated checkers:
-   - Validates WCAG 2.1 AA accessibility via `axe-core`.
+   - Validates WCAG 2.2 AA accessibility via `axe-core`.
    - Runs checks at `375px`, `768px`, and `1440px` viewports.
    - Detects the simulated 500 API call and runtime errors.
 5. Saves detailed output to `.qa-report/`:

@@ -76,6 +76,7 @@ export async function pushRunToHub(
     testPoints: report.results,
     findings: report.findings,
     evidenceUploaded: [],
+    retryTelemetry: report.results.flatMap((r) => (r.retry ? [r.retry] : [])),
   };
 
   const uploadRes = await hubClient.uploadRun(initPayload, finalizePayload, evidenceFiles);

@@ -61,7 +61,7 @@ Modern web application releases frequently falter at the final mile. Engineering
 ### Core Value Proposition
 - **Autonomous Discovery**: No test scripts required to start. A deterministic spider maps routes, elements, buttons, and links up to 200 pages, feeding structured facts to an AI planner.
 - **Strict Safety & Human Oversight**: Live production sites are strictly read-only. Test copies (local, dev tunnel, staging) allow interactive form submissions. **Nothing executes without human approval of the test plan**.
-- **Six-Pillar Quality Audit**: Audits functionality, accessibility (WCAG 2.1 AA via `axe-core`), speed/mobile readiness, search/AI discoverability (SEO, AEO, GEO), security/RBAC permissions, and design system fidelity.
+- **Six-Pillar Quality Audit**: Audits functionality, accessibility (WCAG 2.2 AA via `axe-core`), speed/mobile readiness, search/AI discoverability (SEO, AEO, GEO), security/RBAC permissions, and design system fidelity.
 - **Two-in-One Dual Experience**: Plain English summaries and letter grades (A–F) for product managers and leadership, with deep technical diagnostics (Playwright code snippets, repro scripts, console logs, and one-click verification commands) for engineers.
 - **Deterministic Deduplication & Central Hub**: Normalizes findings via invariant Structural Fingerprints into a single centralized PostgreSQL/S3 Report Hub.
 
@@ -127,7 +127,7 @@ It adheres to four foundational architectural principles (codified in system Arc
 | **Product Managers & Release Leads** | High-level risk assessment, release readiness, and business impact. | Unambiguous rubber stamp (**Ready to release** / **Not ready yet**), A–F letter grades across 6 quality areas, and plain-language summaries of problems without jargon. |
 | **Frontend & Fullstack Developers** | Exact reproduction steps, code locations, and technical logs. | Collapsible "Details for developers" under every finding, including DOM selectors, failing network requests, console stack traces, copy-paste Playwright test code, and direct CLI repro commands (`qa-test verify <id>`). |
 | **QA Automation Engineers** | Reusable specifications, determinism, and regression tracking. | AI-generated specifications (`qa.spec.json`), cross-breakpoint testing (375px, 768px, 1440px), visual baseline comparisons, and exportable markdown test plans. |
-| **Designers & Brand Custodians** | Visual polish, brand consistency, and accessibility compliance. | Automated WCAG 2.1 AA audits, live `getComputedStyle()` comparison against Figma tokens (`design-tokens.json`), and perceptual visual regression diffs (`pixelmatch`). |
+| **Designers & Brand Custodians** | Visual polish, brand consistency, and accessibility (automatic checks only). | Automated WCAG 2.2 AA audits, live `getComputedStyle()` comparison against Figma tokens (`design-tokens.json`), and perceptual visual regression diffs (`pixelmatch`). |
 
 ---
 
@@ -157,7 +157,7 @@ mindmap
       Dead-End Route Detection
       Spec Assertion Conformance
     Accessible
-      axe-core WCAG 2.1 AA
+      axe-core WCAG 2.2 AA
       Touch Target Sizing >= 24px/44px
       Color Contrast Ratios
       Screen Reader Landmark & Alt Text
@@ -186,7 +186,7 @@ mindmap
    - Catches unhandled browser console errors, failed background AJAX/fetch calls (HTTP 4xx, 5xx), broken navigation links, and dead-end pages.
    - Evaluates custom business expectations (URL transitions, text presence, element states).
 2. **Accessible (`ux-quality`)**:
-   - Executes automated WCAG 2.1 AA evaluations using `axe-core`.
+   - Executes automated WCAG 2.2 AA evaluations using `axe-core`.
    - Flags mobile usability issues: tap targets smaller than 24×24px (or 44×44px for primary controls) and missing form labels.
 3. **Fast and Mobile (`performance`)**:
    - Evaluates Core Web Vitals (Largest Contentful Paint, Cumulative Layout Shift, Total Transfer Size).

@@ -51,7 +51,7 @@ export function renderHubDashboardHtml(report?: ConsolidatedReleaseReport | null
 
   <main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
     <!-- Metric Cards -->
-    <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
       <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-5">
         <div class="text-xs uppercase font-medium text-slate-400">Total Canonical</div>
         <div class="text-3xl font-extrabold text-white mt-1">${summary.totalFindings}</div>
@@ -71,6 +71,10 @@ export function renderHubDashboardHtml(report?: ConsolidatedReleaseReport | null
       <div class="bg-blue-950/30 border border-blue-900/40 rounded-xl p-5">
         <div class="text-xs uppercase font-medium text-blue-400">Accepted Risk</div>
         <div class="text-3xl font-extrabold text-blue-400 mt-1">${summary.acceptedRisk}</div>
+      </div>
+      <div class="bg-violet-950/30 border border-violet-900/40 rounded-xl p-5" title="Flows that failed once and passed on a clean retry">
+        <div class="text-xs uppercase font-medium text-violet-400">Flaky Flows</div>
+        <div class="text-3xl font-extrabold text-violet-400 mt-1">${summary.flakyFlowsCount}</div>
       </div>
     </div>
 

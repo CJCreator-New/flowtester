@@ -198,6 +198,10 @@ export interface Finding {
     videoPath?: string;
     networkLogs?: NetworkEntry[];
     consoleLogs?: ConsoleEntry[];
+    /** Every element that broke the same rule on this page, when more than one did. */
+    allTargets?: string[];
+    /** Numbers behind a measured finding, such as per-run timings and their spread. */
+    measurements?: Record<string, unknown>;
   };
   resolution: string;
   verifyCommand: string;
@@ -287,6 +291,11 @@ export interface TestPointResult {
   breakpoint?: Breakpoint;
   /** Every check that ran, and how it went, so a report can list the passed ones too. */
   checks?: Array<{ checker: CheckerType; name: string; outcome: 'passed' | 'failed' | 'could-not-verify' }>;
+  /**
+   * Set when the steps failed at first and the flow passed on a clean second attempt. It still
+   * counts as passed, but is shown as unreliable.
+   */
+  retry?: RetryTelemetryEntry;
 }
 
 export interface RunCoverage {
@@ -296,6 +305,8 @@ export interface RunCoverage {
   blocked: number;
   skipped: number;
   couldNotVerify: number;
+  /** Test points that failed once, then passed on a clean retry. Already counted in `passed`. */
+  flakyFlows?: number;
   completionRate: number; // percentage
 }
 

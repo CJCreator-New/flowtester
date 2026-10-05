@@ -20,12 +20,12 @@
       "id": "tiny-target",
       "what": "A 20 × 20 px button on the dashboard",
       "planted": true,
-      "match": [{ "titleIncludes": "Touch target too small: X " }, { "titleIncludes": "(target-size)", "urlIncludes": "/dashboard" }]
+      "match": [{ "titleIncludes": "Touch target below WCAG 2.5.8 minimum: X " }, { "titleIncludes": "(target-size)", "urlIncludes": "/dashboard" }]
     },
     {
       "id": "small-text-links",
       "what": "Plain text links (the header menu, a Save button) are under 44 px tall on a phone",
-      "match": [{ "titleIncludes": "Touch target too small" }]
+      "match": [{ "titleIncludes": "Touch target" }]
     },
     {
       "id": "dead-end",

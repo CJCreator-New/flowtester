@@ -185,7 +185,7 @@ The committed specification of approved design tokens (`design-tokens.json`) sto
 _Avoid_: Figma cache, style reference
 
 **State-Aware UX Check**:
-An automated evaluation executed at discrete settled interaction points (e.g. post-click, open modal, invalid form submission) auditing accessibility (WCAG 2.1 AA via axe-core) and heuristic usability (target sizes, horizontal overflow, missing feedback).
+An automated evaluation executed at discrete settled interaction points (e.g. post-click, open modal, invalid form submission) auditing accessibility (WCAG 2.2 AA via axe-core) and heuristic usability (target sizes, horizontal overflow, missing feedback).
 _Avoid_: Page scan, static audit, visual lint
 
 **Interactive State**:

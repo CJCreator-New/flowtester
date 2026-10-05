@@ -185,7 +185,11 @@ export class HubServer {
               body
             );
 
-            await this.db.updateRunStatus(runId, 'completed', body.durationMs);
+            // Count each flow once, however many times it was retried.
+            const flakyFlowsCount = new Set(
+              (body.retryTelemetry ?? []).filter((t) => t.status === 'FLAKY_PASSED').map((t) => `${t.flowId}|${t.testCaseId}`)
+            ).size;
+            await this.db.updateRunStatus(runId, 'completed', body.durationMs, flakyFlowsCount);
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: true, ...dedupeResults }));

@@ -133,6 +133,12 @@ export class ReportGenerator {
       `| **${coverage.totalTestPoints}** | ✅ ${coverage.passed} | ❌ ${coverage.failed} | ⛔ ${coverage.blocked} | ⏭️ ${coverage.skipped} | ❓ ${coverage.couldNotVerify} | **${coverage.completionRate.toFixed(1)}%** |`
     );
     lines.push(``);
+    if (coverage.flakyFlows) {
+      lines.push(
+        `> ⚠️ ${coverage.flakyFlows} ${coverage.flakyFlows === 1 ? 'test' : 'tests'} failed at first and passed on a clean second attempt. ${coverage.flakyFlows === 1 ? 'It is' : 'They are'} counted as passed, but may be unreliable.`
+      );
+      lines.push(``);
+    }
 
     // Requirement Traceability Matrix
     if (report.traceability && report.traceability.length > 0) {

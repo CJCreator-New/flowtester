@@ -10,6 +10,7 @@ import type {
   Breakpoint,
   RunCoverage,
   TraceabilityEntry,
+  RetryTelemetryEntry,
 } from '@qa/types';
 import { normalizeRoute } from '@qa/types';
 import { BrowserManager, BREAKPOINT_VIEWPORTS, locateElement } from './browser.js';
@@ -40,6 +41,14 @@ import { generateRankedRecommendations } from './recommendations.js';
 import { SiteHistoryManager } from './site-history.js';
 import { generateSingleFileHtmlReport } from './html-report.js';
 import { abortError, isAbortError } from './abort.js';
+import { RetryRunner } from './retry-runner.js';
+
+/** The steps of a test point failed. Thrown inside a retry attempt so the runner can try again. */
+class StepsFailed extends Error {
+  constructor(message?: string) {
+    super(message ?? 'A step failed');
+  }
+}
 import { promises as fs } from 'fs';
 
 export type OrchestratorEvent =
@@ -341,6 +350,14 @@ export class FlowTestOrchestrator {
 
     // Facts about the whole site (its icon, its phone set-up) are reported once per run.
     const siteWide = new Set<string>();
+
+    // Pages whose vitals were already measured with repeat loads in this run.
+    const vitalsMeasured = new Set<string>();
+    const wantsRepeatLoads = (urlPath: string, bp: Breakpoint, sizes: Breakpoint[]) => {
+      if (bp !== (sizes.includes('375px') ? '375px' : sizes[0]) || vitalsMeasured.has(urlPath)) return false;
+      vitalsMeasured.add(urlPath);
+      return true;
+    };
     tests: for (const testCase of testCasesToRun) {
       // Which checkers run afterwards depends on the kind of Plan Item (see TestCase.kind).
       const kind = testCase.kind;
@@ -366,190 +383,220 @@ export class FlowTestOrchestrator {
         console.log(`[QA Orchestrator] Executing ${testCase.id} ("${testCase.flowId}") on ${bp} as ${testCase.role}...`);
         const pointStartTime = Date.now();
         const testCaseEvidenceDir = path.join(evidenceDir, `${testCase.id}-${bp}`);
-        const evidenceCollector = new EvidenceCollector(testCaseEvidenceDir);
+        let evidenceCollector = new EvidenceCollector(testCaseEvidenceDir);
 
         const storageState = roleStorageStates[testCase.role];
 
         let context: BrowserContext | undefined;
-        let page: Page | undefined;
+        // Set inside the retry attempt, which always opens it before anything below uses it.
+        let page = undefined as unknown as Page;
         let testPointPassed = true;
         let stepError: string | undefined;
         let pointResult: TestPointResult | undefined;
+        let flakyRetry: RetryTelemetryEntry | undefined;
+        let blockedChanges: string[] = [];
         /** Lists where the planned option wasn't there, and what was picked instead. */
         const substitutes: Array<{ step: string; planned: string; chosen: string }> = [];
 
         try {
-          ({ context, page } = await this.browserManager.openPage({
-            headless: options.headless ?? true,
-            viewport: BREAKPOINT_VIEWPORTS[bp],
-            tunnelAuth: options.tunnelAuth,
-            baseUrl: options.targetUrl,
-            storageState,
-            recordVideoDir: recordVideo ? testCaseEvidenceDir : undefined,
-          }));
+          // Steps run in a fresh browser context. One that fails is thrown away and run once more
+          // from a clean start, so a passing second attempt shows as flaky instead of failing.
+          const runAttempt = async (attempt: number): Promise<void> => {
+            if (attempt > 1) {
+              const discarded = page?.video();
+              await context?.close().catch(() => {});
+              const discardedPath = discarded ? await discarded.path().catch(() => undefined) : undefined;
+              if (discardedPath) await fs.rm(discardedPath, { force: true }).catch(() => {});
+              evidenceCollector = new EvidenceCollector(testCaseEvidenceDir);
+              testPointPassed = true;
+              stepError = undefined;
+              substitutes.length = 0;
+            }
+            ({ context, page } = await this.browserManager.openPage({
+              headless: options.headless ?? true,
+              viewport: BREAKPOINT_VIEWPORTS[bp],
+              tunnelAuth: options.tunnelAuth,
+              baseUrl: options.targetUrl,
+              storageState,
+              recordVideoDir: recordVideo ? testCaseEvidenceDir : undefined,
+            }));
 
-          // On a live site nothing that could change data leaves the browser.
-          const blockedChanges = options.readOnly ? await blockChanges(context) : [];
-          evidenceCollector.attach(page);
+            // On a live site nothing that could change data leaves the browser.
+            blockedChanges = options.readOnly ? await blockChanges(context) : [];
+            evidenceCollector.attach(page);
 
-          const startUrl = new URL(testCase.startPage, options.targetUrl).toString();
-          await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            const startUrl = new URL(testCase.startPage, options.targetUrl).toString();
+            await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
-          // Execute each step with up to 2 retries
-          for (let i = 0; i < testCase.steps.length; i++) {
-            await stopHere();
-            const step = testCase.steps[i];
-            // A step for other screen sizes, such as opening a phone menu, isn't done at this one.
-            if (step.onlyAt && !step.onlyAt.includes(bp)) continue;
-            const urlBefore = page.url();
-            let stepSuccess = false;
-            let currentStepError: string | undefined;
-            const currentGlobalStepIndex = globalStepIndex++;
-            const stepStartedAt = Date.now();
+            // Execute each step with up to 2 retries
+            for (let i = 0; i < testCase.steps.length; i++) {
+              await stopHere();
+              const step = testCase.steps[i];
+              // A step for other screen sizes, such as opening a phone menu, isn't done at this one.
+              if (step.onlyAt && !step.onlyAt.includes(bp)) continue;
+              const urlBefore = page.url();
+              let stepSuccess = false;
+              let currentStepError: string | undefined;
+              const currentGlobalStepIndex = globalStepIndex++;
+              const stepStartedAt = Date.now();
 
-            onEvent({
-              type: 'STEP_STARTED',
-              stepIndex: currentGlobalStepIndex,
-              stepName: step.name,
-              action: step.action,
-              target: step.selector || step.value,
-              testCaseId: testCase.id,
-            });
+              onEvent({
+                type: 'STEP_STARTED',
+                stepIndex: currentGlobalStepIndex,
+                stepName: step.name,
+                action: step.action,
+                target: step.selector || step.value,
+                testCaseId: testCase.id,
+              });
 
-            // An optional step gets one quick try: if the control isn't there at this width, it isn't.
-            // A link check is one request, never repeated at a site we don't own.
-            const MAX_RETRIES = step.optional || step.action === 'check-link' ? 0 : 2;
-            for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-              try {
-                if (step.action === 'click') {
-                  const locator = await locateElement(page, step.selector || '');
-                  await locator.waitFor({ state: 'visible', timeout: step.optional ? 1500 : 4000 });
-                  await locator.click({ timeout: step.optional ? 1500 : 4000 });
-                } else if (step.action === 'fill') {
-                  const locator = await locateElement(page, step.selector || '');
-                  await locator.waitFor({ state: 'visible', timeout: 4000 });
-                  const value = resolveCredentialPlaceholders(step.value || '', testCase.role, options.profile?.roles || []);
-                  await locator.fill(value, { timeout: 4000 });
-                } else if (step.action === 'select') {
-                  const locator = await locateElement(page, step.selector || '');
-                  await locator.waitFor({ state: 'visible', timeout: 4000 });
-                  try {
-                    await locator.selectOption(step.value || '', { timeout: 2000 });
-                  } catch {
-                    // Resilient fallback: case-insensitive or partial match across options
-                    const targetVal = (step.value || '').trim().toLowerCase();
-                    const matched = await locator
-                      .evaluate((select: HTMLSelectElement, target: string) => {
-                        const options = Array.from(select.options);
-                        const exact = options.find((o) => o.value.toLowerCase() === target || o.text.toLowerCase() === target);
-                        if (exact) return { value: exact.value, text: exact.text, exact: true };
-                        const partial = options.find(
-                          (o) =>
-                            (target && o.value.toLowerCase().includes(target)) ||
-                            (target && o.text.toLowerCase().includes(target)) ||
-                            (o.value && target.includes(o.value.toLowerCase())) ||
-                            (o.text && target.includes(o.text.toLowerCase()))
-                        );
-                        if (partial) return { value: partial.value, text: partial.text, exact: false };
-                        return options.length > 1 ? { value: options[1].value, text: options[1].text, exact: false } : undefined;
-                      }, targetVal)
-                      .catch(() => undefined);
-                    if (!matched) throw new Error(`The list has no option “${step.value}”, and no other option to pick.`);
-                    await locator.selectOption(matched.value, { timeout: 2000 });
-                    // Another option than the planned one: the step goes on, but what follows can't
-                    // say whether the site handles the planned value.
-                    if (!matched.exact) substitutes.push({ step: step.name, planned: step.value || '', chosen: matched.text.trim() || matched.value });
+              // An optional step gets one quick try: if the control isn't there at this width, it isn't.
+              // A link check is one request, never repeated at a site we don't own.
+              const MAX_RETRIES = step.optional || step.action === 'check-link' ? 0 : 2;
+              for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+                try {
+                  if (step.action === 'click') {
+                    const locator = await locateElement(page, step.selector || '');
+                    await locator.waitFor({ state: 'visible', timeout: step.optional ? 1500 : 4000 });
+                    await locator.click({ timeout: step.optional ? 1500 : 4000 });
+                  } else if (step.action === 'fill') {
+                    const locator = await locateElement(page, step.selector || '');
+                    await locator.waitFor({ state: 'visible', timeout: 4000 });
+                    const value = resolveCredentialPlaceholders(step.value || '', testCase.role, options.profile?.roles || []);
+                    await locator.fill(value, { timeout: 4000 });
+                  } else if (step.action === 'select') {
+                    const locator = await locateElement(page, step.selector || '');
+                    await locator.waitFor({ state: 'visible', timeout: 4000 });
+                    try {
+                      await locator.selectOption(step.value || '', { timeout: 2000 });
+                    } catch {
+                      // Resilient fallback: case-insensitive or partial match across options
+                      const targetVal = (step.value || '').trim().toLowerCase();
+                      const matched = await locator
+                        .evaluate((select: HTMLSelectElement, target: string) => {
+                          const options = Array.from(select.options);
+                          const exact = options.find((o) => o.value.toLowerCase() === target || o.text.toLowerCase() === target);
+                          if (exact) return { value: exact.value, text: exact.text, exact: true };
+                          const partial = options.find(
+                            (o) =>
+                              (target && o.value.toLowerCase().includes(target)) ||
+                              (target && o.text.toLowerCase().includes(target)) ||
+                              (o.value && target.includes(o.value.toLowerCase())) ||
+                              (o.text && target.includes(o.text.toLowerCase()))
+                          );
+                          if (partial) return { value: partial.value, text: partial.text, exact: false };
+                          return options.length > 1 ? { value: options[1].value, text: options[1].text, exact: false } : undefined;
+                        }, targetVal)
+                        .catch(() => undefined);
+                      if (!matched) throw new Error(`The list has no option “${step.value}”, and no other option to pick.`);
+                      await locator.selectOption(matched.value, { timeout: 2000 });
+                      // Another option than the planned one: the step goes on, but what follows can't
+                      // say whether the site handles the planned value.
+                      if (!matched.exact) substitutes.push({ step: step.name, planned: step.value || '', chosen: matched.text.trim() || matched.value });
+                    }
+                  } else if (step.action === 'navigate') {
+                    await page.goto(new URL(step.value || '', options.targetUrl).toString(), {
+                      waitUntil: 'domcontentloaded',
+                      timeout: 10000,
+                    });
+                  } else if (step.action === 'wait') {
+                    await page.waitForTimeout(1000);
+                  } else if (step.action === 'check-link') {
+                    await checkLink(page, step.value || '');
                   }
-                } else if (step.action === 'navigate') {
-                  await page.goto(new URL(step.value || '', options.targetUrl).toString(), {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 10000,
+
+                  await page.waitForTimeout(300);
+                  stepSuccess = true;
+                  currentStepError = undefined;
+                  break;
+                } catch (err: unknown) {
+                  // Playwright colours its messages for terminals; reports want plain text.
+                  currentStepError = (err instanceof Error ? err.message : String(err)).replace(/\x1b\[[0-9;]*m/g, '');
+                  if (attempt < MAX_RETRIES) {
+                    await page.waitForTimeout(500);
+                  }
+                }
+              }
+
+              // An optional step that couldn't be done (a control that only shows at some widths)
+              // is skipped, not failed, and the rest of the flow carries on.
+              const skipped = !stepSuccess && !!step.optional;
+              if (skipped) currentStepError = `Skipped: ${currentStepError}`;
+              if (!stepSuccess && !skipped) {
+                testPointPassed = false;
+                stepError = currentStepError;
+              }
+
+              const stepEvidence = await evidenceCollector.recordStep(
+                page,
+                i + 1,
+                step.name,
+                step.action,
+                urlBefore,
+                stepSuccess,
+                currentStepError
+              );
+
+              onEvent({
+                type: 'STEP_COMPLETED',
+                stepIndex: currentGlobalStepIndex,
+                passed: stepSuccess,
+                durationMs: Date.now() - stepStartedAt,
+                error: currentStepError,
+                screenshotUrl: stepEvidence.screenshotPath
+                  ? `${evidenceUrlPrefix}${path.relative(outputDir, stepEvidence.screenshotPath).replace(/\\/g, '/')}`
+                  : undefined,
+                urlPath: pathOf(page.url()),
+                testCaseId: testCase.id,
+              });
+
+              // If a step fails after retries, cascade remaining steps as Blocked
+              if (!stepSuccess && !skipped) {
+                for (let j = i + 1; j < testCase.steps.length; j++) {
+                  const blockedStep = testCase.steps[j];
+                  if (blockedStep.onlyAt && !blockedStep.onlyAt.includes(bp)) continue;
+                  const blockedStepIndex = globalStepIndex++;
+                  onEvent({
+                    type: 'STEP_STARTED',
+                    stepIndex: blockedStepIndex,
+                    stepName: blockedStep.name,
+                    action: blockedStep.action,
+                    target: blockedStep.selector || blockedStep.value,
+                    testCaseId: testCase.id,
                   });
-                } else if (step.action === 'wait') {
-                  await page.waitForTimeout(1000);
-                } else if (step.action === 'check-link') {
-                  await checkLink(page, step.value || '');
+                  await evidenceCollector.recordStep(
+                    page,
+                    j + 1,
+                    blockedStep.name,
+                    blockedStep.action,
+                    page.url(),
+                    false,
+                    `Blocked: Previous step "${step.name}" failed`
+                  );
+                  onEvent({
+                    type: 'STEP_COMPLETED',
+                    stepIndex: blockedStepIndex,
+                    passed: false,
+                    durationMs: 0,
+                    error: `Blocked: Previous step "${step.name}" failed`,
+                  });
                 }
-
-                await page.waitForTimeout(300);
-                stepSuccess = true;
-                currentStepError = undefined;
                 break;
-              } catch (err: unknown) {
-                // Playwright colours its messages for terminals; reports want plain text.
-                currentStepError = (err instanceof Error ? err.message : String(err)).replace(/\x1b\[[0-9;]*m/g, '');
-                if (attempt < MAX_RETRIES) {
-                  await page.waitForTimeout(500);
-                }
               }
             }
 
-            // An optional step that couldn't be done (a control that only shows at some widths)
-            // is skipped, not failed, and the rest of the flow carries on.
-            const skipped = !stepSuccess && !!step.optional;
-            if (skipped) currentStepError = `Skipped: ${currentStepError}`;
-            if (!stepSuccess && !skipped) {
-              testPointPassed = false;
-              stepError = currentStepError;
-            }
-
-            const stepEvidence = await evidenceCollector.recordStep(
-              page,
-              i + 1,
-              step.name,
-              step.action,
-              urlBefore,
-              stepSuccess,
-              currentStepError
-            );
-
-            onEvent({
-              type: 'STEP_COMPLETED',
-              stepIndex: currentGlobalStepIndex,
-              passed: stepSuccess,
-              durationMs: Date.now() - stepStartedAt,
-              error: currentStepError,
-              screenshotUrl: stepEvidence.screenshotPath
-                ? `${evidenceUrlPrefix}${path.relative(outputDir, stepEvidence.screenshotPath).replace(/\\/g, '/')}`
-                : undefined,
-              urlPath: pathOf(page.url()),
-              testCaseId: testCase.id,
-            });
-
-            // If a step fails after retries, cascade remaining steps as Blocked
-            if (!stepSuccess && !skipped) {
-              for (let j = i + 1; j < testCase.steps.length; j++) {
-                const blockedStep = testCase.steps[j];
-                if (blockedStep.onlyAt && !blockedStep.onlyAt.includes(bp)) continue;
-                const blockedStepIndex = globalStepIndex++;
-                onEvent({
-                  type: 'STEP_STARTED',
-                  stepIndex: blockedStepIndex,
-                  stepName: blockedStep.name,
-                  action: blockedStep.action,
-                  target: blockedStep.selector || blockedStep.value,
-                  testCaseId: testCase.id,
-                });
-                await evidenceCollector.recordStep(
-                  page,
-                  j + 1,
-                  blockedStep.name,
-                  blockedStep.action,
-                  page.url(),
-                  false,
-                  `Blocked: Previous step "${step.name}" failed`
-                );
-                onEvent({
-                  type: 'STEP_COMPLETED',
-                  stepIndex: blockedStepIndex,
-                  passed: false,
-                  durationMs: 0,
-                  error: `Blocked: Previous step "${step.name}" failed`,
-                });
-              }
-              break;
-            }
+            if (!testPointPassed) throw new StepsFailed(stepError);
+          };
+          const attemptResult = await RetryRunner.runWithCleanRetry(runAttempt, {
+            flowId: testCase.flowId,
+            testCaseId: testCase.id,
+            // A link check is one request, never repeated at a site we don't own.
+            maxRetries: testCase.kind === 'link' ? 0 : 1,
+            shouldRetry: (err) => !isAbortError(err),
+          });
+          if (attemptResult.outcome === 'FAILED' && !(attemptResult.error instanceof StepsFailed)) {
+            throw attemptResult.error;
           }
+          if (attemptResult.outcome === 'FLAKY_PASSED') flakyRetry = attemptResult.telemetry;
 
           // Evaluate Checkers
           const stepEvidenceList = evidenceCollector.getStepEvidenceList();
@@ -626,8 +673,10 @@ export class FlowTestOrchestrator {
                     role: testCase.role,
                     breakpoint: bp,
                     urlPath: new URL(page.url(), options.targetUrl).pathname,
-                  },
-                  stepEvidenceList
+                    // Throttled repeat loads cost minutes, so each page gets them once per run, at the
+                    // phone width when there is one. Other widths read the vitals the page already had.
+                    repeatLoads: wantsRepeatLoads(new URL(page.url(), options.targetUrl).pathname, bp, sizes) ? 3 : undefined,
+                  }
                 );
 
           // 3d. SEO & Link Health
@@ -784,6 +833,7 @@ export class FlowTestOrchestrator {
             observations: observations.length > 0 ? observations : undefined,
             skipReason: sentData ? NEEDS_TEST_COPY : undefined,
             breakpoint: bp,
+            retry: flakyRetry,
             checks: checksRun(keptFindings, {
               ux: !lightChecks,
               pageLevel: pageLevelChecks,
@@ -904,6 +954,7 @@ export class FlowTestOrchestrator {
       blocked,
       skipped,
       couldNotVerify,
+      flakyFlows: results.filter((r) => r.retry?.status === 'FLAKY_PASSED').length,
       completionRate: totalTestPoints > 0 ? (totalTestPoints / totalTestPoints) * 100 : 100,
     };
 

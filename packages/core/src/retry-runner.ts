@@ -4,6 +4,8 @@ export interface RetryRunnerOptions {
   maxRetries?: number;
   flowId: string;
   testCaseId: string;
+  /** Return false for an error that must not be retried, such as the user stopping the run. */
+  shouldRetry?: (error: Error) => boolean;
 }
 
 export interface RetryExecutionResult<T> {
@@ -60,7 +62,7 @@ export class RetryRunner {
           firstError = error;
         }
 
-        if (attempts > maxRetries) {
+        if (attempts > maxRetries || options.shouldRetry?.(error) === false) {
           const telemetry: RetryTelemetryEntry = {
             flowId: options.flowId,
             testCaseId: options.testCaseId,

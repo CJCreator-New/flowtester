@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   DesignStandardsChecker,
   hexToRgb,
   normalizeColor,
 } from '../src/design-standards.js';
-import { UXQualityChecker } from '../src/ux-quality.js';
+import { UXQualityChecker, wcagCriteria } from '../src/ux-quality.js';
+import { chromium, type Browser } from 'playwright';
 import type { Finding } from '@qa/types';
 import { PNG } from 'pngjs';
 
@@ -125,5 +126,65 @@ describe('Design & UX Checkers', () => {
       expect(deduplicated.length).toBe(2);
       expect(deduplicated.map((d) => d.where.urlPath)).toEqual(['/checkout', '/invoices']);
     });
+  });
+});
+
+describe('UXQualityChecker accessibility scan', () => {
+  const checker = new UXQualityChecker();
+  let browser: Browser;
+  beforeAll(async () => {
+    browser = await chromium.launch();
+  });
+  afterAll(async () => {
+    await browser.close();
+  });
+  const ctx = { role: 'visitor', breakpoint: '1440px' as const, urlPath: '/' };
+
+  it('maps axe tags to WCAG criteria', () => {
+    expect(wcagCriteria(['wcag2aa', 'wcag143'])).toEqual(['WCAG 1.4.3 Contrast (Minimum)']);
+    expect(wcagCriteria(['best-practice'])).toEqual([]);
+  });
+
+  it('reports a scan that could not run instead of a clean pass', async () => {
+    const brokenPage = { evaluate: async () => { throw new Error('boom'); } } as never;
+    const findings = await checker.check(brokenPage, ctx);
+    const failed = findings.find((f) => f.id.startsWith('F-A11Y-SCAN-FAILED'));
+    expect(failed?.severity).toBe('Major');
+    expect(failed?.expectedVsActual.actual).toContain('has not been checked');
+  });
+
+  it('lists every element that breaks a rule, with the WCAG criterion', async () => {
+    const page = await (await browser.newContext()).newPage();
+    try {
+      await page.setContent(
+        '<html lang="en"><head><title>t</title></head><body><main>' +
+          '<img src="a.png"><img src="b.png"><img src="c.png"></main></body></html>'
+      );
+      const findings = await checker.check(page, ctx);
+      const img = findings.find((f) => f.title.includes('image-alt'));
+      expect(img?.title).toContain('WCAG 1.1.1');
+      expect(img?.evidence.allTargets).toHaveLength(3);
+      expect(img?.expectedVsActual.actual).toContain('3 elements');
+    } finally {
+      await page.context().close();
+    }
+  });
+
+  it('rates targets between 24 and 44px as a suggestion, not an AA failure', async () => {
+    const page = await (await browser.newContext({ viewport: { width: 375, height: 700 } })).newPage();
+    try {
+      await page.setContent(
+        '<html lang="en"><head><title>t</title></head><body><main>' +
+          '<button style="box-sizing:border-box;padding:0;width:30px;height:30px">a</button>' +
+          '<button style="box-sizing:border-box;padding:0;width:10px;height:10px">b</button></main></body></html>'
+      );
+      const findings = await checker.check(page, { ...ctx, breakpoint: '375px', enableAxe: false });
+      const targets = findings.filter((f) => f.id.startsWith('F-UX-TARGET'));
+      expect(targets.find((f) => f.title.includes('(30x30px)'))?.severity).toBe('Suggestion');
+      expect(targets.find((f) => f.title.includes('(10x10px)'))?.severity).toBe('Minor');
+      expect(targets.find((f) => f.title.includes('(10x10px)'))?.title).toContain('2.5.8');
+    } finally {
+      await page.context().close();
+    }
   });
 });

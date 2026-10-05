@@ -129,6 +129,16 @@ export class SecurityChecker {
               results.push({ tag: el.tagName.toLowerCase(), src: attr });
             }
           }
+
+          // Everything the page actually loaded, which also covers CSS url()/@import, fonts,
+          // and fetch/XHR calls that no HTML attribute shows.
+          const known = new Set(results.map((r) => r.src));
+          for (const entry of performance.getEntriesByType('resource')) {
+            if (entry.name.startsWith('http://') && !known.has(entry.name)) {
+              known.add(entry.name);
+              results.push({ tag: (entry as PerformanceResourceTiming).initiatorType || 'resource', src: entry.name });
+            }
+          }
         }
         return results;
       })
@@ -199,19 +209,30 @@ export class SecurityChecker {
             })
           );
         }
-        if (!cookie.sameSite || cookie.sameSite.toLowerCase() === 'none') {
-          if (!cookie.secure) {
-            findings.push(
-              this.finding(`F-SEC-${context.testCaseId || 'GEN'}-COOKIE-SAMESITE-${findings.length + 1}`, context, context.urlPath, {
-                title: `Cookie "${cookie.name}" has loose or missing SameSite attribute`,
-                severity: 'Minor',
-                expected: 'Cookies should have SameSite=Lax or SameSite=Strict to defend against Cross-Site Request Forgery',
-                actual: `Cookie "${cookie.name}" has SameSite=${cookie.sameSite || 'None'}`,
-                steps: [`Visit ${context.urlPath}`, `Inspect SameSite property on cookie "${cookie.name}"`],
-                resolution: 'Set SameSite=Lax (or Strict) on cookies unless cross-site embeds are explicitly required.',
-              })
-            );
-          }
+        const sameSite = cookie.sameSite?.toLowerCase();
+        if (sameSite === 'none' && !cookie.secure) {
+          // Browsers reject this combination outright, so the cookie is not stored at all.
+          findings.push(
+            this.finding(`F-SEC-${context.testCaseId || 'GEN'}-COOKIE-SAMESITE-${findings.length + 1}`, context, context.urlPath, {
+              title: `Cookie "${cookie.name}" has SameSite=None without Secure`,
+              severity: 'Major',
+              expected: 'A cookie with SameSite=None must also be Secure; modern browsers reject it otherwise',
+              actual: `Cookie "${cookie.name}" has SameSite=None and no Secure flag`,
+              steps: [`Visit ${context.urlPath}`, `Inspect SameSite and Secure on cookie "${cookie.name}"`],
+              resolution: 'Add "; Secure" to the cookie, or use SameSite=Lax if it is not needed in cross-site embeds.',
+            })
+          );
+        } else if (sameSite === 'none' || !sameSite) {
+          findings.push(
+            this.finding(`F-SEC-${context.testCaseId || 'GEN'}-COOKIE-SAMESITE-${findings.length + 1}`, context, context.urlPath, {
+              title: `Cookie "${cookie.name}" has loose or missing SameSite attribute`,
+              severity: isAuthOrSession && sameSite === 'none' ? 'Major' : 'Minor',
+              expected: 'Cookies should have SameSite=Lax or SameSite=Strict to defend against Cross-Site Request Forgery',
+              actual: `Cookie "${cookie.name}" has ${sameSite === 'none' ? 'SameSite=None' : 'no SameSite attribute'}`,
+              steps: [`Visit ${context.urlPath}`, `Inspect SameSite property on cookie "${cookie.name}"`],
+              resolution: 'Set SameSite=Lax (or Strict) on cookies unless cross-site embeds are explicitly required.',
+            })
+          );
         }
       }
     } catch {

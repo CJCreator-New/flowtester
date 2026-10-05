@@ -9,6 +9,61 @@ This file has two parts. **Section 2 is the plan**: phases in order, each with a
 
 ---
 
+## Implementation status
+
+*Last updated 2026-10-05.*
+
+| Phase | Status |
+|---|---|
+| **0: Stop misleading people** | **Code complete. Final full test run still to do** (see below) |
+| **1: Free hosting, first version** | **Code complete. Not yet run on GitHub** (see below) |
+| 2 to 7 | Not started |
+
+### Phase 0: what was done
+- **0.2 Axe accuracy (done).** A failed scan is now a visible `F-A11Y-SCAN-FAILED` finding. (While testing, this showed the old empty `catch` hid a real failure: axe rejects pages not made from a browser context.) Every violating element is listed in `evidence.allTargets`. "Incomplete" results appear as "Needs human review" suggestions. Findings cite WCAG criteria. Tap targets under 24 px are the WCAG 2.5.8 failure, and 24 to 44 px is a suggestion labelled as recommended ergonomics. WCAG 2.2 AA wording fixed in `CONTEXT.md`, `README.md` and `PRODUCT_GUIDE.md`.
+- **0.4 Security (done).** SameSite is checked independently of Secure (None on a Secure cookie is flagged; None without Secure is Major). Mixed content now also reads what the page actually loaded (CSS `url()`, fonts, fetch/XHR) through Resource Timing.
+- **0.3 Clean retry and flaky (done).** The orchestrator runs each test point's open-page-and-steps phase through `RetryRunner.runWithCleanRetry`: a fresh context on the second attempt, no retry on a stop request or on link checks. A flow that fails once and then passes is `FLAKY_PASSED`. It is recorded on the test point (`retry`), counted in `coverage.flakyFlows`, shown in `report.md`, sent to Hub as `retryTelemetry`, stored per run, and summed into the Hub's `flakyFlowsCount` (new "Flaky Flows" card, new `flaky_flows_count` column).
+- **0.1 Performance (done).** LCP, CLS and INP come from buffered `PerformanceObserver`s. The old `getEntriesByType` reads returned nothing in Chromium, so the old LCP was always the DOM-ready time. DOM-ready is now reported under its own name ("Slow initial page load"). CLS uses the web.dev session-window algorithm. INP is measured from real interaction entries. A separate probe tab loads the page 3 times (5 if slow) at 150 ms, 1.6 Mbps and 4x CPU slowdown, and reports the median with per-load numbers and spread in `evidence.measurements`. Repeat loads run once per page path per run, at the phone width. Pages over 4 MB get a weight finding with a first-party and third-party split.
+- **ADR 0018** written: [adr/0018-claim-wording.md](adr/0018-claim-wording.md).
+- **Lab LCP noise** measured before finishing 0.1: [research/lab-lcp-noise.md](research/lab-lcp-noise.md). Single loads vary about 15%, a median of 3 about 20% across batches, so 3 loads plus 2 when slow was kept.
+
+### Phase 0 exit gate
+- [ ] `pnpm test` is green, with tests for each fix. *Tests were written for every fix. The full suite has not been re-run since the last changes, by choice, and is the next step.*
+- [x] No finding is titled with a metric it did not measure.
+- [x] A failed axe scan produces a visible finding, never a clean pass.
+- [x] Benchmark precision is the same or better than the baseline. *W3C 24 of 24 real, Books 6 of 6, fixture planted defects 6 of 6. The answer keys in `fixtures/benchmarks/` were updated to the new finding titles. Swag Labs and TodoMVC were not re-run, and the original baseline run was cut short, so those two are unverified.*
+
+### Phase 1: what was done
+- **Spike answers.** (1) The wizard builds to static files (`VITE_BASE` sets the Pages path). (3) GitHub's billing page, checked 2026-10-05: standard runners are free for public repos, private repos on the Free plan get 2,000 minutes a month, artifact storage is 500 MB. Still open: (2) minutes, CPU and memory of a full check-up on an Actions runner, and (4) free container hosts against the Dockerfile. Both need a real run, so they decide nothing yet. Option A was built because it needs neither.
+- **ADR 0012** written: [adr/0012-hosted-runner-github-actions.md](adr/0012-hosted-runner-github-actions.md). It replaces 0008's "one server on each person's machine" as the only way to run.
+- **One-shot check-up command** `packages/runner/src/checkup.ts` (`node packages/runner/dist/checkup.js <url>`): starts the runner in-process, tests one address, writes the report, writes the verdict to the Actions job summary, and exits with `--fail-on blocker|major|none`. A preview or staging address (`--staging`) is a test copy; anything else is read-only. Its data folder is outside the report folder so a held key is never uploaded.
+- **Workflow template** [templates/qa-check.yml](../templates/qa-check.yml): manual run with an address, plus automatic runs when a preview deployment succeeds. The wizard's first screen (shown when no runner answers, as on Pages) generates it with the typed address, with copy button, secret setup and a link to the repo's Actions page.
+- **Pages publishing** `.github/workflows/pages.yml` builds the wizard with the repo's base path.
+- **Report viewer:** the existing single-file `report.html` is the viewer: it opens offline with a double-click from the downloaded artifact. No separate viewer app was built.
+- **Item 1.7 part 4:** the free-key privacy warning is in Settings (OpenRouter free models and Gemini free tier) and printed by the check-up command. The AI Request Budget display already existed on the new check-up screen.
+- **`pnpm tunnel`** documented as local-only sharing, not hosting (README, ADR 0012).
+
+### Phase 1 exit gate
+- [ ] A new user on a clean repo gets a verdict in under 15 minutes with no local install, using only Pages plus Actions. *Not tried: needs the workflow pushed, Pages enabled in the repo settings, and a run.*
+- [ ] Hosting cost is $0, with no card on file. *By design; confirm when Pages is enabled.*
+- [ ] A run on a private preview URL works. *Not tried.*
+
+### Phase 1: open items
+- **To do by hand:** push this branch, enable Pages (Settings, Pages, Source: GitHub Actions), set a repo secret, and run the workflow once on a real site. Record the minutes and memory it uses here, and in ADR 0012.
+- **The repo must be public** (or the workflow given a token) for another user's job to download the tool. Decide this before sharing the template.
+- **The tool is fetched from `main`.** Pin a release tag once one exists.
+- **The workflow and the Pages build have not been run.** The command and wizard were only built, not run end to end.
+- **Dispatch from the browser** was left out (a token on a static page is a risk); the person uses GitHub's Run workflow button.
+
+### Known gaps and notes
+- **Missing elements are slow.** A step whose element is absent waits about 35 s per try, because of `locateElement`'s fallback chain, so a failing flow plus its clean retry is slow. Not changed here.
+- **A retry repeats a flow's actions.** On a Test Copy, a retried flow that sends a form could create a duplicate record. Live sites send nothing, so they are unaffected. Namespaced test data (item 3.3) is the fix.
+- **The "slower than last time" rule** is decided (at least 20% and at least 300 ms) but not built.
+- **Hub Postgres:** the new column is added with `ADD COLUMN IF NOT EXISTS`. Only the in-memory path has been read through, not run against a database.
+- **Next:** run the full test suite and fix anything it finds (it covers Phases 0 and 1).
+
+---
+
 ## Table of Contents
 1. [Core Principles & ADRs](#1-core-principles--architectural-decision-records-adrs)
 2. [The Phase Plan](#2-the-phase-plan)
@@ -41,7 +96,7 @@ To prevent breaking existing functionality or violating safety and legal boundar
 | 0015 | Live-site request rules: GraphQL `query` POSTs, GET/HEAD replay, pacing | Amends [0003](adr/0003-deterministic-safety-filters-for-ai-discovery.md) | Phase 3 |
 | 0016 | Evidence and redaction: store shapes not bodies, strip secrets, no raw HAR | New | Phase 3 (and Phase 1 if reports are stored) |
 | 0017 | Findings schema and Playwright export contract | New | Phase 2 |
-| 0018 | Claim wording ("never compliant, never secure", list what was not checked) | New | Phase 0 (one page) |
+| 0018 | Claim wording ("never compliant, never secure", list what was not checked) | New | Phase 0 (one page). **Written.** |
 
 ---
 
@@ -237,11 +292,11 @@ Check these at the start of the phase that depends on them. The research did not
   - [`packages/checkers/src/performance.ts`](../packages/checkers/src/performance.ts)
   - [`packages/checkers/tests/performance.test.ts`](../packages/checkers/tests/performance.test.ts)
 - **Acceptance Criteria:**
-  - [ ] `inpMs` is populated from real performance entries or simulated interaction.
-  - [ ] No finding titles `domContentLoadedEventEnd` as "Largest Contentful Paint".
-  - [ ] CLS matches web.dev session window burst calculation.
-  - [ ] Performance measurements use CDP network & CPU throttling with multi-run medians.
-  - [ ] Transfer sizes > 4 MB generate an asset weight finding.
+  - [x] `inpMs` is populated from real performance entries or simulated interaction.
+  - [x] No finding titles `domContentLoadedEventEnd` as "Largest Contentful Paint".
+  - [x] CLS matches web.dev session window burst calculation.
+  - [x] Performance measurements use CDP network & CPU throttling with multi-run medians.
+  - [x] Transfer sizes > 4 MB generate an asset weight finding.
 
 ---
 
@@ -274,11 +329,11 @@ Check these at the start of the phase that depends on them. The research did not
   - [`packages/checkers/tests/ux-quality.test.ts`](../packages/checkers/tests/ux-quality.test.ts)
   - [`CONTEXT.md`](../CONTEXT.md)
 - **Acceptance Criteria:**
-  - [ ] Axe exceptions produce a visible diagnostic finding.
-  - [ ] All violating nodes per rule are captured in evidence.
-  - [ ] Incomplete axe items are categorized under "Needs Human Review".
-  - [ ] Findings cite WCAG criterion numbers (e.g., WCAG 2.4.7, 1.4.3).
-  - [ ] Tap target rule distinguishes 24px (AA) from 44px (AAA).
+  - [x] Axe exceptions produce a visible diagnostic finding.
+  - [x] All violating nodes per rule are captured in evidence.
+  - [x] Incomplete axe items are categorized under "Needs Human Review".
+  - [x] Findings cite WCAG criterion numbers (e.g., WCAG 2.4.7, 1.4.3).
+  - [x] Tap target rule distinguishes 24px (AA) from 44px (AAA).
 
 ---
 
@@ -301,8 +356,8 @@ Check these at the start of the phase that depends on them. The research did not
   - [`packages/hub/src/ui.ts`](../packages/hub/src/ui.ts)
   - [`packages/core/src/reporter.ts`](../packages/core/src/reporter.ts)
 - **Acceptance Criteria:**
-  - [ ] Flaky test runs pass on clean retry and are tagged `FLAKY_PASSED`.
-  - [ ] Reports and Hub UI display the true `flakyFlowsCount`.
+  - [x] Flaky test runs pass on clean retry and are tagged `FLAKY_PASSED`.
+  - [x] Reports and Hub UI display the true `flakyFlowsCount`.
 
 ---
 
@@ -325,8 +380,8 @@ Check these at the start of the phase that depends on them. The research did not
   - [`packages/checkers/src/security.ts`](../packages/checkers/src/security.ts)
   - [`packages/checkers/tests/security.test.ts`](../packages/checkers/tests/security.test.ts)
 - **Acceptance Criteria:**
-  - [ ] `SameSite=None` on a `Secure` cookie produces a finding.
-  - [ ] HTTP network requests triggered by CSS or scripts on HTTPS pages produce a mixed content finding.
+  - [x] `SameSite=None` on a `Secure` cookie produces a finding.
+  - [x] HTTP network requests triggered by CSS or scripts on HTTPS pages produce a mixed content finding.
 
 ---
 

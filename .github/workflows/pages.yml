@@ -1,0 +1,43 @@
+# Publishes the wizard as a static site on GitHub Pages. Opened there, it has no runner behind it, so
+# it shows how to run the check-up in the visitor's own GitHub repo (see templates/qa-check.yml).
+name: Publish wizard
+
+on:
+  push:
+    branches: [main]
+    paths: ['packages/wizard/**', 'packages/types/**', 'templates/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter "@qa/wizard..."
+      - run: pnpm --filter @qa/types run build
+      - name: Build for Pages
+        run: pnpm --filter @qa/wizard run build
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: packages/wizard/dist
+      - id: deploy
+        uses: actions/deploy-pages@v4

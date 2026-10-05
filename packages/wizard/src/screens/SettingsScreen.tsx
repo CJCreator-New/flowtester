@@ -33,8 +33,19 @@ const PROVIDERS: Array<{ id: AiProviderId; name: string; hint: string }> = [
   { id: 'openrouter', name: 'OpenRouter’s free models', hint: 'Costs nothing. Free models allow 50 requests a day.' },
   { id: 'anthropic', name: 'Anthropic (Claude)', hint: 'Paid: your Anthropic account is charged for each request.' },
   { id: 'openai', name: 'OpenAI', hint: 'Paid: your OpenAI account is charged for each request.' },
-  { id: 'gemini', name: 'Google Gemini', hint: 'Paid or free, depending on your Google account.' },
+  { id: 'gemini', name: 'Google Gemini', hint: 'Paid or free, depending on your Google account. A free key may be used for training.' },
 ];
+
+/**
+ * What a free key means for the privacy of what is sent to it. The AI is sent page text and
+ * addresses from the site being checked, so this is shown before a free key is used.
+ */
+const FREE_KEY_PRIVACY: Partial<Record<AiProviderId, string>> = {
+  openrouter:
+    'Free models are run by providers that may keep and learn from what is sent to them. Do not check a site whose pages hold private or customer data.',
+  gemini:
+    'Google may use inputs sent with a free-tier API key to train its models. Use a paid key, or a billing-enabled project, for anything private.',
+};
 
 const SIZES: Array<{ id: ScreenSize; label: string }> = [
   { id: '375px', label: 'Phone (375px)' },
@@ -117,6 +128,14 @@ export function SettingsScreen({ onKeySaved }: { onKeySaved: (model: string) => 
                 ))}
               </div>
             </fieldset>
+
+            {FREE_KEY_PRIVACY[shown] && (
+              <div className="mb-5">
+                <Notice tone="warn" title={shown === 'openrouter' ? 'Free models can learn from what you send' : 'A free Gemini key can be used for training'}>
+                  {FREE_KEY_PRIVACY[shown]}
+                </Notice>
+              </div>
+            )}
 
             {shown === 'openrouter' ? (
               <OpenRouterKey
