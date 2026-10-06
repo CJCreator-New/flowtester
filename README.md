@@ -247,6 +247,16 @@ On [vercel.com](https://vercel.com), choose **Add New, Project**, import this re
 
 The free plan has 512 MB of memory, sleeps after 15 minutes idle (the first visit then takes about a minute) and runs one check-up at a time. A big site can run out of memory. There are no accounts or limits, so treat it as a beta.
 
+### Automatic deploys
+
+Nobody deploys by hand. Every push to `main` runs [.github/workflows/deploy.yml](.github/workflows/deploy.yml):
+
+1. **Test.** It builds the site as Vercel does, type-checks the runner and runs the unit tests (not the browser-driven end-to-end test, which takes minutes: run `pnpm test` before a release).
+2. **Publish.** Render builds from this repo, so the push itself starts its build (`autoDeploy` in `render.yaml`). Vercel builds from the `CJCreator-New/flowtester` repo, so the workflow copies `main` there once the tests pass, and that starts the Vercel build.
+3. **Verify.** It waits for the Vercel site and the Render app to answer, and goes red if either does not.
+
+One-time setup: in this repo's **Settings, Secrets and variables, Actions**, add the secret `VERCEL_REPO_TOKEN`, a fine-grained personal access token that can write **Contents** and **Workflows** on `CJCreator-New/flowtester`. If you would rather Vercel built from this repo directly, import this repo in Vercel instead and delete the Publish job.
+
 ---
 
 ### Run it in your own GitHub repo (nothing to install)

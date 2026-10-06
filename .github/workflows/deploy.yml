@@ -1,0 +1,103 @@
+# Every push to main is tested, then published: the Vercel site (the landing page) and the Render app
+# (the shared online copy) both rebuild without anyone running a command.
+#
+# How each one gets the new code:
+#   - Render builds from this repo (render.yaml sets autoDeploy), so the push itself starts its build.
+#   - Vercel builds from the CJCreator-New/flowtester repo, so this workflow copies main there once the
+#     tests pass. That push is what starts the Vercel build.
+#
+# Set up once (Settings > Secrets and variables > Actions):
+#   Secret    VERCEL_REPO_TOKEN   a fine-grained personal access token that can write contents and
+#                                 workflows on CJCreator-New/flowtester (made by an account that can push there).
+#   Variable  VERCEL_SITE_URL     optional, the Vercel address to check (default https://flowtester.vercel.app)
+#   Variable  RENDER_APP_URL      optional, the Render address to check (default https://qa-check-up-2q68.onrender.com)
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push replaces one still waiting, so the live sites never end on an older commit.
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The copy of this workflow in the mirror repo does nothing: only the source repo publishes.
+    if: github.repository == 'CJCreator/qa-flow-tester'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The same build Vercel runs, and the one Render's image runs for the wizard.
+      - name: Build the site
+        run: pnpm run vercel-build
+
+      - name: Type-check the runner
+        run: pnpm exec tsc --noEmit -p packages/runner
+
+      # The browser-driven end-to-end test takes minutes and needs Chromium: run it before a release, not on every push.
+      - name: Tests
+        run: pnpm exec vitest run packages/wizard packages/runner/tests/beta.test.ts packages/runner/tests/beta-privacy.test.ts --exclude "**/wizard-e2e.test.ts"
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Copy main to the Vercel repo
+        env:
+          TOKEN: ${{ secrets.VERCEL_REPO_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Add the VERCEL_REPO_TOKEN secret (see the top of this file)."
+            exit 1
+          fi
+          git push "https://x-access-token:${TOKEN}@github.com/CJCreator-New/flowtester.git" HEAD:refs/heads/main
+
+  verify:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      VERCEL_SITE_URL: ${{ vars.VERCEL_SITE_URL || 'https://flowtester.vercel.app' }}
+      RENDER_APP_URL: ${{ vars.RENDER_APP_URL || 'https://qa-check-up-2q68.onrender.com' }}
+    steps:
+      # Both builds take a few minutes, and a free Render service sleeps: wait for each to answer.
+      - name: The Vercel site answers
+        run: |
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -m 30 -w '%{http_code}' "$VERCEL_SITE_URL/") && [ "$code" = 200 ] && echo "Vercel: 200" && exit 0
+            echo "Vercel: not ready ($code), try $i"; sleep 30
+          done
+          echo "::error::$VERCEL_SITE_URL did not answer"; exit 1
+
+      - name: The Render app answers
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -m 90 -w '%{http_code}' "$RENDER_APP_URL/healthz") && [ "$code" = 200 ] && echo "Render: 200" && exit 0
+            echo "Render: not ready ($code), try $i"; sleep 30
+          done
+          echo "::error::$RENDER_APP_URL did not answer"; exit 1
