@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { Lead, Question } from '../components/text';
+import { WakeNote } from '../components/WakeNote';
+import { useWakeOnline } from '../hooks/useWakeOnline';
 import { useDocumentTitle } from '../lib/title';
 import { actionsPageFor, ONLINE_APP_URL, workflowFor, WORKFLOW_PATH } from '../lib/workflow';
 
@@ -10,6 +12,8 @@ import { actionsPageFor, ONLINE_APP_URL, workflowFor, WORKFLOW_PATH } from '../l
  */
 export function ConnectionScreen({ checks }: { checks: number }) {
   useDocumentTitle('Get started');
+  // The free online copy sleeps when idle: it is woken as this screen opens, so it is usually ready by the click.
+  const wake = useWakeOnline();
   const [url, setUrl] = useState('');
   const [repo, setRepo] = useState('');
   const [copied, setCopied] = useState(false);
@@ -44,6 +48,7 @@ export function ConnectionScreen({ checks }: { checks: number }) {
             <a className="btn-primary inline-block" href={ONLINE_APP_URL} rel="noreferrer">
               Open the online app
             </a>
+            <WakeNote state={wake} />
           </p>
         </>
       )}

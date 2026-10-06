@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { HOME_FAQ, HOME_STEPS } from '../lib/faq';
 import { Mark } from '../components/TopBar';
-import { Spinner } from '../components/text';
-import { useWakeOnline, type WakeState } from '../hooks/useWakeOnline';
+import { WakeNote } from '../components/WakeNote';
+import { useWakeOnline } from '../hooks/useWakeOnline';
 import { startAddress } from '../lib/online';
 import { LANDING_TITLE, useDocumentTitle } from '../lib/title';
 
@@ -34,17 +34,6 @@ function StartButton({ className, children }: { className: string; children: Rea
     <a href={startAddress()} className={className}>
       {children}
     </a>
-  );
-}
-
-function WakeNote({ state }: { state: WakeState }) {
-  if (state === 'none') return null;
-  return (
-    <p role="status" className="mt-3 text-sm text-ink-soft">
-      {state === 'waking' && <Spinner label="Getting the free online copy ready. It sleeps when idle." />}
-      {state === 'ready' && <span><span className="font-bold text-pass">✓</span> The online copy is awake and ready.</span>}
-      {state === 'failed' && 'The online copy is slow to wake. It can take about a minute after you click.'}
-    </p>
   );
 }
 
@@ -237,10 +226,15 @@ export function LandingScreen() {
             <Mark size={20} />
             Release check-up
           </span>
-          <span>Source-available. Read the code and run it yourself.</span>
-          <a href={REPO_URL} className="btn-link text-sm" rel="noreferrer">
-            Source on GitHub
-          </a>
+          <span>Source-available under FSL-1.1-MIT. Read the code and run it yourself.</span>
+          <span className="flex flex-wrap gap-x-5">
+            <a href={REPO_URL} className="btn-link text-sm" rel="noreferrer">
+              Source on GitHub
+            </a>
+            <a href={`${REPO_URL}/blob/main/LICENSE`} className="btn-link text-sm" rel="noreferrer">
+              License
+            </a>
+          </span>
         </div>
       </footer>
     </>

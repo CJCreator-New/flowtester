@@ -48,6 +48,7 @@ export function NewCheckupScreen({
   recent,
   waitingPlans = [],
   onResumePlan,
+  shared = false,
 }: {
   /** null while it's being read. */
   ai: AiSetup | null;
@@ -63,6 +64,8 @@ export function NewCheckupScreen({
   /** Plans kept aside for other sites, each waiting for review. */
   waitingPlans?: WaitingPlan[];
   onResumePlan?: (host: string) => void;
+  /** This is the free shared copy: other people using it can see every check-up and report. */
+  shared?: boolean;
 }) {
   const [check, setCheck] = useState<AddressCheck>({ state: 'empty' });
   const [recheck, setRecheck] = useState(0);
@@ -188,6 +191,16 @@ export function NewCheckupScreen({
       <p className="mb-8 max-w-prose text-ink-soft">
         The site is scanned and a test plan is written for you to review. Nothing is tested until you approve the plan.
       </p>
+
+      {shared && (
+        <div className="mb-8">
+          <Notice tone="warn" title="This is a shared copy">
+            <p>
+              Check-ups and reports here can be seen by other people using it, and only one check-up runs at a time. Only public sites can be checked. Don’t check anything you want kept private.
+            </p>
+          </Notice>
+        </div>
+      )}
 
       {ai && !keyReady && (
         <section aria-labelledby="key-title" className="mb-8 rounded-lg border-2 border-stamp bg-surface p-5">

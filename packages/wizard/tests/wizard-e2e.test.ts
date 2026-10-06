@@ -253,6 +253,8 @@ describe('Release check-up end to end, on the one server', () => {
 
     await page.getByText('Add specs, design notes or journeys').click();
     await page.getByLabel('Specs', { exact: true }).fill(SPECS);
+    // This copy isn't the shared one, so there is no shared-copy warning.
+    expect(await page.getByText('This is a shared copy').count()).toBe(0);
     // No key yet doesn't stop a first scan: fixed rules write the plan, and the key is offered as an upgrade.
     const scan = page.getByRole('button', { name: 'Scan the site' });
     expect(await scan.isDisabled()).toBe(false);

@@ -784,6 +784,8 @@ export class RunnerServer {
                 // The finished report, when the last run finished.
                 reportRunId: this.lastReport?.runId ?? null,
                 hubConnected: !!this.hubUrl,
+                // A copy shared with other people: their check-ups and reports are visible to each other.
+                beta: this.beta,
               })
             );
             return;

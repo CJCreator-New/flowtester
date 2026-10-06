@@ -56,6 +56,8 @@ export interface RunnerStatus {
   /** The run the latest report belongs to. */
   reportRunId?: string | null;
   hubConnected?: boolean;
+  /** A copy shared with other people (the free online one): check-ups and reports are visible to all of them. */
+  beta?: boolean;
 }
 
 /** null means the runner can't be reached (not started yet, or stopped). */

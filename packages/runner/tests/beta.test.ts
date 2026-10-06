@@ -91,6 +91,10 @@ describe('A runner shared as a beta', () => {
     expect(again.headers['set-cookie']).toBeUndefined();
   });
 
+  it('says in its status that it is a shared copy, so the app can warn that check-ups are visible to others', async () => {
+    expect(JSON.parse((await call('GET', '/api/runner/status')).body).beta).toBe(true);
+  });
+
   it('keeps a tester’s key to their own session, in memory only', async () => {
     const alice = await newSession();
     const bob = await newSession();

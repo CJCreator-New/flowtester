@@ -591,4 +591,4 @@ This occurs if the local Google Cloud telemetry plugin on Windows has invalid pa
 
 ## 📄 License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+This project is source-available under the [Functional Source License, Version 1.1, MIT Future License](LICENSE) (FSL-1.1-MIT). You can use, copy, modify and redistribute it for any purpose except offering a competing commercial product or service. Each version becomes available under the plain MIT License two years after it is released.
