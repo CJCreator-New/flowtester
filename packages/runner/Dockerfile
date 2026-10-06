@@ -19,6 +19,8 @@ COPY packages/checkers packages/checkers
 COPY packages/core packages/core
 COPY packages/runner packages/runner
 COPY packages/wizard packages/wizard
+# The Wizard builds the workflow file people copy from its start screen into its page, so the file must be here.
+COPY templates templates
 RUN pnpm --filter "@qa/runner..." run build && pnpm --filter @qa/wizard run build
 
 ENV NODE_ENV=production \
