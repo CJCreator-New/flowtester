@@ -14,6 +14,7 @@ export type Route =
   | { name: 'testing' }
   | { name: 'reports' }
   | { name: 'report'; runId: string }
+  | { name: 'visibility'; runId: string }
   | { name: 'baselines' }
   | { name: 'benchmark' }
   | { name: 'settings' }
@@ -27,6 +28,7 @@ export const PATHS = {
   testing: '/check/testing',
   reports: '/reports',
   report: (runId: string) => `/reports/${encodeURIComponent(runId)}`,
+  visibility: (runId: string) => `/reports/${encodeURIComponent(runId)}/visibility`,
   baselines: '/baselines',
   benchmark: '/benchmark',
   settings: '/settings',
@@ -53,6 +55,14 @@ export function matchRoute(pathname: string): Route {
       return { name: 'benchmark' };
     case PATHS.settings:
       return { name: 'settings' };
+  }
+  const visibilityMatch = path.match(/^\/reports\/([^/]+)\/visibility$/);
+  if (visibilityMatch) {
+    try {
+      return { name: 'visibility', runId: decodeURIComponent(visibilityMatch[1]) };
+    } catch {
+      // an address that can't be read is not found
+    }
   }
   const report = path.match(/^\/reports\/([^/]+)$/);
   if (report) {

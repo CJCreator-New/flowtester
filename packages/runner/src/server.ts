@@ -327,6 +327,7 @@ export interface TriggerRunBody {
    * said, on for a live site and off for a test copy.
    */
   searchChecks?: boolean;
+  visibility?: { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean };
   /**
    * Plan with fixed rules now, spending no AI requests; the AI is still set up for the review, so
    * items can be re-planned with it later.
@@ -374,6 +375,7 @@ interface StoredPlanRecord {
     productContext?: string;
     /** Check how search engines and AI assistants see the site: off for a test copy unless asked. */
     searchChecks?: boolean;
+    visibility?: { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean };
     /** Design tokens / design notes. */
     designNotes?: string;
     /** Path to product context file on disk if written. */
@@ -2314,6 +2316,11 @@ export class RunnerServer {
       const readOnly = !(owner && testHost);
       // How search engines see a site matters on the public site, not on a test copy, unless asked.
       const searchChecks = body.searchChecks ?? memory?.searchChecks ?? (urlFirst ? !testHost : true);
+      const visibility = (body.visibility as { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean } | undefined) ?? (
+        searchChecks
+          ? { search: true, answers: true, aiSearch: true, marketing: true }
+          : { search: false, answers: false, aiSearch: false, marketing: false }
+      );
 
       const context: StoredPlanRecord['context'] = {
         targetUrl,
@@ -2329,6 +2336,7 @@ export class RunnerServer {
         productContext: body.productContext,
         designNotes: body.designNotes,
         searchChecks,
+        visibility,
       };
 
       if (body.specTestCases && body.specTestCases.length > 0) {
@@ -2714,6 +2722,7 @@ export class RunnerServer {
         siteMap: context.draft ? this.siteMapOf(context.draft, context.runId) : undefined,
         testedWithApprovedPlan: extra.testedWithApprovedPlan,
         searchChecks: context.searchChecks,
+        visibility: context.visibility,
         onEvent: (event) => {
           if (current()) this.forwardRunEvent(event);
         },

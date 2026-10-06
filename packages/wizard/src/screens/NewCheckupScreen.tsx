@@ -24,6 +24,7 @@ export interface StartFacts {
   stagingHost?: boolean;
   /** Sent only when the person chose, so the runner remembers it for the site. */
   searchChecks?: boolean;
+  visibility?: { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean };
   /** True when there is no AI key: no AI is used and fixed rules write the plan, so a first scan needs no setup. */
   noAI?: boolean;
 }
@@ -146,6 +147,12 @@ export function NewCheckupScreen({
   const kind = check.state === 'ok' ? testCopyOf(check.facts, form) : null;
   // Search is checked on a live site and not on a test copy, unless the person says otherwise.
   const searchChecksOn = form.searchChecks ?? !(kind?.isTestCopy && form.owner);
+  const visibilityOn = form.visibility ?? {
+    search: searchChecksOn,
+    answers: searchChecksOn,
+    aiSearch: searchChecksOn,
+    marketing: searchChecksOn,
+  };
 
   const hasStagingIndicator =
     !!kind?.natural ||
@@ -162,7 +169,8 @@ export function NewCheckupScreen({
     onStart({
       url: check.url,
       stagingHost: kind.showMark ? form.markedTestCopy : undefined,
-      searchChecks: form.searchChecks ?? undefined,
+      searchChecks: searchChecksOn,
+      visibility: searchChecksOn ? visibilityOn : { search: false, answers: false, aiSearch: false, marketing: false },
       noAI: ai && !keyReady ? true : undefined,
     });
   };
@@ -340,22 +348,123 @@ export function NewCheckupScreen({
         <SignInsSection form={form} saved={remembered?.signIns} onFormChange={onFormChange} />
 
         {kind && (
-          <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5 h-5 w-5 shrink-0 accent-[#6C9BF2]"
-              checked={searchChecksOn}
-              onChange={(e) => onFormChange((f) => ({ ...f, searchChecks: e.target.checked }))}
-            />
-            <span>
-              <span className="block font-bold">Check how search engines and AI assistants see it</span>
-              <span className="block text-ink-soft">
-                {kind.isTestCopy && form.owner
-                  ? 'Usually only matters on the public site, so it’s off for a test copy.'
-                  : 'Titles, descriptions and the like, for people finding the site.'}
+          <div className="mt-4 rounded-lg border border-edge bg-surface p-4">
+            <label className="flex cursor-pointer items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-5 w-5 shrink-0 accent-[#6C9BF2]"
+                checked={searchChecksOn}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  onFormChange((f) => ({
+                    ...f,
+                    searchChecks: on,
+                    visibility: { search: on, answers: on, aiSearch: on, marketing: on },
+                  }));
+                }}
+              />
+              <span className="flex-1">
+                <span className="block font-bold text-ink">Check how people and AI find the site</span>
+                <span className="block text-xs font-medium text-ink-soft">
+                  Search (SEO) · AI answers (AEO) · AI search (GEO) · Marketing (MKT)
+                </span>
+                <span className="mt-1 block text-xs text-ink-soft">
+                  {kind.isTestCopy && form.owner
+                    ? 'Off by default for local test copies, but you can turn it on anytime to audit SEO, AI discovery, and Marketing.'
+                    : 'Audits search engine tags, AI assistant schemas, crawler access, and marketing readiness.'}
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+
+            {searchChecksOn && (
+              <details className="mt-3 border-t border-rule pt-3 text-sm" open>
+                <summary className="cursor-pointer text-xs font-semibold text-accent hover:underline">
+                  Choose which to check
+                </summary>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="flex cursor-pointer items-start gap-2.5 text-xs">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-[#6C9BF2]"
+                      checked={visibilityOn.search}
+                      onChange={(e) => {
+                        const next = { ...visibilityOn, search: e.target.checked };
+                        onFormChange((f) => ({
+                          ...f,
+                          searchChecks: next.search || next.answers || next.aiSearch || next.marketing,
+                          visibility: next,
+                        }));
+                      }}
+                    />
+                    <div>
+                      <span className="font-semibold text-ink">Search (SEO)</span>
+                      <span className="block text-ink-soft">Titles, descriptions, headings, canonical, robots & sitemap</span>
+                    </div>
+                  </label>
+
+                  <label className="flex cursor-pointer items-start gap-2.5 text-xs">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-[#6C9BF2]"
+                      checked={visibilityOn.answers}
+                      onChange={(e) => {
+                        const next = { ...visibilityOn, answers: e.target.checked };
+                        onFormChange((f) => ({
+                          ...f,
+                          searchChecks: next.search || next.answers || next.aiSearch || next.marketing,
+                          visibility: next,
+                        }));
+                      }}
+                    />
+                    <div>
+                      <span className="font-semibold text-ink">AI answers (AEO)</span>
+                      <span className="block text-ink-soft">FAQPage, HowTo, Organization JSON-LD markup</span>
+                    </div>
+                  </label>
+
+                  <label className="flex cursor-pointer items-start gap-2.5 text-xs">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-[#6C9BF2]"
+                      checked={visibilityOn.aiSearch}
+                      onChange={(e) => {
+                        const next = { ...visibilityOn, aiSearch: e.target.checked };
+                        onFormChange((f) => ({
+                          ...f,
+                          searchChecks: next.search || next.answers || next.aiSearch || next.marketing,
+                          visibility: next,
+                        }));
+                      }}
+                    />
+                    <div>
+                      <span className="font-semibold text-ink">AI search (GEO)</span>
+                      <span className="block text-ink-soft">llms.txt, AI crawlers (GPTBot, ClaudeBot), citations</span>
+                    </div>
+                  </label>
+
+                  <label className="flex cursor-pointer items-start gap-2.5 text-xs">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-[#6C9BF2]"
+                      checked={visibilityOn.marketing}
+                      onChange={(e) => {
+                        const next = { ...visibilityOn, marketing: e.target.checked };
+                        onFormChange((f) => ({
+                          ...f,
+                          searchChecks: next.search || next.answers || next.aiSearch || next.marketing,
+                          visibility: next,
+                        }));
+                      }}
+                    />
+                    <div>
+                      <span className="font-semibold text-ink">Marketing (MKT)</span>
+                      <span className="block text-ink-soft">Share previews, picture, call to action, contact & privacy</span>
+                    </div>
+                  </label>
+                </div>
+              </details>
+            )}
+          </div>
         )}
 
         <details className="mt-6 rounded-lg border-2 border-edge bg-surface" open={added > 0 || undefined}>

@@ -41,6 +41,7 @@ import { LandingScreen } from './screens/LandingScreen';
 import { PastCheckupsScreen } from './screens/PastCheckupsScreen';
 import { PlanReviewScreen, type PlanNotice, type PlanUpdateState } from './screens/PlanReviewScreen';
 import { ReportScreen } from './screens/ReportScreen';
+import { VisibilityScreen } from './screens/VisibilityScreen';
 import { ScanningScreen, type ScanProgress } from './screens/ScanningScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { TestingScreen } from './screens/TestingScreen';
@@ -383,6 +384,7 @@ export default function App() {
       owner: form.owner,
       stagingHost: facts.stagingHost,
       searchChecks: facts.searchChecks,
+      visibility: facts.visibility,
       productContext: productContextOf(form),
       designNotes: form.designNotes.trim() || undefined,
       maxPages: form.maxPages !== DEFAULT_MAX_PAGES ? form.maxPages : undefined,
@@ -665,6 +667,9 @@ export default function App() {
             }}
           />
         );
+        break;
+      case 'visibility':
+        body = <VisibilityScreen runId={route.runId} />;
         break;
       case 'baselines':
         body = <VisualBaselinesScreen />;

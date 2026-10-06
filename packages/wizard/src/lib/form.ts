@@ -25,9 +25,25 @@ export interface CheckupForm {
   useSavedSignIns: boolean;
   /** Check how search engines see the site; null: the usual (a live site yes, a test copy no). */
   searchChecks: boolean | null;
+  /** Granular 4-lens visibility choices: search, answers, aiSearch, marketing. */
+  visibility?: VisibilityChoice | null;
   /** Plan with fixed rules now, spending no AI requests; re-plan with the AI later. */
   planWithoutAI: boolean;
 }
+
+export interface VisibilityChoice {
+  search: boolean;
+  answers: boolean;
+  aiSearch: boolean;
+  marketing: boolean;
+}
+
+export const DEFAULT_VISIBILITY: VisibilityChoice = {
+  search: true,
+  answers: true,
+  aiSearch: true,
+  marketing: true,
+};
 
 export interface SignInEntry {
   role: string;
@@ -61,6 +77,7 @@ export const EMPTY_FORM: CheckupForm = {
   rememberSignIns: true,
   useSavedSignIns: true,
   searchChecks: null,
+  visibility: null,
   planWithoutAI: false,
 };
 

@@ -10,6 +10,7 @@ describe('every screen has an address', () => {
     ['/check/testing/', { name: 'testing' }],
     ['/reports', { name: 'reports' }],
     ['/reports/run-1790000000000', { name: 'report', runId: 'run-1790000000000' }],
+    ['/reports/run-1790000000000/visibility', { name: 'visibility', runId: 'run-1790000000000' }],
     ['/baselines', { name: 'baselines' }],
     ['/benchmark', { name: 'benchmark' }],
     ['/settings', { name: 'settings' }],
@@ -20,8 +21,9 @@ describe('every screen has an address', () => {
     expect(matchRoute(path)).toEqual(route);
   });
 
-  it('builds report addresses that read back as the same run', () => {
+  it('builds report and visibility addresses that read back as the same run', () => {
     expect(matchRoute(PATHS.report('run 1/x'))).toEqual({ name: 'report', runId: 'run 1/x' });
+    expect(matchRoute(PATHS.visibility('run 1/x'))).toEqual({ name: 'visibility', runId: 'run 1/x' });
   });
 
   it('knows which addresses belong to the check-up in progress', () => {

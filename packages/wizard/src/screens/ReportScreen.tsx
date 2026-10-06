@@ -576,21 +576,31 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
                 )}
               </div>
               {checked && sub && (
-                <dl className="mt-1 grid grid-cols-2 gap-1 border-t border-rule pt-2 text-sm sm:grid-cols-4">
-                  {(
-                    [
-                      ['Search', sub.seo, 'How search engines, such as Google, find and list the site (SEO).'],
-                      ['AI answers', sub.aeo, 'How answer engines and AI assistants pick answers from the site (AEO).'],
-                      ['AI search', sub.geo, 'How AI search tools read and quote the site (GEO).'],
-                      ['Marketing', sub.marketing, 'Share previews, a clear call to action, contact details, analytics and social links.'],
-                    ] as const
-                  ).map(([label, part, hint]) => (
-                    <div key={label} title={hint}>
-                      <dt className="text-ink-soft">{label}</dt>
-                      <dd className="font-bold text-ink">{part?.checked === false ? <span className="font-normal text-ink-soft">Not checked</span> : `${part?.score ?? 100}%`}</dd>
-                    </div>
-                  ))}
-                </dl>
+                <>
+                  <dl className="mt-1 grid grid-cols-2 gap-1 border-t border-rule pt-2 text-sm sm:grid-cols-4">
+                    {(
+                      [
+                        ['Search', sub.seo, 'How search engines, such as Google, find and list the site (SEO).'],
+                        ['AI answers', sub.aeo, 'How answer engines and AI assistants pick answers from the site (AEO).'],
+                        ['AI search', sub.geo, 'How AI search tools read and quote the site (GEO).'],
+                        ['Marketing', sub.marketing, 'Share previews, a clear call to action, contact details, analytics and social links.'],
+                      ] as const
+                    ).map(([label, part, hint]) => (
+                      <div key={label} title={hint}>
+                        <dt className="text-ink-soft">{label}</dt>
+                        <dd className="font-bold text-ink">{part?.checked === false ? <span className="font-normal text-ink-soft">Not checked</span> : `${part?.score ?? 100}%`}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <div className="mt-2 border-t border-rule pt-2">
+                    <Link
+                      to={PATHS.visibility(report.runId)}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-accent hover:underline"
+                    >
+                      See search, AI & marketing visibility →
+                    </Link>
+                  </div>
+                </>
               )}
             </li>
           );

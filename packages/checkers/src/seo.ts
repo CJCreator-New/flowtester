@@ -17,6 +17,8 @@ export interface SeoContext {
    * test copy): then only its links are checked.
    */
   searchChecks?: boolean;
+  /** Granular 4-lens visibility flags: search, answers, aiSearch, marketing. */
+  visibility?: { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean };
   /**
    * Facts about the whole site already reported this run (its icon, its phone set-up, who runs it):
    * each is reported once, on the first page it's seen on, not on every page.
@@ -68,13 +70,21 @@ export class SeoChecker {
       return true;
     };
 
-    // Not a public site: how search engines see it doesn't matter, but broken links still do.
-    if (context.searchChecks === false) {
+    const vis = context.visibility ?? {
+      search: context.searchChecks !== false,
+      answers: context.searchChecks !== false,
+      aiSearch: context.searchChecks !== false,
+      marketing: context.searchChecks !== false,
+    };
+
+    // If all visibility checks are turned off: only check broken links.
+    if (!vis.search && !vis.answers && !vis.aiSearch && !vis.marketing) {
       return details.sameSiteLinks?.length ? this.checkBrokenLinks(page, details.sameSiteLinks, context) : findings;
     }
 
-    // 1. Page Title
-    if (!details.title || details.title.trim().length === 0) {
+    if (vis.search) {
+      // 1. Page Title
+      if (!details.title || details.title.trim().length === 0) {
       findings.push({
         id: `F-SEO-${tcId}-TITLE-${findings.length + 1}`,
         testCaseId: context.testCaseId,
@@ -353,6 +363,7 @@ export class SeoChecker {
         resolution: 'Add <meta property="og:title">, <meta property="og:description">, and <meta property="og:image"> tags.',
       });
     }
+    } // end if (vis.search)
 
     // 11. Check for broken links on page (limited rate, same-site only)
     if (details.sameSiteLinks && details.sameSiteLinks.length > 0) {
@@ -361,7 +372,7 @@ export class SeoChecker {
     }
 
     // 12. Site Root Auditor (robots.txt, sitemap.xml, llms.txt, AI crawlers)
-    if (context.baseUrl) {
+    if (vis.search && context.baseUrl) {
       const isRootPath = context.urlPath === '/' || context.urlPath === '' || context.urlPath === '/index.html';
       if (isRootPath) {
         try {
@@ -394,23 +405,27 @@ export class SeoChecker {
     }
 
     // 13. AEO Audits (Answer Engine Optimization: JSON-LD, Q&A patterns, breadcrumbs)
-    if (isPublicVisitor) {
+    if (isPublicVisitor && vis.answers) {
       try {
         const aeoFindings = await this.aeoChecker.checkPage(page, context);
         findings.push(...aeoFindings);
       } catch {
         // Non-blocking
       }
+    }
 
-      // 14. GEO Audits (Generative Engine Optimization: density, citations, author bylines)
+    // 14. GEO Audits (Generative Engine Optimization: density, citations, author bylines)
+    if (isPublicVisitor && vis.aiSearch) {
       try {
         const geoFindings = await this.geoChecker.checkPage(page, context);
         findings.push(...geoFindings);
       } catch {
         // Non-blocking
       }
+    }
 
-      // 15. Marketing basics (share previews, call to action, contact, analytics), once per site
+    // 15. Marketing basics (share previews, call to action, contact, analytics), once per site
+    if (isPublicVisitor && vis.marketing) {
       try {
         findings.push(...(await this.marketingChecker.checkPage(page, { ...context, log: context.marketingLog })));
       } catch {

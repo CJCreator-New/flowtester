@@ -202,6 +202,7 @@ export interface RunOptions {
    * isn't public, such as a test copy: then only link health is checked.
    */
   searchChecks?: boolean;
+  visibility?: { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean };
   enablePerformance?: boolean;
   enableSecurity?: boolean;
   /** Record a video per test point; kept only when the point fails. Default true. */
@@ -695,6 +696,7 @@ export class FlowTestOrchestrator {
                   urlPath: new URL(page.url(), options.targetUrl).pathname,
                   baseUrl: options.targetUrl,
                   searchChecks: options.searchChecks,
+                  visibility: options.visibility,
                   siteWide,
                   marketingLog,
                 });

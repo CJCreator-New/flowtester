@@ -281,6 +281,8 @@ export interface StartRunRequest {
    * matters on the public site.
    */
   searchChecks?: boolean;
+  /** Granular 4-lens visibility flags: search, answers, aiSearch, marketing. */
+  visibility?: { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean };
   /** Remember the sign-ins for this site (passwords in the computer's keychain). */
   rememberSignIns?: boolean;
   /** Sign in with the ones saved for the site. */
@@ -309,6 +311,7 @@ export async function startRun(request: StartRunRequest): Promise<string> {
   if (request.rememberSignIns) body.rememberSignIns = true;
   if (request.useSavedSignIns) body.useSavedSignIns = true;
   if (request.searchChecks !== undefined) body.searchChecks = request.searchChecks;
+  if (request.visibility !== undefined) body.visibility = request.visibility;
   if (request.stagingHost !== undefined) body.stagingHost = request.stagingHost;
   if (request.roles?.length) body.roles = request.roles;
   if (request.productContext) body.productContext = request.productContext;

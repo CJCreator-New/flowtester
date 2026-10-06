@@ -292,4 +292,43 @@ Disallow: /
     expect(findings.some((f) => f.title.includes('Low text-to-code ratio'))).toBe(true);
     expect(findings.every((f) => f.categoryTag === 'GEO')).toBe(true);
   });
+
+  it('respects granular visibility flags for SEO, AEO, GEO, and Marketing', async () => {
+    const pageWithDefects = createMockPage({
+      title: '',
+      metaDescription: '',
+      h1Count: 0,
+      headings: [],
+      htmlLang: 'en',
+      sameSiteLinks: [],
+      hasViewportMeta: true,
+      hasFavicon: true,
+      canonicalUrl: 'http://localhost/test',
+      canonicalCount: 1,
+      imagesWithoutAltCount: 0,
+    });
+
+    // 1. Only search enabled
+    const findingsSearchOnly = await checker.checkPage(pageWithDefects, {
+      testCaseId: 'TC-VIS-1',
+      role: 'visitor',
+      breakpoint: '1440px',
+      urlPath: '/test',
+      visibility: { search: true, answers: false, aiSearch: false, marketing: false },
+    });
+    expect(findingsSearchOnly.some((f) => f.categoryTag === 'SEO')).toBe(true);
+    expect(findingsSearchOnly.some((f) => f.categoryTag === 'AEO')).toBe(false);
+    expect(findingsSearchOnly.some((f) => f.categoryTag === 'GEO')).toBe(false);
+    expect(findingsSearchOnly.some((f) => f.categoryTag === 'MKT')).toBe(false);
+
+    // 2. All visibility turned off
+    const findingsAllOff = await checker.checkPage(pageWithDefects, {
+      testCaseId: 'TC-VIS-2',
+      role: 'visitor',
+      breakpoint: '1440px',
+      urlPath: '/test',
+      visibility: { search: false, answers: false, aiSearch: false, marketing: false },
+    });
+    expect(findingsAllOff.length).toBe(0);
+  });
 });
