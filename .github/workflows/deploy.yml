@@ -51,8 +51,9 @@ jobs:
       - name: Build the site
         run: pnpm run vercel-build
 
-      - name: Type-check the runner
-        run: pnpm exec tsc --noEmit -p packages/runner
+      # The same build Render's image runs. It compiles the runner and the packages it uses, which also type-checks them.
+      - name: Build the runner
+        run: pnpm --filter "@qa/runner..." run build
 
       # The browser-driven end-to-end test takes minutes and needs Chromium: run it before a release, not on every push.
       - name: Tests
