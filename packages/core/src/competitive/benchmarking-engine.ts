@@ -32,7 +32,6 @@ export class BenchmarkingEngine {
       requiredFieldsCount,
       clickDepth,
       frictionIndex,
-      avgPageLoadMs: 450,
     };
   }
 
@@ -79,14 +78,12 @@ export class BenchmarkingEngine {
         url: ourFlow.entryUrl,
         name: ourFlow.name,
         scorecard: ourScorecard,
-        a11yScore: 92,
         screenshots: ourFlow.steps.map((s) => s.screenshotPath || '').filter(Boolean),
       },
       referenceProduct: {
         url: refFlow.entryUrl,
         name: refFlow.name,
         scorecard: refScorecard,
-        a11yScore: 88,
         screenshots: refFlow.steps.map((s) => s.screenshotPath || '').filter(Boolean),
       },
       delta: {

@@ -244,7 +244,7 @@ export function bugReportMarkdown(f: Finding, targetUrl: string): string {
   const consoleLines = (f.evidence.consoleLogs || []).map((c) => c.text).filter(Boolean);
   if (consoleLines.length) lines.push('', '**Console errors**', '', '```', ...consoleLines, '```');
   if (f.resolution) lines.push('', `**Suggested fix:** ${f.resolution}`);
-  if (f.verifyCommand) lines.push('', `Check the fix with \`${f.verifyCommand}\`.`);
+  lines.push('', 'After the fix, run the check-up again on the same address. This finding should no longer appear.');
   return lines.filter((l, i, all) => !(l === '' && all[i - 1] === '')).join('\n');
 }
 

@@ -35,6 +35,9 @@ dist/
 # built for Vercel (scripts/vercel-output.mjs)
 /public
 
+# Local design review screenshots and editor settings
+.review-shots/
+.vscode/
 # Local editor settings and design review screenshots
 .vscode/
 .review-shots/

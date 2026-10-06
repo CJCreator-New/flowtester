@@ -163,7 +163,6 @@ export class PerformanceChecker {
         stepsToReproduce: [`Visit ${context.urlPath} at screen width ${context.breakpoint}`, 'Measure page render timing'],
         evidence: { measurements: vitals.measurements },
         resolution: 'Optimize server response time, defer heavy non-critical scripts, and compress hero images.',
-        verifyCommand: `qa-test verify ${idPrefix}-LCP`,
       });
     } else if (vitals?.lcpMs === undefined && vitals?.domReadyMs !== undefined && vitals.domReadyMs > SPEED_THRESHOLDS.LCP_GOOD_MS) {
       // The browser reported no LCP, so say what was measured: how long the HTML took to be ready.
@@ -180,7 +179,6 @@ export class PerformanceChecker {
         stepsToReproduce: [`Visit ${context.urlPath} at screen width ${context.breakpoint}`, 'Measure page load timing'],
         evidence: { measurements: vitals.measurements },
         resolution: 'Optimize server response time and defer heavy non-critical scripts.',
-        verifyCommand: `qa-test verify ${idPrefix}-LOAD`,
       });
     }
 
@@ -201,7 +199,6 @@ export class PerformanceChecker {
         stepsToReproduce: [`Open ${context.urlPath} at ${context.breakpoint}`, 'Observe content shifting during loading'],
         evidence: { measurements: vitals.measurements },
         resolution: 'Set explicit width and height dimensions on images and banners to reserve space before loading.',
-        verifyCommand: `qa-test verify ${idPrefix}-CLS`,
       });
     }
 
@@ -221,7 +218,6 @@ export class PerformanceChecker {
         stepsToReproduce: [`Open ${context.urlPath} at ${context.breakpoint}`, 'Click a menu button or press Tab and watch how long the page takes to react'],
         evidence: { measurements: vitals.measurements },
         resolution: 'Break up long JavaScript tasks, defer work that is not needed to show the next screen, and avoid heavy re-renders on click.',
-        verifyCommand: `qa-test verify ${idPrefix}-INP`,
       });
     }
 
@@ -241,7 +237,6 @@ export class PerformanceChecker {
         stepsToReproduce: [`Open ${context.urlPath} with the browser's network panel open`, 'Add up the transferred size'],
         evidence: { measurements: { weight } },
         resolution: 'Compress and resize images, drop unused scripts and fonts, and lazy-load what is below the fold.',
-        verifyCommand: `qa-test verify ${idPrefix}-WEIGHT`,
       });
     }
 
@@ -264,7 +259,6 @@ export class PerformanceChecker {
             stepsToReproduce: [`Visit ${context.urlPath}`, `Inspect network waterfall for ${req.url}`],
             evidence: {},
             resolution: 'Enable compression (gzip/brotli), optimize query performance, or use edge caching.',
-            verifyCommand: `qa-test verify F-PERF-SLOWREQ`,
           });
           break; // Flag the most severe one per page
         }
@@ -297,7 +291,6 @@ export class PerformanceChecker {
         ],
         evidence: {},
         resolution: 'Ensure all containers use max-width: 100% or overflow: hidden, and avoid fixed pixel widths wider than 375px.',
-        verifyCommand: `qa-test verify F-PERF-OVERFLOW`,
       });
     }
 
@@ -327,7 +320,6 @@ export class PerformanceChecker {
         ],
         evidence: {},
         resolution: 'Adjust CSS margins, z-index, or flex/grid stacking order so interactive controls do not cover each other.',
-        verifyCommand: `qa-test verify F-PERF-OVERLAP`,
       });
     }
 

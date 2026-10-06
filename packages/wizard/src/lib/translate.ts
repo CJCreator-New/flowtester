@@ -188,7 +188,6 @@ export function reduceFeed(state: FeedState, event: RunnerEvent, mode: RunMode):
 
   switch (event.type) {
     case 'connected':
-    case 'HUB_PUSH_RESULT':
       return state;
 
     case 'STEP_COMPLETED': {

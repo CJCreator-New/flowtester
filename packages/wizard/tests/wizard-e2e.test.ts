@@ -214,8 +214,6 @@ describe('Release check-up end to end, on the one server', () => {
     await expect.poll(() => page.title()).toBe('New check-up · Release check-up');
     const topBar = page.getByRole('navigation', { name: 'Main' });
     for (const name of ['New check-up', 'Past check-ups', 'Settings']) expect(await topBar.getByRole('link', { name }).count(), name).toBe(1);
-    // No Report Hub is set up, so there's no Team Hub link.
-    expect(await page.getByRole('link', { name: 'Team Hub' }).count()).toBe(0);
     // Served by the QA Tool, the page never needs to explain how to start it.
     expect(await page.getByText('Start Release check-up first').count()).toBe(0);
     // No key yet: connecting the AI comes first, on this screen.

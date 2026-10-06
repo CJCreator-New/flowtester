@@ -33,7 +33,6 @@ describe('ReproScriptGenerator', () => {
       stepsToReproduce: ['Navigate to /invoices/new', 'Click Save button'],
       evidence: {},
       resolution: 'Check API endpoint handler',
-      verifyCommand: 'qa-test verify F-TEST-001',
     };
 
     const mockTestCase: TestCase = {

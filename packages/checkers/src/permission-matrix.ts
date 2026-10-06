@@ -100,7 +100,6 @@ export class PermissionMatrixChecker {
         ],
         evidence: {},
         resolution: `Role "${role}" can open "${target}"; permission matrix says deny. Add a server-side authorization check to this route.`,
-        verifyCommand: `qa-test verify F-PERM-LEAK-${role}-${target.replace(/[^a-zA-Z0-9]/g, '_')}`,
       };
     }
 
@@ -128,7 +127,6 @@ export class PermissionMatrixChecker {
         ],
         evidence: {},
         resolution: `Role "${role}" should have access to "${target}". Verify role authorization mappings in the backend.`,
-        verifyCommand: `qa-test verify F-PERM-RESTRICT-${role}-${target.replace(/[^a-zA-Z0-9]/g, '_')}`,
       };
     }
 
@@ -178,7 +176,6 @@ export class PermissionMatrixChecker {
         ],
         evidence: {},
         resolution: `Ensure backend middleware rejects unauthorized requests rather than relying on frontend navigation hiding (security through obscurity).`,
-        verifyCommand: `qa-test verify F-DIRECT-URL-${role}-${target.replace(/[^a-zA-Z0-9]/g, '_')}`,
       };
     }
 

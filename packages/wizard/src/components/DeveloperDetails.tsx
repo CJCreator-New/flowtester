@@ -145,11 +145,7 @@ export function DeveloperDetails({ finding: f, runId, targetUrl }: { finding: Fi
           />
         </div>
 
-        {f.verifyCommand && (
-          <p className="text-ink-soft">
-            Check a fix from the command line: <code className="rounded border border-rule bg-canvas px-1.5 py-0.5 font-mono text-sm text-ink">{f.verifyCommand}</code>
-          </p>
-        )}
+        <p className="text-ink-soft">After you fix it, run the check-up again on the same address. This finding should no longer appear.</p>
       </div>
     </details>
   );

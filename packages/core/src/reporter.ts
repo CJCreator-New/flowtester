@@ -167,6 +167,20 @@ export class ReportGenerator {
       lines.push(``);
     }
 
+    // The marketing basics, one line each: a score alone doesn't say what was looked for.
+    if (report.marketing) {
+      lines.push(`## 📣 Marketing basics`);
+      lines.push(`Read from: ${report.marketing.readPages.map((p) => `\`${p}\``).join(', ')}`);
+      lines.push('');
+      lines.push('| Check | Result | Details |');
+      lines.push('| :--- | :--- | :--- |');
+      for (const c of report.marketing.checks) {
+        const result = c.status === 'ok' ? '✅ OK' : c.status === 'gap' ? (c.kind === 'opinion' ? '💡 Worth adding' : '⚠️ Missing') : '➖ Not checked';
+        lines.push(`| ${c.label}${c.kind === 'opinion' ? ' (suggestion)' : ''} | ${result} | ${c.detail}${c.findingId ? ` See ${c.findingId}.` : ''} |`);
+      }
+      lines.push('');
+    }
+
     // Findings section
     const activeFindings = findings.filter(
       (f) => f.triageStatus !== 'Intended' && f.triageStatus !== 'False Positive'
@@ -207,7 +221,7 @@ export class ReportGenerator {
         lines.push(`- **Expected:** ${f.expectedVsActual.expected}`);
         lines.push(`- **Actual:** ${f.expectedVsActual.actual}`);
         lines.push(`- **Recommended Resolution:** ${f.resolution}`);
-        lines.push(`- **Verify Command:** \`${f.verifyCommand}\``);
+        lines.push('- **After you fix it:** Run the check-up again on the same address. This finding should no longer appear.');
         if (f.reproScriptPath) {
           lines.push(`- **Repro Script:** \`${f.reproScriptPath}\``);
         }

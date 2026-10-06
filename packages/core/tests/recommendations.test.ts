@@ -14,7 +14,6 @@ describe('Ranked Recommendations (recommendations.ts)', () => {
       stepsToReproduce: [],
       evidence: {},
       resolution: "Add Content-Security-Policy: default-src 'self'",
-      verifyCommand: '',
     },
     {
       id: 'F-002',
@@ -26,7 +25,6 @@ describe('Ranked Recommendations (recommendations.ts)', () => {
       stepsToReproduce: [],
       evidence: {},
       resolution: 'Use max-width: 100% on container elements',
-      verifyCommand: '',
     },
     {
       id: 'F-003',
@@ -38,7 +36,6 @@ describe('Ranked Recommendations (recommendations.ts)', () => {
       stepsToReproduce: [],
       evidence: {},
       resolution: 'Add lang="en" to <html>',
-      verifyCommand: '',
     },
   ];
 

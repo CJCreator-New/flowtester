@@ -104,7 +104,6 @@ export class VisualReviewer {
               screenshotPath: screen.screenshots.find((s) => s.breakpoint === issue.breakpoint)?.imagePath,
             },
             resolution: issue.suggestedImprovement,
-            verifyCommand: `qa-test verify F-AI-VISUAL-${screen.layoutGroup}-${i + 1}`,
           });
         }
         reviewedCount++;

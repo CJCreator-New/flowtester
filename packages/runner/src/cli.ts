@@ -7,7 +7,6 @@ const host = process.env.RUNNER_HOST || 'localhost';
 const outputDir = process.env.RUNNER_OUTPUT_DIR || undefined;
 const dataDir = process.env.RUNNER_DATA_DIR || undefined;
 const localhostAlias = process.env.RUNNER_LOCALHOST_ALIAS || undefined;
-const hubUrl = process.env.HUB_API_URL || undefined;
 // On Render the service's own public address is allowed without setting it by hand.
 const originList = [process.env.RUNNER_ALLOWED_ORIGINS, process.env.RENDER_EXTERNAL_URL].filter(Boolean).join(',');
 const allowedOrigins = originList
@@ -41,7 +40,6 @@ const server = new RunnerServer({
   outputDir,
   dataDir,
   localhostAlias,
-  hubUrl,
   allowedOrigins,
   accessToken,
   beta,
@@ -54,7 +52,6 @@ server
     // Bound to every address (as in Docker), it's still opened as localhost.
     const address = url.replace('://0.0.0.0', '://localhost');
     console.log(`[Release check-up] Open ${address}/ in your browser`);
-    console.log(`[Release check-up] Report Hub: ${hubUrl ? `${address}/hub` : 'not connected (set HUB_API_URL to connect one)'}`);
   })
   .catch((err) => {
     console.error('[Release check-up] Failed to start:', err);

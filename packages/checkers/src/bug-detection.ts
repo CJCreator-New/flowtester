@@ -99,7 +99,6 @@ export class BugDetectionChecker {
             : is5xx
             ? 'Backend API error (5xx). Check server endpoint logs and database connections.'
             : 'Client request failure (4xx). Check request payload, authentication headers, or route.',
-          verifyCommand: `qa-test verify F-HTTP-${context.testCaseId || 'GEN'}-${findingCounter - 1}`,
           thirdParty: isThirdParty,
         });
       }
@@ -141,7 +140,6 @@ export class BugDetectionChecker {
           resolution: isThirdParty
             ? `The error comes from a script on another site (${safeOrigin(consoleLog.url)}). Check it doesn't break anything people use, and report it to its provider.`
             : 'Inspect the stack trace in console logs, ensure null checks and error boundaries are configured.',
-          verifyCommand: `qa-test verify F-BUG-${context.testCaseId || 'GEN'}-${findingCounter - 1}`,
           thirdParty: isThirdParty || undefined,
         });
       }
@@ -179,7 +177,6 @@ export class BugDetectionChecker {
           resolution: brokenLink
             ? 'Fix or remove the link: the page it points to doesn’t open.'
             : `Verify element is present in the DOM and enabled for action "${step.action}".`,
-          verifyCommand: `qa-test verify F-STEP-${context.testCaseId || 'GEN'}-${findingCounter - 1}`,
         };
         if (context.planIsGuess && CONTROL_NOT_FOUND.test(step.error)) {
           const page = step.urlBefore ? new URL(step.urlBefore, 'http://placeholder').pathname : context.urlPath;

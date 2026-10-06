@@ -363,7 +363,6 @@ export class SecurityChecker {
       stepsToReproduce: detail.steps,
       evidence: { screenshotPath: detail.screenshotPath },
       resolution: detail.resolution,
-      verifyCommand: `qa-test verify ${id}`,
     };
   }
 }

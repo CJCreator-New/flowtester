@@ -121,11 +121,33 @@ describe('A runner shared as a beta', () => {
     expect(JSON.parse(run.body).code).toBe('ERR_PRIVATE_TARGET');
   });
 
+  it('never gives a tester the made-up journeys of the test AI', async () => {
+    const cookie = await newSession();
+    const run = await call('POST', '/api/runner/run', cookie, { targetUrl: 'https://example.com/', useAI: true, aiProvider: 'mock' });
+    expect(run.status).toBe(400);
+    expect(JSON.parse(run.body).code).toBe('ERR_NO_AI_KEY');
+  });
+
+  it('compares sites for a tester, but only public ones, and keeps each tester’s comparisons to themselves', async () => {
+    const alice = await newSession();
+    const bob = await newSession();
+    for (const [ourUrl, refUrl] of [
+      ['http://localhost:3001', 'https://example.com'],
+      ['https://example.com', 'http://10.0.0.5/'],
+    ]) {
+      const answer = await call('POST', '/api/runner/benchmark', alice, { ourUrl, refUrl });
+      expect(answer.status, `${ourUrl} vs ${refUrl}`).toBe(400);
+      expect(JSON.parse(answer.body).code).toBe('ERR_PRIVATE_TARGET');
+    }
+    expect(JSON.parse((await call('GET', '/api/runner/benchmarks', alice)).body)).toEqual([]);
+    expect(JSON.parse((await call('GET', '/api/runner/benchmarks', bob)).body)).toEqual([]);
+    expect((await call('GET', '/api/runner/benchmark/bench-1', bob)).status).toBe(404);
+  });
+
   it('shuts the routes that change what other testers see', async () => {
     const cookie = await newSession();
     expect((await call('DELETE', '/api/runs/run-1', cookie)).status).toBe(403);
     expect((await call('POST', '/api/runner/schedules', cookie, { targetUrl: 'https://example.com' })).status).toBe(403);
-    expect((await call('POST', '/api/runner/benchmark', cookie, { ourUrl: 'https://a.example', refUrl: 'https://b.example' })).status).toBe(403);
   });
 
   it('turns away a request body that is far too large', async () => {

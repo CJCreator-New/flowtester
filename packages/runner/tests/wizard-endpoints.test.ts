@@ -137,7 +137,7 @@ describe('Runner endpoints for the wizard', () => {
       const discover = vi.spyOn(DiscoveryAgent.prototype, 'discover').mockImplementation(async (o) => emptyDraft(o.targetUrl));
       const context = '# Checkout\n- Coupon codes are case-insensitive\n\n# Sign in\nUsers sign in with email.';
 
-      const res = await post('/api/runner/run', { targetUrl: `${siteUrl}/clean/`, useAI: true, productContext: context });
+      const res = await post('/api/runner/run', { targetUrl: `${siteUrl}/clean/`, useAI: true, aiProvider: 'mock', productContext: context });
       expect(res.status).toBe(202);
       await waitForIdle(runnerUrl);
 
@@ -150,7 +150,7 @@ describe('Runner endpoints for the wizard', () => {
     it('passes no context file when productContext is omitted', async () => {
       const discover = vi.spyOn(DiscoveryAgent.prototype, 'discover').mockImplementation(async (o) => emptyDraft(o.targetUrl));
 
-      await post('/api/runner/run', { targetUrl: `${siteUrl}/clean/`, useAI: true });
+      await post('/api/runner/run', { targetUrl: `${siteUrl}/clean/`, useAI: true, aiProvider: 'mock' });
       await waitForIdle(runnerUrl);
 
       expect(discover).toHaveBeenCalledTimes(1);

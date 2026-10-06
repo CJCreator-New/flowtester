@@ -66,7 +66,6 @@ export class AeoChecker {
           stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect <script type="application/ld+json">'],
           evidence: {},
           resolution: 'Correct syntax errors in the JSON-LD payload to ensure search and answer engines can parse it.',
-          verifyCommand: 'qa-test verify F-AEO-JSONLD-INVALID',
         });
       }
     }
@@ -108,7 +107,6 @@ export class AeoChecker {
           stepsToReproduce: [`Visit ${context.urlPath}`, 'Check for JSON-LD schema with @type "Organization" or "WebSite"'],
           evidence: {},
           resolution: 'Add a JSON-LD Organization schema on the homepage establishing your brand entity, logo, and authority links.',
-          verifyCommand: 'qa-test verify F-AEO-ORG-SCHEMA',
         });
       }
     }
@@ -131,7 +129,6 @@ export class AeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect navigation elements and structured data for breadcrumbs'],
         evidence: {},
         resolution: 'Add breadcrumb navigation with schema.org/BreadcrumbList JSON-LD markup.',
-        verifyCommand: 'qa-test verify F-AEO-BREADCRUMB',
       });
     }
 
@@ -156,7 +153,6 @@ export class AeoChecker {
           stepsToReproduce: [`Visit ${context.urlPath}`, `Inspect element following heading "${qh.text}"`],
           evidence: {},
           resolution: 'Provide a direct, self-contained 1–2 sentence answer paragraph directly beneath question headings.',
-          verifyCommand: 'qa-test verify F-AEO-DIRECT-ANSWER',
         });
         break; // Flag once per page to avoid cluttering report
       }
@@ -180,7 +176,6 @@ export class AeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Count <ul>, <ol>, and <table> elements'],
         evidence: {},
         resolution: 'Break key takeaways, steps, or feature comparisons into <ul>/<ol> lists or <table> elements.',
-        verifyCommand: 'qa-test verify F-AEO-LIST-TABLE-MISSING',
       });
     }
 

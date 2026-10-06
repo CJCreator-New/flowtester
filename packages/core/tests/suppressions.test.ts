@@ -50,7 +50,6 @@ describe('SuppressionsManager', () => {
         stepsToReproduce: [],
         evidence: {},
         resolution: 'None',
-        verifyCommand: 'qa-test verify F-1',
       },
       {
         id: 'F-2',
@@ -62,7 +61,6 @@ describe('SuppressionsManager', () => {
         stepsToReproduce: [],
         evidence: {},
         resolution: 'Fix',
-        verifyCommand: 'qa-test verify F-2',
       },
     ];
 

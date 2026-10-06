@@ -42,7 +42,6 @@ describe('Site History & Delta Tracking (site-history.ts)', () => {
       stepsToReproduce: [],
       evidence: {},
       resolution: '',
-      verifyCommand: '',
     },
     {
       id: 'F-002',
@@ -54,7 +53,6 @@ describe('Site History & Delta Tracking (site-history.ts)', () => {
       stepsToReproduce: [],
       evidence: {},
       resolution: '',
-      verifyCommand: '',
     },
   ];
 

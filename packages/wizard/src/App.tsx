@@ -353,7 +353,6 @@ export default function App() {
         isRunning: true,
         hasReport: s?.hasReport ?? false,
         lastRunError: null,
-        hubConnected: s?.hubConnected,
         reportRunId: s?.reportRunId,
         phase: 'scanning',
         hasPlan: false,
@@ -573,7 +572,7 @@ export default function App() {
               : route.name === 'baselines'
                 ? 'Visual Baselines'
                 : route.name === 'benchmark'
-                  ? 'Competitive Benchmarking'
+                  ? 'Compare with another site'
                   : null
   );
 
@@ -689,7 +688,7 @@ export default function App() {
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-[60] focus:inline-flex focus:min-h-[44px] focus:items-center rounded bg-stamp px-4 py-2 font-bold text-surface">
         Skip to the content
       </a>
-      {!landing && <TopBar route={route} hubConnected={!!status?.hubConnected} checkupInProgress={inProgress} />}
+      {!landing && <TopBar route={route} checkupInProgress={inProgress} />}
       {step && <StepBar current={step} links={{ address: PATHS.new }} />}
       <main id="main">{body}</main>
       {!landing && <CommandPalette route={route} />}

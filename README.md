@@ -16,19 +16,11 @@
   - [2. Start the QA Tool](#2-start-the-qa-tool)
   - [3. Environment Configuration (Optional)](#3-environment-configuration-optional)
 - [Running the Applications](#running-the-applications)
-  - [Option A: One Command (`pnpm start`)](#option-a-one-command-pnpm-start)
-  - [Option B: Full Docker Stack (QA Tool, Hub, MinIO, Postgres)](#option-b-full-docker-stack)
-  - [Working on the UIs (Hot Reload)](#working-on-the-uis-hot-reload)
+  - [One Command (`pnpm start`)](#one-command-pnpm-start)
+  - [Working on the Wizard (Hot Reload)](#working-on-the-wizard-hot-reload)
 - [End-to-End (E2E) Testing Guide](#end-to-end-e2e-testing-guide)
   - [Step 1: Start the Built-in Test Application](#step-1-start-the-built-in-test-application)
-  - [Step 2: Run Automated Checks with CLI](#step-2-run-automated-checks-with-cli)
-  - [Step 3: Run AI Discovery & Test Planning](#step-3-run-ai-discovery--test-planning)
-  - [Step 4: Use the Non-Technical Wizard UI](#step-4-use-the-non-technical-wizard-ui)
-  - [Step 5: Inspect Reports and Verify Fixes](#step-5-inspect-reports-and-verify-fixes)
-- [CLI Command Reference (`qa-test`)](#cli-command-reference-qa-test)
-- [Competitive Benchmarking (`qa-test compare`)](#competitive-benchmarking-qa-test-compare)
-- [Centralized Report Hub (`qa-test hub`)](#centralized-report-hub-qa-test-hub)
-- [Figma Token & Baseline Synchronization](#figma-token--baseline-synchronization)
+  - [Step 2: Use Release check-up](#step-2-use-release-check-up)
 - [Testing & Quality Checks](#testing--quality-checks)
 - [Troubleshooting & FAQ](#troubleshooting--faq)
 
@@ -36,27 +28,19 @@
 
 ## 🏗️ Overview & Architecture
 
-The platform operates across four primary operational layers:
+The platform has three layers: the Wizard you use, the server that runs checks, and the engine behind it.
 
 ```mermaid
 flowchart TD
     subgraph UI ["User Interfaces"]
         Wizard["Release check-up (@qa/wizard)\nServed by the QA Tool on port 3001, for everyone:\nplain words on top, details for developers under each finding"]
-        LocalDash["Review Dashboard (@qa/dashboard)\nPort 3000 / CLI runs only"]
     end
 
     subgraph CoreEngine ["Execution & Discovery Core"]
-        CLI["CLI: qa-test (@qa/cli)"]
         Runner["QA Tool server (@qa/runner)\nPort 3001: API (HTTP + SSE) and the Wizard"]
         Orchestrator["Flow Test Orchestrator (@qa/core)"]
         AI["AI Discovery Agent\n(Claude / OpenAI / Gemini / OpenRouter / Mock)"]
         Checkers["Audit Checkers (@qa/checkers)\n(Axe WCAG, Design Tokens, Visual Diff, Console/Network)"]
-    end
-
-    subgraph HubLayer ["Central Aggregation & Storage"]
-        Hub["Report Hub Server (@qa/hub)\nPort 4000"]
-        Postgres[(PostgreSQL 16\nPort 5432)]
-        MinIO[(MinIO Object Store\nPorts 9000 / 9001)]
     end
 
     subgraph Target ["Target Under Test"]
@@ -64,16 +48,10 @@ flowchart TD
     end
 
     Wizard -->|POST /api/runner/run| Runner
-    Runner -.->|/hub and /api/v1/* passed on when HUB_API_URL is set| Hub
     Runner --> Orchestrator
-    CLI --> Orchestrator
     Orchestrator --> AI
     Orchestrator --> Checkers
     Checkers -->|Playwright Automation| App
-    Orchestrator -->|Push Run| Hub
-    Hub --> Postgres
-    Hub --> MinIO
-    LocalDash -.->|Reads Local Output| Orchestrator
 ```
 
 ### Core Capabilities
@@ -85,9 +63,7 @@ flowchart TD
    - **Design Token Conformance**: Validates live `getComputedStyle()` against committed `design-tokens.json` (colors, radii, typography).
    - **Visual Baselines**: Perceptual visual diffing across multiple breakpoints (`375px`, `768px`, `1440px`).
    - **Runtime Health**: Intercepts unhandled console errors and failed HTTP network calls.
-4. **Targeted Bug Verification**: Re-executes the exact flow and step of an individual finding (`qa-test verify <id>`) to confirm fixes.
-5. **Competitive Benchmarking**: Crawls a public competitor or reference flow in Safe Interaction Mode and generates UX friction scorecards and AI recommendations.
-6. **Central Report Hub**: Aggregates runs across developer machines with structural fingerprint deduplication, two-phase artifact ingestion (screenshots/traces/videos), and product release tracking.
+4. **Checking a fix**: After you fix a problem, run the check-up again on the same address. **Test again** reuses the approved plan, and the finding should no longer appear.
 
 ---
 
@@ -97,10 +73,7 @@ flowchart TD
 | :--- | :--- |
 | [`packages/core`](packages/core) | Core test orchestration, AI discovery agent, test planner, crawler, benchmarking engine, and AI providers |
 | [`packages/checkers`](packages/checkers) | Automated checkers (A11y/WCAG, design tokens, visual diffs, console errors, network failures) |
-| [`packages/cli`](packages/cli) | Command line interface providing the `qa-test` executable |
 | [`packages/runner`](packages/runner) | The QA Tool server: runs checks over HTTP with Server-Sent Events (SSE) streaming, keeps every check-up's report, and serves the Wizard on the same port |
-| [`packages/hub`](packages/hub) | Central report aggregation service, PostgreSQL database driver, and S3 evidence store |
-| [`packages/dashboard`](packages/dashboard) | Local review server for confirmation of AI discovery drafts and reports |
 | [`packages/wizard`](packages/wizard) | "Release check-up": the one app, in plain language, with details for developers under each finding ([ADR 0010](docs/adr/0010-one-app-with-details-on-demand.md)) |
 | [`packages/types`](packages/types) | Shared TypeScript type definitions, schemas, and interfaces |
 | [`fixtures/test-app`](fixtures/test-app) | Built-in target test application (Invoicing app with simulated errors) |
@@ -115,7 +88,6 @@ Before starting, ensure you have:
 - **Node.js**: `v20.x` or `v22.x` (`node -v`)
 - **Package Manager**: `pnpm` v9+ (`npm install -g pnpm` or `corepack enable`)
 - **Browsers**: Playwright browser binaries
-- **Docker & Docker Compose** *(Optional, for running full containerized stack)*
 
 ---
 
@@ -144,7 +116,6 @@ This builds anything that's missing and opens **Release check-up** at **`http://
 - `/`: a new check-up
 - `/reports`: past check-ups, and `/reports/<runId>` for one report
 - `/settings`: the AI key
-- `/hub`: the Report Hub's dashboard, when `HUB_API_URL` is set
 
 QA Flow Studio was retired ([ADR 0010](docs/adr/0010-one-app-with-details-on-demand.md)): its old address, `/studio`, leads to Past check-ups.
 
@@ -167,57 +138,19 @@ ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 GEMINI_API_KEY=AIza...
 
-# Report Hub & Persistence (Optional for local CLI runs)
-HUB_PORT=4000
-DATABASE_URL=postgresql://qahub:qahub_secret@localhost:5432/qa_hub?schema=public
-S3_ENDPOINT=http://localhost:9000
-S3_BUCKET=qa-evidence
-S3_ACCESS_KEY_ID=minioadmin
-S3_SECRET_ACCESS_KEY=minioadmin
-
 # The QA Tool (pnpm start)
 RUNNER_PORT=3001
-# Optional: a Report Hub, passed on at /hub (its dashboard) and /api/v1/*
-HUB_API_URL=http://localhost:4000
 ```
 
 ---
 
 ## 🖥️ Running the Applications
 
-### Option A: One Command (`pnpm start`)
+### One Command (`pnpm start`)
 
-`pnpm start` runs the whole tool as one process on one port: the API that runs checks, and the Wizard at `/`. `qa-test runner` starts the same server from the CLI:
-
-```bash
-node packages/cli/dist/index.js runner -p 3001 [--hub http://localhost:4000]
-```
-
-The Report Hub (below) stays a separate, optional service. With `HUB_API_URL` set, the top bar links to its dashboard at `/hub`; without it there's no Team Hub link.
+`pnpm start` runs the whole tool as one process on one port: the API that runs checks, and the Wizard at `/`.
 
 Data is kept in `.qa-data/` in the working folder (git ignores it): each site's approved plan and answers, and its grade history. Set `RUNNER_DATA_DIR` to keep it elsewhere. Each check-up's report, screenshots and downloads go in `.qa-runner-report/runs/<runId>/` (`RUNNER_OUTPUT_DIR`). The last 10 check-ups of each site are kept; older ones are deleted by themselves, and any can be deleted from Past check-ups.
-
----
-
-### Option B: Full Docker Stack
-
-To launch the complete production-parity stack (PostgreSQL, MinIO S3, Report Hub and the QA Tool):
-
-```bash
-# Start all containers in the background
-docker compose up -d
-```
-
-Service endpoints:
-- **QA Tool** (the Wizard, the Hub's dashboard at `/hub`, and the API): `http://localhost:3001`
-- **Report Hub API**: `http://localhost:4000`
-- **MinIO Console**: `http://localhost:9001` (User: `minioadmin` / Pass: `minioadmin`)
-- **Postgres Database**: `localhost:5432` (User: `qahub` / Pass: `qahub_secret`)
-
-To stop the containers:
-```bash
-docker compose down
-```
 
 ---
 
@@ -315,62 +248,7 @@ The test app will start at: **`http://localhost:3050`**
 
 ---
 
-### Step 2: Run Automated Checks with CLI
-
-Execute a test run using the provided spec and product profile:
-
-```bash
-node packages/cli/dist/index.js run \
-  --url http://localhost:3050 \
-  --product product-alpha \
-  --config fixtures/config.yaml \
-  --spec fixtures/spec.json \
-  --all-breakpoints \
-  --dashboard
-```
-
-**What happens during this run:**
-1. Connects to `http://localhost:3050`.
-2. Authenticates as user `manager@example.com` (from `fixtures/config.yaml`).
-3. Executes test cases in `fixtures/spec.json` (Create Invoice, Health Telemetry).
-4. Runs automated checkers:
-   - Validates WCAG 2.2 AA accessibility via `axe-core`.
-   - Runs checks at `375px`, `768px`, and `1440px` viewports.
-   - Detects the simulated 500 API call and runtime errors.
-5. Saves detailed output to `.qa-report/`:
-   - `report.md`: Human-readable markdown summary.
-   - `findings.json`: Machine-readable findings with structural fingerprints.
-   - Screenshots and traces of failed steps.
-6. Automatically opens the **Local Review Dashboard** at `http://localhost:3000`.
-
----
-
-### Step 3: Run AI Discovery & Test Planning
-
-Let the AI Discovery Agent explore the target site and synthesize test plans:
-
-```bash
-# Run discovery using Mock AI (or pass --ai-provider openrouter --api-key <key>)
-node packages/cli/dist/index.js discover \
-  --url http://localhost:3050 \
-  --product product-alpha \
-  --config fixtures/config.yaml \
-  --ai-provider mock
-```
-
-1. The agent traverses links, identifies forms, buttons, and state transitions.
-2. Identifies user flows and flags ambiguity questions (e.g. destructive actions).
-3. Saves discovery draft to `.qa-report/discovery-draft.json`.
-4. Opens the **Confirmation Dashboard** at `http://localhost:3000/confirm`.
-
-To compile the draft into an executable test spec:
-```bash
-node packages/cli/dist/index.js plan --draft .qa-report/discovery-draft.json --output my-plan.spec.json
-```
-
----
-
-### Step 4: Use Release check-up
+### Step 2: Use Release check-up
 
 1. Start the QA Tool, if it isn't running:
    ```bash
@@ -386,7 +264,7 @@ node packages/cli/dist/index.js plan --draft .qa-report/discovery-draft.json --o
 5. Click **Scan the site**. The scan shows live progress with numbers: pages found, layouts, AI requests used and how many are left today, and about how long is left. **Stop scanning** asks first, then goes back with everything still filled in.
 6. Review the plan, change it if you like, and approve it. Nothing is tested before you approve (see [The plan review](#the-plan-review) below). Leaving the plan keeps it waiting: the new check-up screen offers it again.
 7. Watch the testing: the test count and time left, the page under test, the latest screenshot and what's been found so far. **Stop testing** keeps your plan, so you can approve it again.
-8. Read the report. The stamp, **Ready to release** or **Not ready yet**, is the verdict, with its reason; the six areas are graded A–F under it, and an area that wasn't checked says so. Problems are grouped **Must fix before release**, **Should fix** and **Suggestions**. Each has **Details for developers**: the screenshot, steps to reproduce, the page and element, console errors, **Copy bug report**, **Copy Playwright test** and the `qa-test verify` command.
+8. Read the report. The stamp, **Ready to release** or **Not ready yet**, is the verdict, with its reason; the six areas are graded A–F under it, and an area that wasn't checked says so. Problems are grouped **Must fix before release**, **Should fix** and **Suggestions**. Each has **Details for developers**: the screenshot, steps to reproduce, the page and element, console errors, **Copy bug report**, and **Copy Playwright test**. After you fix something, run the check-up again on the same address: the finding should be gone.
 9. **Test again** scans the site again and reuses the plan you approved: if nothing changed, testing starts at once; if something did, only what's new waits for your review. Every report is kept under **Past check-ups**.
 
 #### The plan review
@@ -402,141 +280,6 @@ The AI writes the whole plan from what the crawler found. The **Full plan** tab 
 Every item can be switched on or off, or re-planned with the AI (optionally saying what should change). **Download the plan** saves the whole plan as Markdown for sign-off. The **Map** tab draws the pages and the links between them.
 
 The plan needs an AI key: set one up on the new check-up screen or in **Settings** (OpenRouter's free tier works). Free models allow 20 requests a minute, and 50 a day until the account has bought 10 credits (then 1,000). The plan asks for about one request per three pages, plus one for the shared menus and one for the journeys. Anything past the day's budget is planned by fixed rules, labelled as such, and can be re-planned later. Free models may occasionally produce malformed JSON or hit output token limits; trailing commas are tolerated, while comments, single quotes or unquoted keys safely trigger the Fixed-Rule Fallback. Any fallback item can be re-planned with one click via **Re-plan**. The next run of the same site reuses the approved plan and only asks the AI about pages and links that changed.
-
----
-
-### Step 5: Inspect Reports and Verify Fixes
-
-#### View Local Dashboard
-To view an existing report at any time:
-```bash
-node packages/cli/dist/index.js dashboard --dir .qa-report --port 3000
-```
-
-#### Perform Targeted Finding Verification
-When a developer fixes a reported defect, verify it specifically without running the entire suite:
-
-```bash
-# Replace with the finding ID from findings.json (e.g. FIND-001)
-node packages/cli/dist/index.js verify FIND-001 --output .qa-report
-```
-
-If fixed:
-- The finding status updates to `Resolved` in `.qa-report/findings.json`.
-- `report.md` is updated automatically.
-- Exits with returncode `0`.
-
----
-
-## 📖 CLI Command Reference (`qa-test`)
-
-Run the CLI using `node packages/cli/dist/index.js` or `pnpm qa-test`:
-
-### `qa-test run`
-Executes test cases against a target URL.
-```bash
-qa-test run -u <url> [options]
-```
-| Flag | Description | Default |
-| :--- | :--- | :--- |
-| `-u, --url <url>` | **Required.** Target URL (e.g. `http://localhost:3050`) | — |
-| `-p, --product <id>` | Product identifier | `default-product` |
-| `-s, --spec <path>` | Path to test spec JSON or YAML file | Default sanity test |
-| `-c, --config <path>`| Path to product profile YAML | — |
-| `--ai` | Run AI discovery before execution | `false` |
-| `--context <path>` | Path to PRD/spec context markdown | — |
-| `--ai-provider <p>` | `anthropic`, `openai`, `gemini`, `openrouter`, `mock` | `mock` |
-| `--api-key <key>` | API key for AI provider | Env var |
-| `--all-breakpoints` | Test across `375px`, `768px`, and `1440px` | `1440px` only |
-| `--no-headless` | Run in headed mode (visible browser window) | Headless |
-| `-o, --output <dir>` | Directory for reports & evidence | `.qa-report` |
-| `--dashboard` | Open local review dashboard upon completion | `false` |
-| `--hub <url>` | Report Hub server URL to sync results | — |
-| `--hub-token <t>` | Ingest authentication token for Hub | — |
-| `--update-baselines`| Update visual snapshot references | `false` |
-
-### `qa-test discover`
-Autonomous crawler identifying routes, flows, and state transitions.
-```bash
-qa-test discover -u <url> -c <config> [--ai-provider mock]
-```
-
-### `qa-test plan`
-Transforms a discovery draft into an executable `qa.spec.json`.
-```bash
-qa-test plan -d .qa-report/discovery-draft.json -o qa.spec.json
-```
-
-### `qa-test verify <findingId>`
-Re-runs the exact interaction point of an identified bug to confirm resolution.
-```bash
-qa-test verify <findingId> -o .qa-report
-```
-
-### `qa-test runner`
-Starts the QA Tool server: the API (HTTP + SSE) plus the Wizard at `/`, on one port. `--hub` (or `HUB_API_URL`) passes `/hub` and `/api/v1/*` on to a Report Hub.
-```bash
-qa-test runner -p 3001 [--hub http://localhost:4000]
-```
-
----
-
-## ⚡ Competitive Benchmarking (`qa-test compare`)
-
-Benchmark an internal staging flow against an external public reference or competitor:
-
-```bash
-node packages/cli/dist/index.js compare \
-  --target http://localhost:3050/invoices/new \
-  --reference https://example.com/checkout \
-  --flow onboarding \
-  --output .qa-compare
-```
-
-**Output Artifacts (`.qa-compare/`):**
-- **Friction Scorecard**: Compares total steps, input fields count, required fields count, and click depth.
-- **Pattern Parity**: Audits features like single-click submit, instant validation, social auth, and guest mode.
-- **AI UX Gap Recommendations**: Prioritized impact vs. effort UX improvements.
-
----
-
-## ☁️ Centralized Report Hub (`qa-test hub`)
-
-The Report Hub aggregates quality runs across teams and pipelines.
-
-### 1. Start Hub Server
-```bash
-node packages/cli/dist/index.js hub start --port 4000 --db "postgresql://qahub:qahub_secret@localhost:5432/qa_hub"
-```
-*(If `--db` is omitted, the hub runs with an in-memory database).*
-
-### 2. Generate Ingest Token
-```bash
-node packages/cli/dist/index.js hub create-token --product product-alpha --db "postgresql://..."
-```
-
-### 3. Push Runs to Hub
-Add `--hub http://localhost:4000 --hub-token <token>` to any `qa-test run` command. If the hub is temporarily unreachable, runs are automatically queued in a local outbox and synced later:
-```bash
-node packages/cli/dist/index.js hub sync --hub http://localhost:4000 --token <token>
-```
-
----
-
-## 🎨 Figma Token & Baseline Synchronization
-
-Extract design tokens and visual baseline frames directly from Figma for zero-runtime-dependency auditing:
-
-```bash
-node packages/cli/dist/index.js figma sync \
-  --file <FIGMA_FILE_KEY> \
-  --token <FIGMA_PAT> \
-  --out design-tokens.json \
-  --frame "12:34=TC-001-1440px" \
-  --baseline-dir .qa-baselines
-```
-
-Add `figmaTokensFile: design-tokens.json` to your product config YAML to automatically enforce CSS token conformance during test runs.
 
 ---
 
@@ -584,7 +327,7 @@ This occurs if the local Google Cloud telemetry plugin on Windows has invalid pa
   # Windows PowerShell:
   Get-Process -Id (Get-NetTCPConnection -LocalPort 3001).OwningProcess | Stop-Process
   ```
-- Or use another port: `$env:RUNNER_PORT=3055; pnpm start` (or `qa-test runner -p 3055`).
+- Or use another port: `$env:RUNNER_PORT=3055; pnpm start`.
 
 ### 4. The check-up stopped, or its screen says nothing is in progress
 - A scan that fails says why, with **Start a new check-up**; what you typed is still there.

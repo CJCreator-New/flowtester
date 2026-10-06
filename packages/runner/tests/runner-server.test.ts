@@ -274,7 +274,6 @@ describe('RunnerServer', () => {
         skipReview: false,
         breakpoints: ['375px'],
         roles,
-        hubToken: 'hub-secret-token',
       }),
     });
     expect(runRes.status).toBe(202);
@@ -289,7 +288,6 @@ describe('RunnerServer', () => {
     const saved = await fs.readFile(path.join(`${outputDir}-data`, '.qa-plan.json'), 'utf8');
     expect(saved).not.toContain('manager-password');
     expect(saved).not.toContain('manager@example.com');
-    expect(saved).not.toContain('hub-secret-token');
 
     // After a restart the plan is still there, but approving needs the sign-in details again.
     await runner.stop();
