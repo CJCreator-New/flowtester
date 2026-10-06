@@ -31,3 +31,6 @@ dist/
 
 # Benchmark runs (scripts/benchmark.ts)
 .benchmark/
+
+# built for Vercel (scripts/vercel-output.mjs)
+/public
