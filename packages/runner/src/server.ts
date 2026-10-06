@@ -1260,11 +1260,20 @@ export class RunnerServer {
       return;
     }
     if (host && req.method === 'POST') {
-      let body: { searchChecks?: boolean | null; forgetSignIn?: string } = {};
+      let body: {
+        searchChecks?: boolean | null;
+        forgetSignIn?: string;
+        addSignIn?: { role?: string; username?: string; password?: string; loginPath?: string };
+        testSignIn?: string;
+      } = {};
       try {
         body = await this.readJsonBody(req);
       } catch {
         this.sendJson(res, 400, { error: 'Invalid JSON body' });
+        return;
+      }
+      if (body.addSignIn || body.testSignIn) {
+        await this.handleSignInChange(host, body, res);
         return;
       }
       const memory = await loadSiteMemory(this.siteDir(), host);
@@ -1282,6 +1291,75 @@ export class RunnerServer {
       return;
     }
     this.sendJson(res, 404, { error: 'Not found' });
+  }
+
+  /**
+   * Adds a sign-in to a site, or tests a saved one: it signs in on the site's sign-in page and says
+   * whether that worked. A new sign-in is kept (password in the keychain) only when it worked.
+   */
+  private async handleSignInChange(
+    host: string,
+    body: { addSignIn?: { role?: string; username?: string; password?: string; loginPath?: string }; testSignIn?: string },
+    res: http.ServerResponse
+  ): Promise<void> {
+    const memory = (await loadSiteMemory(this.siteDir(), host)) ?? emptySiteMemory(host);
+    let credential: RoleCredential;
+    if (body.addSignIn) {
+      const role = (body.addSignIn.role || 'member').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').slice(0, 40) || 'member';
+      if (!body.addSignIn.username?.trim() || !body.addSignIn.password) {
+        this.sendJson(res, 400, { error: 'Enter the username and password to sign in with.' });
+        return;
+      }
+      credential = { role, username: body.addSignIn.username.trim(), password: body.addSignIn.password, loginPath: body.addSignIn.loginPath?.trim() || undefined };
+    } else {
+      const saved = memory.signIns?.find((s) => s.role === body.testSignIn);
+      const password = saved ? await this.keyResolver.readSecret(this.signInAccount(memory.host, saved.role)) : undefined;
+      if (!saved || !password) {
+        this.sendJson(res, 404, { error: 'That sign-in isn’t saved here.' });
+        return;
+      }
+      credential = { role: saved.role, username: saved.username, password, loginPath: saved.loginPath };
+    }
+
+    let target: string;
+    try {
+      const typed = new URL(/^https?:\/\//i.test(host) ? host : `http://${host}`);
+      const scheme = /^https?:\/\//i.test(host) ? typed.protocol : isTestHost(typed.hostname) ? 'http:' : 'https:';
+      target = this.resolveTargetUrl(`${scheme}//${typed.host}`);
+    } catch {
+      this.sendJson(res, 400, { error: 'That isn’t a site address.' });
+      return;
+    }
+    const browser = new BrowserManager();
+    let result: { ok: boolean; landingPath?: string };
+    try {
+      const context = await browser.createContext({ baseUrl: target });
+      result = await new PreFlightChecker().signIn(context, target, credential);
+    } catch {
+      result = { ok: false };
+    } finally {
+      await browser.close();
+    }
+
+    if (!result.ok) {
+      this.sendJson(res, body.addSignIn ? 422 : 200, {
+        verified: false,
+        error: 'Signing in didn’t work. Check the username, password and sign-in page, and that the site is reachable.',
+      });
+      return;
+    }
+    if (body.addSignIn) {
+      if (!(await this.keyResolver.saveSecret(this.signInAccount(memory.host, credential.role), credential.password!))) {
+        this.sendJson(res, 200, { verified: true, saved: false, landingPath: result.landingPath, error: 'Signing in worked, but this computer has no keychain to keep the password in.' });
+        return;
+      }
+      memory.signIns = [
+        ...(memory.signIns ?? []).filter((s) => s.role !== credential.role),
+        { role: credential.role, username: credential.username, loginPath: credential.loginPath },
+      ];
+      await saveSiteMemory(this.siteDir(), memory);
+    }
+    this.sendJson(res, 200, { verified: true, saved: !!body.addSignIn, landingPath: result.landingPath });
   }
 
   private async readDefaults(): Promise<{ screenSizes?: Breakpoint[] }> {

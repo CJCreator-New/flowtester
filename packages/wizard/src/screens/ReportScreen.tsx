@@ -529,12 +529,13 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
                 )}
               </div>
               {checked && sub && (
-                <dl className="mt-1 grid grid-cols-3 gap-1 border-t border-rule pt-2 text-sm">
+                <dl className="mt-1 grid grid-cols-2 gap-1 border-t border-rule pt-2 text-sm sm:grid-cols-4">
                   {(
                     [
                       ['Search', sub.seo, 'How search engines, such as Google, find and list the site (SEO).'],
                       ['AI answers', sub.aeo, 'How answer engines and AI assistants pick answers from the site (AEO).'],
                       ['AI search', sub.geo, 'How AI search tools read and quote the site (GEO).'],
+                      ['Marketing', sub.marketing, 'Share previews, a clear call to action, contact details, analytics and social links.'],
                     ] as const
                   ).map(([label, part, hint]) => (
                     <div key={label} title={hint}>

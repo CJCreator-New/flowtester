@@ -123,6 +123,7 @@ export function calculateSiteAspectGrades(findings: Finding[], options: { checke
       const seoFindings = aspectFindings.filter((f) => f.categoryTag === 'SEO' || (!f.categoryTag && f.checker === 'seo'));
       const aeoFindings = aspectFindings.filter((f) => f.categoryTag === 'AEO');
       const geoFindings = aspectFindings.filter((f) => f.categoryTag === 'GEO');
+      const marketingFindings = aspectFindings.filter((f) => f.categoryTag === 'MKT');
 
       const calcSub = (subF: Finding[]) => {
         let ded = 0;
@@ -138,6 +139,7 @@ export function calculateSiteAspectGrades(findings: Finding[], options: { checke
         seo: calcSub(seoFindings),
         aeo: calcSub(aeoFindings),
         geo: calcSub(geoFindings),
+        marketing: calcSub(marketingFindings),
       };
     }
   }

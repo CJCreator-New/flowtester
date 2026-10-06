@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   addSchedule,
+  addSiteSignIn,
   deleteSchedule,
   getAiSetup,
   getAiUsage,
@@ -14,6 +15,7 @@ import {
   saveDefaults,
   saveStoredReleaseGates,
   testModel,
+  testSiteSignIn,
   toggleSchedule,
   updateSite,
   type AiProviderId,
@@ -887,6 +889,75 @@ function CheckupSchedules() {
   );
 }
 
+/** Adds a test account to a site: it signs in first, and only keeps the details when that works. */
+function AddSignIn({ host, onSaved }: { host: string; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [role, setRole] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginPath, setLoginPath] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  if (!open) {
+    return (
+      <button type="button" className="btn-link mt-2 text-sm" onClick={() => setOpen(true)}>
+        Add a sign-in
+      </button>
+    );
+  }
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const r = await addSiteSignIn(host, { role: role.trim() || 'member', username: username.trim(), password, loginPath: loginPath.trim() || undefined });
+      setNote(r.note ?? 'Signed in and saved' + (r.landingPath ? ' (lands on ' + r.landingPath + ')' : '') + '.');
+      setRole('');
+      setUsername('');
+      setPassword('');
+      setLoginPath('');
+      onSaved();
+    } catch (err) {
+      setError(err instanceof RunnerError ? err.message : 'That couldn’t be saved.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={submit} className="mt-3 grid gap-3 rounded-card border border-edge p-3 sm:grid-cols-2" aria-label={'Add a sign-in for ' + host}>
+      <p className="text-sm text-ink-soft sm:col-span-2">Use a test account, not a real person’s. It signs in once to check the details work, then keeps the password in this computer’s keychain.</p>
+      <label className="text-sm">
+        <span className="mb-1 block font-bold">Who it is (e.g. admin, member)</span>
+        <input className="field py-2 text-sm" value={role} placeholder="member" onChange={(e) => setRole(e.target.value)} />
+      </label>
+      <label className="text-sm">
+        <span className="mb-1 block font-bold">Sign-in page</span>
+        <input className="field py-2 text-sm" value={loginPath} placeholder="/login" onChange={(e) => setLoginPath(e.target.value)} />
+      </label>
+      <label className="text-sm">
+        <span className="mb-1 block font-bold">Username or email</span>
+        <input className="field py-2 text-sm" autoComplete="off" value={username} onChange={(e) => setUsername(e.target.value)} />
+      </label>
+      <label className="text-sm">
+        <span className="mb-1 block font-bold">Password</span>
+        <input className="field py-2 text-sm" type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />
+      </label>
+      <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
+        <button type="submit" className="btn-primary min-h-[44px] px-4 text-sm" disabled={busy || !username.trim() || !password}>
+          {busy ? 'Signing in…' : 'Test and save'}
+        </button>
+        <button type="button" className="btn-link text-sm" onClick={() => setOpen(false)}>
+          Close
+        </button>
+        {error && <span role="alert" className="text-sm font-bold">{error}</span>}
+        {note && <span role="status" className="text-sm text-ink-soft">{note}</span>}
+      </div>
+    </form>
+  );
+}
+
 /** What's remembered per site: whether search is checked, and saved sign-ins, each of which can be forgotten. */
 function Sites() {
   const [sites, setSites] = useState<RememberedSite[] | null>(null);
@@ -897,6 +968,17 @@ function Sites() {
       .catch((err) => setError(err instanceof RunnerError ? err.message : 'The sites couldn’t be read.'));
   }, []);
   useEffect(load, [load]);
+  const [tested, setTested] = useState<Record<string, { ok: boolean; text: string }>>({});
+  const test = async (host: string, role: string) => {
+    const key = host + '|' + role;
+    setTested((t) => ({ ...t, [key]: { ok: true, text: 'Signing in…' } }));
+    try {
+      const r = await testSiteSignIn(host, role);
+      setTested((t) => ({ ...t, [key]: { ok: r.verified, text: r.verified ? 'Works' + (r.landingPath ? ' (lands on ' + r.landingPath + ')' : '') : r.error || 'Didn’t work' } }));
+    } catch (err) {
+      setTested((t) => ({ ...t, [key]: { ok: false, text: err instanceof RunnerError ? err.message : 'Couldn’t test it.' } }));
+    }
+  };
   const change = async (host: string, update: { searchChecks?: boolean | null; forgetSignIn?: string }) => {
     try {
       await updateSite(host, update);
@@ -941,13 +1023,22 @@ function Sites() {
                       <span>
                         Signs in as <span className="font-bold">{s.role}</span> ({s.username})
                       </span>
+                      <button type="button" className="btn-link text-sm" onClick={() => void test(site.host, s.role)}>
+                        Test it
+                      </button>
                       <button type="button" className="btn-link text-sm" onClick={() => void change(site.host, { forgetSignIn: s.role })}>
                         Forget
                       </button>
+                      {tested[site.host + '|' + s.role] && (
+                        <span role="status" className={tested[site.host + '|' + s.role].ok ? 'text-ink-soft' : 'font-bold text-ink'}>
+                          {tested[site.host + '|' + s.role].text}
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>
               )}
+              <AddSignIn host={site.host} onSaved={load} />
             </li>
           ))}
         </ul>

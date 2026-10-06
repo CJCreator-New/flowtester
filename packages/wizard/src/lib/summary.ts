@@ -55,6 +55,7 @@ export function category(f: Pick<Finding, 'checker' | 'id'> & { categoryTag?: st
     case 'performance':
       return 'Speed and phones';
     case 'seo':
+      if (f.categoryTag === 'MKT') return 'Marketing';
       if (f.categoryTag === 'GEO' || f.id.includes('GEO')) return 'AI search';
       if (f.categoryTag === 'AEO' || f.id.includes('AEO')) return 'AI answers';
       return 'Search';
@@ -300,7 +301,8 @@ export function howToFix(group: Pick<ProblemGroup, 'findings'>, looksTechnical: 
 
 /** The kind of search problem, in words people know: search engines, AI answers, or AI search. */
 export function searchKind(f: Pick<Finding, 'checker' | 'id'> & { categoryTag?: string }): { label: string; hint: string } | null {
-  const tag = f.categoryTag || (f.id.includes('GEO') ? 'GEO' : f.id.includes('AEO') ? 'AEO' : f.checker === 'seo' ? 'SEO' : undefined);
+  const tag = f.categoryTag || (f.id.includes('MKT') ? 'MKT' : f.id.includes('GEO') ? 'GEO' : f.id.includes('AEO') ? 'AEO' : f.checker === 'seo' ? 'SEO' : undefined);
+  if (tag === 'MKT') return { label: 'Marketing', hint: 'The basics that bring visitors in and turn them into customers: share previews, a clear next step, contact details and analytics.' };
   if (tag === 'GEO') return { label: 'AI search', hint: 'How AI search tools, such as ChatGPT search or Perplexity, read and quote the site (GEO).' };
   if (tag === 'AEO') return { label: 'AI answers', hint: 'How answer engines and AI assistants pick answers from the site (AEO).' };
   if (tag === 'SEO') return { label: 'Search', hint: 'How search engines, such as Google, find and list the site (SEO).' };

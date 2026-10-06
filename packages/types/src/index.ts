@@ -216,7 +216,7 @@ export interface Finding {
    */
   needsConfirmation?: boolean;
   /** Sub-category tag for fine-grained categorization, such as 'SEO', 'AEO', or 'GEO' under Findable. */
-  categoryTag?: 'SEO' | 'AEO' | 'GEO';
+  categoryTag?: 'SEO' | 'AEO' | 'GEO' | 'MKT';
   /** The area it counts toward, when not its checker's: a missing viewport tag is about phones. */
   aspect?: AspectType;
   /** The same problem found by another check has the same key, so the report lists it once (see problems.ts). */
@@ -431,6 +431,7 @@ export interface AspectScore {
     seo?: AspectSubBreakdown;
     aeo?: AspectSubBreakdown;
     geo?: AspectSubBreakdown;
+    marketing?: AspectSubBreakdown;
     [key: string]: AspectSubBreakdown | undefined;
   };
 }

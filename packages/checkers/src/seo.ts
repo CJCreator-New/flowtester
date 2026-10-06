@@ -3,6 +3,7 @@ import type { Breakpoint, Finding } from '@qa/types';
 import { SiteRootAuditor } from './site-root.js';
 import { AeoChecker } from './aeo.js';
 import { GeoChecker } from './geo.js';
+import { MarketingChecker } from './marketing.js';
 
 export interface SeoContext {
   testCaseId?: string;
@@ -45,6 +46,7 @@ export class SeoChecker {
   private siteRootAuditor = new SiteRootAuditor();
   private aeoChecker = new AeoChecker();
   private geoChecker = new GeoChecker();
+  private marketingChecker = new MarketingChecker();
 
   /**
    * Check SEO fundamentals, AEO answer patterns, GEO signals, and link health for a page.
@@ -415,6 +417,13 @@ export class SeoChecker {
       try {
         const geoFindings = await this.geoChecker.checkPage(page, context);
         findings.push(...geoFindings);
+      } catch {
+        // Non-blocking
+      }
+
+      // 15. Marketing basics (share previews, call to action, contact, analytics), once per site
+      try {
+        findings.push(...(await this.marketingChecker.checkPage(page, context)));
       } catch {
         // Non-blocking
       }

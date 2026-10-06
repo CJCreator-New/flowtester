@@ -9,3 +9,4 @@ export * from './seo.js';
 export * from './site-root.js';
 export * from './aeo.js';
 export * from './geo.js';
+export * from './marketing.js';

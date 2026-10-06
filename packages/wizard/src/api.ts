@@ -572,6 +572,28 @@ export async function updateSite(host: string, change: { searchChecks?: boolean 
   if (!res.ok) throw new RunnerError('That couldn’t be saved. Try again.');
 }
 
+/**
+ * Signs in on the site to check the details work, and keeps them (password in the computer's
+ * keychain) only when they do. Throws with the reason when signing in didn't work.
+ */
+export async function addSiteSignIn(
+  host: string,
+  signIn: { role: string; username: string; password: string; loginPath?: string }
+): Promise<{ landingPath?: string; saved: boolean; note?: string }> {
+  const res = await call(`/api/sites/${encodeURIComponent(host)}`, { method: 'POST', body: JSON.stringify({ addSignIn: signIn }) }, 30000);
+  const body = await json<{ saved?: boolean; landingPath?: string; error?: string }>(res);
+  if (!res.ok) throw new RunnerError(body.error || 'That sign-in couldn’t be saved. Try again.');
+  return { landingPath: body.landingPath, saved: !!body.saved, note: body.error };
+}
+
+/** Signs in with a saved sign-in to check it still works. */
+export async function testSiteSignIn(host: string, role: string): Promise<{ verified: boolean; landingPath?: string; error?: string }> {
+  const res = await call(`/api/sites/${encodeURIComponent(host)}`, { method: 'POST', body: JSON.stringify({ testSignIn: role }) }, 30000);
+  const body = await json<{ verified?: boolean; landingPath?: string; error?: string }>(res);
+  if (!res.ok) throw new RunnerError(body.error || 'The sign-in couldn’t be tested. Try again.');
+  return { verified: !!body.verified, landingPath: body.landingPath, error: body.error };
+}
+
 export type ScreenSize = '375px' | '768px' | '1440px';
 
 /** The screen sizes a new check-up starts with. */
