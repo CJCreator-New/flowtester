@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RunSummary } from '@qa/types';
 import { checkReachable, estimateAi, RunnerError, type AiEstimate, type AiSetup, type RunnerStatus, type SiteFacts, type WaitingPlan } from '../api';
-import { HomeInfo } from '../components/HomeInfo';
 import { KeyField } from '../components/KeyField';
 import { ErrorMessage, Notice, Question, Spinner } from '../components/text';
 import { rejectReason } from '../lib/context';
@@ -25,6 +24,8 @@ export interface StartFacts {
   stagingHost?: boolean;
   /** Sent only when the person chose, so the runner remembers it for the site. */
   searchChecks?: boolean;
+  /** True when there is no AI key: no AI is used and fixed rules write the plan, so a first scan needs no setup. */
+  noAI?: boolean;
 }
 
 const CHECK_DELAY_MS = 600;
@@ -147,10 +148,17 @@ export function NewCheckupScreen({
     /\.(vercel\.app|netlify\.app|fly\.dev|railway\.app|onrender\.com)$/i.test(checkedHost || '');
 
   const needsProdConfirmation = !!kind && !kind.natural && form.markedTestCopy && !hasStagingIndicator && !confirmedProd;
-  const canStart = keyReady && check.state === 'ok' && !starting && !needsProdConfirmation;
+  // No key doesn't stop a scan: fixed rules write the plan, and the AI can be connected any time.
+  // (Once the AI setup has been read, so the plan knows which way to go.)
+  const canStart = ai !== null && check.state === 'ok' && !starting && !needsProdConfirmation;
   const start = () => {
     if (check.state !== 'ok' || !kind || !canStart) return;
-    onStart({ url: check.url, stagingHost: kind.showMark ? form.markedTestCopy : undefined, searchChecks: form.searchChecks ?? undefined });
+    onStart({
+      url: check.url,
+      stagingHost: kind.showMark ? form.markedTestCopy : undefined,
+      searchChecks: form.searchChecks ?? undefined,
+      noAI: ai && !keyReady ? true : undefined,
+    });
   };
 
   const added = [form.specs, form.designNotes, form.journeys].filter((t) => t.trim()).length;
@@ -184,11 +192,11 @@ export function NewCheckupScreen({
       {ai && !keyReady && (
         <section aria-labelledby="key-title" className="mb-8 rounded-lg border-2 border-stamp bg-surface p-5">
           <h2 id="key-title" className="mb-1 text-xl font-bold">
-            First, connect the AI
+            Connect the AI for a smarter plan
           </h2>
           <p className="mb-4 text-sm text-ink-soft">
-            The AI writes the test plan. It runs on OpenRouter’s free models, so it costs nothing. You only do this once, and anything
-            you type below is kept.
+            Optional. Without it, fixed rules write the test plan and you can scan now. With it, the AI writes a plan that fits your site. It runs on
+            OpenRouter’s free models, so it costs nothing. You only do this once, and anything you type below is kept.
           </p>
           <KeyField
             onSaved={(model) => {
@@ -377,7 +385,7 @@ export function NewCheckupScreen({
             {starting ? <Spinner label="Starting…" /> : 'Scan the site'}
           </button>
           <p id="start-hint" className="text-sm text-ink-soft">
-            {ai && !keyReady ? 'Connect the AI above first.' : 'Nothing is tested until you approve the plan.'}
+            {ai && !keyReady ? 'No AI key yet, so fixed rules will write the plan. Nothing is tested until you approve it.' : 'Nothing is tested until you approve the plan.'}
           </p>
         </div>
       </form>
@@ -408,7 +416,6 @@ export function NewCheckupScreen({
           </Link>
         </section>
       )}
-    <HomeInfo />
     </div>
   );
 }

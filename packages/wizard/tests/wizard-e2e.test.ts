@@ -197,10 +197,21 @@ describe('Release check-up end to end, on the one server', () => {
     for (const dir of [outputDir, `${outputDir}-data`, uiDir]) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   });
 
-  it('opens on a new check-up, with the top bar, and every address answers', async () => {
+  it('opens on the landing page, which leads to a new check-up, with the top bar, and every address answers', async () => {
     await page.goto(`${toolUrl}/`);
+    await expect.poll(() => heading(page), { timeout: 10000 }).toBe('QA without a QA team.');
+    await expect.poll(() => page.title()).toBe('Release check-up | QA without a QA team: know if your site is ready to ship');
+    // The landing page is public and has no app navigation, but offers the way in, a real sample report and the source.
+    expect(await page.getByRole('link', { name: 'Past check-ups' }).count()).toBe(0);
+    expect(await page.getByRole('link', { name: 'Source on GitHub' }).count()).toBe(1);
+    expect(await page.getByRole('link', { name: 'See a sample report' }).getAttribute('href')).toBe('/sample-report.html');
+    expectPlain(await plainText(page), 'the landing page');
+    await screenshot('landing');
+    await checkPhone('/', 'landing', { role: 'link', name: 'Run a free check-up' });
+    await page.getByRole('link', { name: 'Run a free check-up' }).first().click();
+    await page.waitForURL(`${toolUrl}/check`);
     await expect.poll(() => heading(page), { timeout: 10000 }).toBe('Enter the address of the site to check');
-    await expect.poll(() => page.title()).toBe('Release check-up | Pre-release web app testing: QA, accessibility, SEO, AEO and GEO');
+    await expect.poll(() => page.title()).toBe('New check-up · Release check-up');
     const topBar = page.getByRole('navigation', { name: 'Main' });
     for (const name of ['New check-up', 'Past check-ups', 'Settings']) expect(await topBar.getByRole('link', { name }).count(), name).toBe(1);
     // No Report Hub is set up, so there's no Team Hub link.
@@ -208,7 +219,7 @@ describe('Release check-up end to end, on the one server', () => {
     // Served by the QA Tool, the page never needs to explain how to start it.
     expect(await page.getByText('Start Release check-up first').count()).toBe(0);
     // No key yet: connecting the AI comes first, on this screen.
-    await page.getByRole('heading', { name: 'First, connect the AI' }).waitFor();
+    await page.getByRole('heading', { name: 'Connect the AI for a smarter plan' }).waitFor();
     expectPlain(await plainText(page), 'the new check-up');
     await screenshot('new-checkup-first-visit');
 
@@ -227,7 +238,7 @@ describe('Release check-up end to end, on the one server', () => {
   }, 60000);
 
   it('first visit: specs typed before the AI key are kept, and the key is checked on the same screen', async () => {
-    await page.goto(`${toolUrl}/`);
+    await page.goto(`${toolUrl}/check`);
     const address = page.getByLabel('Site address');
     await address.fill(fixtureHost);
     // The address actually used shows once it's checked. A site not checked before starts unticked.
@@ -242,9 +253,10 @@ describe('Release check-up end to end, on the one server', () => {
 
     await page.getByText('Add specs, design notes or journeys').click();
     await page.getByLabel('Specs', { exact: true }).fill(SPECS);
+    // No key yet doesn't stop a first scan: fixed rules write the plan, and the key is offered as an upgrade.
     const scan = page.getByRole('button', { name: 'Scan the site' });
-    expect(await scan.isDisabled()).toBe(true);
-    expect(await page.locator('#start-hint').innerText()).toBe('Connect the AI above first.');
+    expect(await scan.isDisabled()).toBe(false);
+    expect(await page.locator('#start-hint').innerText()).toBe('No AI key yet, so fixed rules will write the plan. Nothing is tested until you approve it.');
 
     const key = page.getByLabel('OpenRouter key');
     await key.fill('sk-or-v1-revoked');
@@ -258,7 +270,7 @@ describe('Release check-up end to end, on the one server', () => {
     openRouterModels.list = [FREE_MODEL];
     await save.click();
     await page.getByText('The AI is connected.').waitFor();
-    expect(await page.getByRole('heading', { name: 'First, connect the AI' }).count()).toBe(0);
+    expect(await page.getByRole('heading', { name: 'Connect the AI for a smarter plan' }).count()).toBe(0);
     // The QA Tool, not this browser, remembers the key and the model it chose.
     expect(await api('/api/ai/openrouter/key')).toMatchObject({ configured: true, model: FREE_MODEL.id });
 
@@ -282,9 +294,9 @@ describe('Release check-up end to end, on the one server', () => {
     // Another browser, with nothing stored in it, isn't asked for the key.
     const other = await browser.newContext();
     const otherPage = await other.newPage();
-    await otherPage.goto(`${toolUrl}/`);
+    await otherPage.goto(`${toolUrl}/check`);
     await expect.poll(() => heading(otherPage), { timeout: 10000 }).toBe('Enter the address of the site to check');
-    expect(await otherPage.getByRole('heading', { name: 'First, connect the AI' }).count()).toBe(0);
+    expect(await otherPage.getByRole('heading', { name: 'Connect the AI for a smarter plan' }).count()).toBe(0);
     await other.close();
   }, 60000);
 
@@ -345,7 +357,7 @@ describe('Release check-up end to end, on the one server', () => {
 
     // Leaving the plan keeps it waiting, and the new check-up screen offers it again.
     await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'New check-up' }).click();
-    await page.waitForURL(`${toolUrl}/`);
+    await page.waitForURL(`${toolUrl}/check`);
     const resume = page.getByRole('complementary', { name: 'Check-up in progress' });
     await expect.poll(() => resume.innerText()).toContain(`Your check-up of ${fixtureHost} is waiting for your review.`);
     expect(await runnerPhase()).toBe('awaiting-review');
@@ -360,7 +372,7 @@ describe('Release check-up end to end, on the one server', () => {
     expect(await ask.innerText()).toContain(`The plan for ${fixtureHost} that’s waiting for your review will be thrown away.`);
     await ask.getByRole('button', { name: 'Keep the plan' }).click();
     expect(await ask.count()).toBe(0);
-    expect(page.url()).toBe(`${toolUrl}/`);
+    expect(page.url()).toBe(`${toolUrl}/check`);
     expect(await runnerPhase()).toBe('awaiting-review');
     expect(runRequests).toHaveLength(2); // the refused one; nothing was replaced
 
@@ -370,7 +382,7 @@ describe('Release check-up end to end, on the one server', () => {
 
     // Back, Forward and refresh land where they were; the plan's changes are still there.
     await page.goBack();
-    await page.waitForURL(`${toolUrl}/`);
+    await page.waitForURL(`${toolUrl}/check`);
     await expect.poll(() => heading(page)).toBe('Enter the address of the site to check');
     await page.goForward();
     await page.waitForURL(`${toolUrl}/check/plan`);
@@ -380,7 +392,7 @@ describe('Release check-up end to end, on the one server', () => {
 
     // The step bar's finished step is a link that stops nothing.
     await page.getByRole('navigation', { name: 'Check-up steps' }).getByRole('link', { name: /Address/ }).click();
-    await page.waitForURL(`${toolUrl}/`);
+    await page.waitForURL(`${toolUrl}/check`);
     expect(await runnerPhase()).toBe('awaiting-review');
     await page.goBack();
     await approve.waitFor();
@@ -422,7 +434,7 @@ describe('Release check-up end to end, on the one server', () => {
 
       // The step bar never stops anything: the check-up is still being tested.
       await page.getByRole('navigation', { name: 'Check-up steps' }).getByRole('link', { name: /Address/ }).click();
-      await page.waitForURL(`${toolUrl}/`);
+      await page.waitForURL(`${toolUrl}/check`);
       const resume = page.getByRole('complementary', { name: 'Check-up in progress' });
       await expect.poll(() => resume.innerText()).toContain(`Your check-up of ${fixtureHost} is being tested.`);
       expect(await runnerPhase()).toBe('testing');
@@ -619,7 +631,7 @@ describe('Release check-up end to end, on the one server', () => {
     const ask = page.getByRole('dialog', { name: 'Stop scanning?' });
     expect(await ask.innerText()).toContain('or throw the scan away. AI requests already used stay used.');
     await ask.getByRole('button', { name: 'Throw it away' }).click();
-    await page.waitForURL(`${toolUrl}/`);
+    await page.waitForURL(`${toolUrl}/check`);
     expect(await page.getByLabel('Site address').inputValue()).toBe(fixtureHost);
     await expect.poll(runnerPhase).toBe('idle');
   }, 90000);
@@ -629,12 +641,12 @@ describe('Release check-up end to end, on the one server', () => {
     const other = await browser.newContext();
     const otherPage = await other.newPage();
     try {
-      await otherPage.goto(`${toolUrl}/`);
+      await otherPage.goto(`${toolUrl}/check`);
       await otherPage.getByLabel('Site address').fill(fixtureHost);
       await expect.poll(() => otherPage.locator('#url-status').innerText(), { timeout: 15000 }).toContain('Found');
       await expect.poll(() => otherPage.getByRole('radio', { name: /Test it fully/ }).isChecked()).toBe(true);
       expect(await otherPage.locator('#url-status').innerText()).toContain('Test copy: forms can be filled in and sent.');
-      await checkPhone('/', 'new-checkup', { role: 'button', name: 'Scan the site' });
+      await checkPhone('/check', 'new-checkup', { role: 'button', name: 'Scan the site' });
     } finally {
       await other.close();
     }
@@ -660,7 +672,7 @@ describe('Release check-up end to end, on the one server', () => {
     await screenshot('settings');
 
     await page.goBack();
-    await page.waitForURL(`${toolUrl}/`);
+    await page.waitForURL(`${toolUrl}/check`);
     await page.goForward();
     await page.waitForURL(`${toolUrl}/settings`);
     await expect.poll(() => heading(page)).toBe('Settings');

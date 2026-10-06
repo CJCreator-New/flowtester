@@ -7,6 +7,7 @@ import React, { useSyncExternalStore } from 'react';
  * picks the screen from the address.
  */
 export type Route =
+  | { name: 'landing' }
   | { name: 'new' }
   | { name: 'scan' }
   | { name: 'plan' }
@@ -19,7 +20,8 @@ export type Route =
   | { name: 'not-found'; path: string };
 
 export const PATHS = {
-  new: '/',
+  landing: '/',
+  new: '/check',
   scan: '/check/scan',
   plan: '/check/plan',
   testing: '/check/testing',
@@ -34,6 +36,8 @@ export function matchRoute(pathname: string): Route {
   const path = pathname.replace(/\/+$/, '') || '/';
   switch (path) {
     case '/':
+      return { name: 'landing' };
+    case PATHS.new:
       return { name: 'new' };
     case PATHS.scan:
       return { name: 'scan' };

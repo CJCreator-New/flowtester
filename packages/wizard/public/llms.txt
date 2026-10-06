@@ -1,6 +1,6 @@
 ﻿# Release check-up
 
-> Release check-up (also called QA Flow Tester) is a local pre-release testing tool for web apps. It scans a site, drafts a test plan, runs real-browser tests and writes a plain-language report with a ship / don't-ship verdict.
+> Release check-up is QA for teams without a QA team: a pre-release testing tool for web apps. It scans a site, drafts a test plan, runs real-browser tests and writes a plain-language report with a ship / don't-ship verdict.
 
 ## What it checks
 - Functionality: end-to-end user journeys run in a real browser (Playwright)
@@ -16,11 +16,13 @@
 3. Tests run; read the report, fix issues and re-run to confirm.
 
 ## Facts
-- Runs on the user's own machine; reports are stored locally.
+- Free during the beta. A free shared online copy checks public sites, one check-up at a time; the same tool can be run on your own machine for private sites.
+- On the shared online copy, AI keys and sign-ins are kept in memory for the visit only, and check-ups are visible to other people using that copy.
 - AI features use only the API key the user supplies.
 - "Only look" mode never fills in, sends or changes anything on the target site.
 - Needs no hand-written tests.
 
 ## Public pages
-- [Home](%ORIGIN%/): overview, how it works and FAQ
+- [Home](%ORIGIN%/): what it does, how it works, pricing and FAQ
+- [Sample report](%ORIGIN%/sample-report.html): a real report on a demo site
 - [Sitemap](%ORIGIN%/sitemap.xml)

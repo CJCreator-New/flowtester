@@ -271,6 +271,8 @@ export interface StartRunRequest {
   aiProvider?: AiProviderId;
   /** Plan with fixed rules now, spending no AI requests; re-plan items with the AI later. */
   planWithoutAI?: boolean;
+  /** False when there is no AI key at all: no AI is used, and fixed rules write the plan. */
+  useAI?: boolean;
   /**
    * Check how search engines and AI assistants see the site. Off for a test copy by default: it
    * matters on the public site.
@@ -297,7 +299,7 @@ export async function startRun(request: StartRunRequest): Promise<string> {
     owner: request.owner,
     skipReview: false,
     mode: 'product',
-    useAI: true,
+    useAI: request.useAI ?? true,
     aiProvider: request.aiProvider ?? 'openrouter',
   };
   if (request.planWithoutAI) body.planWithoutAI = true;

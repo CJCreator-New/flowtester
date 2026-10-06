@@ -37,6 +37,7 @@ import { displayHost, hostOf } from './lib/url';
 import { ConnectionScreen } from './screens/ConnectionScreen';
 import { NewCheckupScreen, type StartFacts } from './screens/NewCheckupScreen';
 import { NotFoundScreen } from './screens/NotFoundScreen';
+import { LandingScreen } from './screens/LandingScreen';
 import { PastCheckupsScreen } from './screens/PastCheckupsScreen';
 import { PlanReviewScreen, type PlanNotice, type PlanUpdateState } from './screens/PlanReviewScreen';
 import { ReportScreen } from './screens/ReportScreen';
@@ -100,9 +101,10 @@ async function rememberedFor(targetUrl: string): Promise<SiteFacts['remembered']
 }
 
 export default function App() {
-  const { reachable, checks } = useRunnerConnection();
   const pathname = usePathname();
   const route = matchRoute(pathname);
+  // The public landing page needs no runner, so it neither waits for one nor polls for one.
+  const { reachable, checks } = useRunnerConnection(route.name !== 'landing');
   const { confirm, choose, dialog } = useConfirm();
 
   const [status, setStatus] = useState<RunnerStatus | null>(null);
@@ -364,7 +366,7 @@ export default function App() {
         setAi((a) => ({ model: a?.model ?? null, configured: false }));
         setStartError(
           matchRoute(window.location.pathname).name === 'new'
-            ? 'An AI key is needed first. Add it above, then scan the site.'
+            ? 'The AI isn’t connected yet. Connect it above, or scan again to plan with fixed rules.'
             : 'An AI key is needed first. Add it in Settings, then try again.'
         );
       } else {
@@ -389,6 +391,7 @@ export default function App() {
       rememberSignIns: roles.length > 0 && form.rememberSignIns,
       useSavedSignIns: roles.length === 0 && form.useSavedSignIns,
       planWithoutAI: form.planWithoutAI || undefined,
+      useAI: facts.noAI ? false : undefined,
     });
   };
 
@@ -577,7 +580,9 @@ export default function App() {
   const scanFailure = feed.failure ?? (status?.phase === 'failed' ? plainFailure(status.lastRunError, 'product') : null);
 
   let body: ReactNode;
-  if (!reachable) {
+  if (route.name === 'landing') {
+    body = <LandingScreen />;
+  } else if (!reachable) {
     body = checks > 0 ? <ConnectionScreen checks={checks} /> : <Loading label="Connecting…" />;
   } else {
     switch (route.name) {
@@ -675,16 +680,17 @@ export default function App() {
   }
 
   const step = reachable ? stepOf(route) : null;
+  const landing = route.name === 'landing';
 
   return (
     <div className="min-h-screen bg-paper text-ink">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-[60] focus:inline-flex focus:min-h-[44px] focus:items-center rounded bg-stamp px-4 py-2 font-bold text-surface">
         Skip to the content
       </a>
-      <TopBar route={route} hubConnected={!!status?.hubConnected} checkupInProgress={inProgress} />
+      {!landing && <TopBar route={route} hubConnected={!!status?.hubConnected} checkupInProgress={inProgress} />}
       {step && <StepBar current={step} links={{ address: PATHS.new }} />}
       <main id="main">{body}</main>
-      <CommandPalette route={route} />
+      {!landing && <CommandPalette route={route} />}
       {dialog}
     </div>
   );

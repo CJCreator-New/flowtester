@@ -64,8 +64,8 @@ async function readFileIfPresent(file: string): Promise<Buffer | null> {
 /** Files whose `%ORIGIN%` placeholder is filled in with the address the visitor used (canonical, sitemap, llms.txt). */
 const TEMPLATED = new Set(['.html', '.txt', '.xml', '.webmanifest']);
 
-/** Private screens (runs, plans, settings): kept out of search and AI indexes. Only the home page is public. */
-const PUBLIC_PATHS = new Set(['/', '/index.html']);
+/** Private screens (runs, plans, settings): kept out of search and AI indexes. Only the landing page and the sample report are public. */
+const PUBLIC_PATHS = new Set(['/', '/index.html', '/sample-report.html']);
 
 /**
  * The public address of this server, for absolute URLs in canonical links, structured data and the

@@ -3,7 +3,8 @@ import { isCheckRoute, matchRoute, PATHS } from '../src/lib/router';
 
 describe('every screen has an address', () => {
   it.each([
-    ['/', { name: 'new' }],
+    ['/', { name: 'landing' }],
+    ['/check', { name: 'new' }],
     ['/check/scan', { name: 'scan' }],
     ['/check/plan', { name: 'plan' }],
     ['/check/testing/', { name: 'testing' }],
@@ -27,5 +28,6 @@ describe('every screen has an address', () => {
     expect(['/check/scan', '/check/plan', '/check/testing'].map((path) => isCheckRoute(matchRoute(path)))).toEqual([true, true, true]);
     expect(isCheckRoute(matchRoute('/reports/run-1'))).toBe(false);
     expect(isCheckRoute(matchRoute('/'))).toBe(false);
+    expect(isCheckRoute(matchRoute('/check'))).toBe(false);
   });
 });
