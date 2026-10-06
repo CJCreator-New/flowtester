@@ -67,6 +67,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Without this, checkout leaves the built-in github-actions[bot] login in git's config, and it
+          # wins over the token below: the push is then made as the bot, which cannot write to the other repo (403).
+          persist-credentials: false
 
       - name: Copy main to the Vercel repo
         env:
