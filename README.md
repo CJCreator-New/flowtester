@@ -231,13 +231,19 @@ pnpm dev   # http://localhost:3002, API calls passed on to the QA Tool on 3001
 
 ---
 
+### Publish the front end on Vercel
+
+On [vercel.com](https://vercel.com), choose **Add New, Project**, import this repo, and keep the **Root Directory** as the repo root. `vercel.json` sets the install and build commands and the output folder, so there is nothing else to fill in. Every push to `main` publishes the wizard. Opened there, no runner answers it, so its first screen offers the ways to run a check-up (below). Vercel serves only the page: the runner needs a real browser, which Vercel's short-lived functions can't hold for a check-up.
+
+---
+
 ### Publish the full app online (free, shared beta)
 
 `render.yaml` publishes the runner and wizard together on Render's free plan, so people open one link, add their **own** AI key, and check a public site. Each visitor's key stays in memory for their session only, and only public sites can be checked.
 
 1. On [render.com](https://render.com), choose **New, Blueprint**, and pick this repo. No card is needed for the free plan.
 2. When it is live, copy its address (for example `https://qa-check-up.onrender.com`).
-3. In the GitHub repo, open **Settings, Secrets and variables, Actions, Variables** and add `ONLINE_APP_URL` with that address. Run **Publish wizard** again: the Pages site now shows an **Open the online app** button.
+3. In Vercel, open the project's **Settings, Environment Variables** and add `VITE_ONLINE_APP_URL` with that address, then redeploy: the site now shows an **Open the online app** button.
 
 The free plan has 512 MB of memory, sleeps after 15 minutes idle (the first visit then takes about a minute) and runs one check-up at a time. A big site can run out of memory. There are no accounts or limits, so treat it as a beta.
 
@@ -245,7 +251,7 @@ The free plan has 512 MB of memory, sleeps after 15 minutes idle (the first visi
 
 ### Run it in your own GitHub repo (nothing to install)
 
-Open the wizard where it is published on GitHub Pages and choose **In your GitHub repo**. It gives you a workflow file (the same one as [templates/qa-check.yml](templates/qa-check.yml)) to save as `.github/workflows/qa-check.yml`. Then:
+Open the wizard where it is published on Vercel and choose **In your GitHub repo**. It gives you a workflow file (the same one as [templates/qa-check.yml](templates/qa-check.yml)) to save as `.github/workflows/qa-check.yml`. Then:
 
 1. Add your AI key as a repo secret named `QA_AI_API_KEY` (optional: without it the plan is written by fixed rules).
 2. Run **QA check-up** from the Actions tab and type the address. It also runs when a preview or staging deployment succeeds.

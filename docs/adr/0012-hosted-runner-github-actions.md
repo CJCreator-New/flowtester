@@ -6,7 +6,7 @@ Replaces the "each person runs a server on their own machine" rule of [0008](000
 "Nothing to install" is the product's promise, and hosting must cost $0 until there is revenue. A check-up needs a real browser, so a static host (GitHub Pages, Cloudflare Pages, Netlify) cannot run one. Something with a machine has to.
 
 We decided on two parts:
-- **The front end is static.** The wizard builds to plain files and is published on GitHub Pages (`.github/workflows/pages.yml`). Opened there, no runner answers it, so its first screen offers the two ways to run: in the person's GitHub repo, or on their computer.
+- **The front end is static.** The wizard builds to plain files and is published on Vercel (`vercel.json`; it began on GitHub Pages and moved on 2026-10-06, for simpler settings and per-push deploys). Opened there, no runner answers it, so its first screen offers the two ways to run: in the person's GitHub repo, or on their computer.
 - **The check-up runs in the user's own GitHub Actions** (Option A). The wizard generates a workflow file from `templates/qa-check.yml`. The job gets the tool, builds it, and runs `packages/runner/dist/checkup.js`, which starts the runner in-process, tests one address, writes the report and exits with a code the build can use. The report is an artifact (`report.html` opens with a double-click) and the verdict is on the run's summary page.
 
 Why this one first:
@@ -22,6 +22,9 @@ We rejected, for now:
 - **Triggering runs from the browser with a pasted token.** A token on a static page is a risk. If it cannot be kept in the user's browser only, the button stays out. For now the person starts the run from GitHub's own Run workflow button.
 
 `pnpm tunnel` stays as the way to share a runner on someone's own computer with a few testers. It is local-only, not hosting, and its beta mode rules (their own key, public sites only) are unchanged.
+
+## Amendment, 2026-10-06: Vercel for the front end
+The front end moved from GitHub Pages to Vercel. Vercel was **not** chosen to run the runner: its functions are stateless and short-lived (about 1 GB of memory on the free plan, a few minutes at most), while a check-up holds one run in memory, streams progress, keeps a plan for review and drives Chromium for many minutes. Running check-ups there would mean redesigning the runner into short steps with a database between them. The runner stays on Render (online copy) or the user's own GitHub Actions.
 
 ## Amendment, 2026-10-05: an online copy as well (Option B, beta)
 Opening the published wizard showed setup instructions, not the app. The wanted experience is the local one: add your own AI key, enter a site, test it. A static page cannot do that, so the full app (runner and wizard, in one container) is also published online, as a shared beta copy (`render.yaml`, beta mode: each visitor's key is kept in memory for their session, only public sites can be checked, one check-up at a time). The Pages site links to it. The GitHub Actions route and running on your own computer stay as the fallbacks, and are the way to check private or localhost sites.
