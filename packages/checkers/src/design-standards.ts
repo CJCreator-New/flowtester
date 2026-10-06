@@ -149,7 +149,6 @@ export class DesignStandardsChecker {
             ],
             evidence: {},
             resolution: `Update CSS or Tailwind class for ${m.selector} to match design token ${m.expected}.`,
-            verifyCommand: `qa-test verify F-DESIGN-${context.testCaseId || 'TOK'}-${counter - 1}`,
           });
         }
       }
@@ -226,8 +225,7 @@ export class DesignStandardsChecker {
       ],
       evidence: { screenshotPath: result.diffImagePath },
       resolution:
-        'If the change is intended, refresh baselines with `qa-test run ... --update-baselines`; otherwise fix the regressed styles.',
-      verifyCommand: `qa-test verify ${id}`,
+        'If the change is intended, approve the new look under Visual Baselines in the app; otherwise fix the regressed styles.',
     };
   }
 }

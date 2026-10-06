@@ -11,7 +11,7 @@ On screen the product is called **Release check-up**, and one pass over a site i
 
 ## Phase 1 direction: Blueprint (Direction B)
 
-Chosen 2026-09-28 from three interactive prototypes (`packages/wizard/prototypes/`).
+Chosen 2026-09-28 from three interactive prototypes (since removed; the chosen direction is the one built).
 
 **Aesthetic:** Industrial / Utilitarian, dark. Deep navy canvas with white page cards — the map
 looks like a technical drawing of the site's structure. Journey paths are coloured lines (violet,

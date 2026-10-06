@@ -18,7 +18,6 @@ const EVERY_EVENT_TYPE: RunnerEvent[] = [
   { type: 'STEP_STARTED', stepIndex: 0, stepName: 'Click [data-testid="save-btn"]', action: 'click', target: '[data-testid="save-btn"]', testCaseId: 'TC-1' },
   { type: 'STEP_COMPLETED', stepIndex: 0, passed: false, durationMs: 10, error: 'locator.click: Timeout 4000ms exceeded' },
   { type: 'FINDINGS_UPDATED', totalFindings: 2 },
-  { type: 'HUB_PUSH_RESULT', synced: true },
   { type: 'RUN_COMPLETED', runId: 'r', report: {} },
 ];
 

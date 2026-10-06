@@ -133,7 +133,6 @@ export class SiteRootAuditor {
             stepsToReproduce: [`Fetch ${robotsUrl}`, 'Inspect User-agent and Disallow rules'],
             evidence: {},
             resolution: 'Update robots.txt to explicitly allow AI crawlers (e.g. "User-agent: GPTBot / Allow: /") if you want generative AI search engines to reference your site.',
-            verifyCommand: 'qa-test verify F-GEO-ROBOTS-BLOCKED',
           });
         }
       } else {
@@ -154,7 +153,6 @@ export class SiteRootAuditor {
           stepsToReproduce: [`Request ${robotsUrl}`],
           evidence: {},
           resolution: 'Create a /robots.txt file at the root of your public web directory with crawler rules.',
-          verifyCommand: 'qa-test verify F-SEO-ROBOTSTXT-MISSING',
         });
       }
     } catch {
@@ -188,7 +186,6 @@ export class SiteRootAuditor {
           stepsToReproduce: [`Request ${probeUrl}`],
           evidence: {},
           resolution: 'Generate an XML sitemap and declare it in robots.txt or place it at /sitemap.xml.',
-          verifyCommand: 'qa-test verify F-SEO-SITEMAP-MISSING',
         });
       }
     } catch {
@@ -222,7 +219,6 @@ export class SiteRootAuditor {
             stepsToReproduce: [`Fetch ${llmsUrl}`, 'Verify markdown format conforms to llmstxt.org'],
             evidence: {},
             resolution: 'Format /llms.txt according to the llmstxt.org proposal with an H1 project title and section links.',
-            verifyCommand: 'qa-test verify F-GEO-LLMSTXT-FORMAT',
           });
         }
       } else {
@@ -242,7 +238,6 @@ export class SiteRootAuditor {
           stepsToReproduce: [`Request ${llmsUrl}`],
           evidence: {},
           resolution: 'Add an /llms.txt file at your domain root summarizing your product and key links in concise markdown (see llmstxt.org).',
-          verifyCommand: 'qa-test verify F-GEO-LLMSTXT-MISSING',
         });
       }
     } catch {

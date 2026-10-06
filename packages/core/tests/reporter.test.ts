@@ -43,7 +43,6 @@ describe('ReportGenerator', () => {
           stepsToReproduce: ['Navigate to /checkout', 'Click Pay'],
           evidence: {},
           resolution: 'Fix server endpoint',
-          verifyCommand: 'qa-test verify F-BLOCKER-001',
         },
       ],
     };
@@ -64,6 +63,6 @@ describe('ReportGenerator', () => {
     expect(mdContent).toContain('**Not ready yet**: 1 problem must be fixed first.');
     expect(mdContent).toContain('F-BLOCKER-001');
     expect(mdContent).toContain('Critical checkout crash');
-    expect(mdContent).toContain('`qa-test verify F-BLOCKER-001`');
+    expect(mdContent).toContain('Run the check-up again on the same address');
   });
 });

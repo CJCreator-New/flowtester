@@ -1,4 +1,4 @@
-import type { ReleaseReport, RoleCredential, ReviewPlan, DiscoveredFlow, TestCase, RunSummary, CompetitiveBenchmark, ReleaseGateCriteria } from '@qa/types';
+import type { ReleaseReport, RoleCredential, ReviewPlan, DiscoveredFlow, TestCase, RunSummary, BenchmarkJob, ReleaseGateCriteria } from '@qa/types';
 
 /**
  * Every call to the runner lives here, and every failure becomes a RunnerError whose message is a
@@ -55,7 +55,6 @@ export interface RunnerStatus {
   targetUrl?: string | null;
   /** The run the latest report belongs to. */
   reportRunId?: string | null;
-  hubConnected?: boolean;
   /** A copy shared with other people (the free online one): check-ups and reports are visible to all of them. */
   beta?: boolean;
   /** Shared copy only: another visitor's check-up is running, so a new one would have to wait. */
@@ -690,23 +689,34 @@ export async function deleteVisualBaseline(id: string): Promise<void> {
   if (!res.ok) throw new RunnerError('Couldn’t delete the visual baseline.');
 }
 
-export async function runBenchmark(params: {
-  ourUrl: string;
-  ourName?: string;
-  refUrl: string;
-  refName?: string;
-  flowType?: string;
-  targetGoal?: string;
-}): Promise<CompetitiveBenchmark> {
-  const res = await call('/api/runner/benchmark', {
-    method: 'POST',
-    body: JSON.stringify(params),
-  });
-  if (!res.ok) {
-    const err = await json<{ error?: string }>(res).catch((): { error?: string } => ({}));
-    throw new RunnerError(err.error || 'Benchmarking failed. Check the addresses and try again.');
+/** Starts comparing two sites; the comparison runs on the server and is followed with getBenchmark. */
+export async function startBenchmark(params: { ourUrl: string; ourName?: string; refUrl: string; refName?: string }): Promise<string> {
+  const res = await call('/api/runner/benchmark', { method: 'POST', body: JSON.stringify(params) });
+  const body = await json<{ id?: string; error?: string }>(res);
+  if (!res.ok || !body.id) throw new RunnerError(body.error || 'The comparison couldn’t start. Check both addresses and try again.');
+  return body.id;
+}
+
+export async function getBenchmark(id: string): Promise<BenchmarkJob> {
+  const res = await call(`/api/runner/benchmark/${encodeURIComponent(id)}`);
+  if (res.status === 404) throw new RunnerError('That comparison isn’t here any more.');
+  if (!res.ok) throw new RunnerError('That comparison couldn’t be opened. Try again.');
+  return json<BenchmarkJob>(res);
+}
+
+/** The running and kept comparisons, newest first, without their full results. */
+export async function listBenchmarks(): Promise<BenchmarkJob[]> {
+  try {
+    const res = await call('/api/runner/benchmarks');
+    return res.ok ? json<BenchmarkJob[]>(res) : [];
+  } catch {
+    return [];
   }
-  return json<CompetitiveBenchmark>(res);
+}
+
+export async function deleteBenchmark(id: string): Promise<void> {
+  const res = await call(`/api/runner/benchmark/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new RunnerError('That comparison couldn’t be removed.');
 }
 
 export interface CheckupSchedule {

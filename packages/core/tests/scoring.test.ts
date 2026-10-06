@@ -47,7 +47,6 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
         stepsToReproduce: [],
         evidence: {},
         resolution: '',
-        verifyCommand: '',
       },
       // 1 Minor in Accessible (ux-quality) on 3 pages = -5 * 1.25 = -6.25 -> score 94 (Grade A)
       {
@@ -60,7 +59,6 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
         stepsToReproduce: [],
         evidence: {},
         resolution: '',
-        verifyCommand: '',
       },
       {
         id: 'F-UX-2',
@@ -72,7 +70,6 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
         stepsToReproduce: [],
         evidence: {},
         resolution: '',
-        verifyCommand: '',
       },
       {
         id: 'F-UX-3',
@@ -84,7 +81,6 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
         stepsToReproduce: [],
         evidence: {},
         resolution: '',
-        verifyCommand: '',
       },
     ];
 
@@ -114,7 +110,6 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
       stepsToReproduce: [],
       evidence: {},
       resolution: '',
-      verifyCommand: '',
     };
     // Only the bug and accessibility checks ran; the security one still found something.
     const grades = calculateSiteAspectGrades([minorOnHome, { ...minorOnHome, id: 'F-SEC-1', checker: 'security', title: 'No HSTS' }], {
@@ -146,7 +141,6 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
         stepsToReproduce: [],
         evidence: {},
         resolution: '',
-        verifyCommand: '',
       },
       {
         id: 'F-SEC-2',
@@ -158,7 +152,6 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
         stepsToReproduce: [],
         evidence: {},
         resolution: '',
-        verifyCommand: '',
       },
       {
         id: 'F-SEC-3',
@@ -170,7 +163,6 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
         stepsToReproduce: [],
         evidence: {},
         resolution: '',
-        verifyCommand: '',
       },
     ];
 
@@ -192,7 +184,6 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
       stepsToReproduce: [],
       evidence: {},
       resolution: '',
-      verifyCommand: '',
     }));
     const looks = calculateSiteAspectGrades(opinions).aspects['Looks and reads well'];
     expect(looks.score).toBe(75);

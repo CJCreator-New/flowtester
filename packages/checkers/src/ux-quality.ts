@@ -106,7 +106,6 @@ export class UXQualityChecker {
               allTargets: targets.length > 1 ? targets : undefined,
             },
             resolution: `${violation.helpUrl ? `See ${violation.helpUrl}. ` : ''}Remediation: ${violation.help}.`,
-            verifyCommand: `qa-test verify F-A11Y-${context.testCaseId || 'GEN'}-${counter - 1}`,
           });
         }
 
@@ -135,7 +134,6 @@ export class UXQualityChecker {
             stepsToReproduce: [`Open ${context.urlPath} at ${context.breakpoint}`, `Check element: ${targets[0]}`],
             evidence: { allTargets: targets.length > 1 ? targets : undefined },
             resolution: `Review by hand. ${item.helpUrl ? `See ${item.helpUrl}.` : ''}`.trim(),
-            verifyCommand: `qa-test verify F-A11Y-REVIEW-${context.testCaseId || 'GEN'}-${counter - 1}`,
           });
         }
       } catch (err) {
@@ -156,7 +154,6 @@ export class UXQualityChecker {
           evidence: {},
           resolution:
             'Check whether a strict Content-Security-Policy or a non-HTML response blocked the scan, then run it again. Until then, treat this page as unchecked.',
-          verifyCommand: `qa-test verify F-A11Y-SCAN-FAILED-${context.testCaseId || 'GEN'}-${counter - 1}`,
         });
       }
     }
@@ -233,7 +230,6 @@ export class UXQualityChecker {
             ],
             evidence: {},
             resolution: 'Increase min-height and min-width to at least 44px or add padding for mobile viewports.',
-            verifyCommand: `qa-test verify F-UX-TARGET-${context.testCaseId || 'GEN'}-${counter - 1}`,
           });
         }
       } catch {
@@ -290,7 +286,6 @@ export class UXQualityChecker {
           ],
           evidence: {},
           resolution: 'Add a persistent top navigation bar or back-button link to the page layout.',
-          verifyCommand: `qa-test verify F-UX-DEADEND-${context.testCaseId || 'GEN'}-${counter - 1}`,
         });
       }
     } catch {
@@ -326,7 +321,6 @@ export class UXQualityChecker {
           ],
           evidence: {},
           resolution: 'Ensure broad containers use max-w-full and overflow-x-hidden.',
-          verifyCommand: `qa-test verify F-UX-OVERFLOW-${context.testCaseId || 'GEN'}-${counter - 1}`,
         });
       }
     } catch {

@@ -34,6 +34,8 @@ import {
   SecurityChecker,
   PerformanceChecker,
   SeoChecker,
+  newMarketingLog,
+  marketingReview,
   type DesignTokens,
 } from '@qa/checkers';
 import { calculateSiteAspectGrades } from './scoring.js';
@@ -350,6 +352,8 @@ export class FlowTestOrchestrator {
 
     // Facts about the whole site (its icon, its phone set-up) are reported once per run.
     const siteWide = new Set<string>();
+    // What the marketing basics found, page by page, for the report's checklist.
+    const marketingLog = newMarketingLog();
 
     // Pages whose vitals were already measured with repeat loads in this run.
     const vitalsMeasured = new Set<string>();
@@ -692,6 +696,7 @@ export class FlowTestOrchestrator {
                   baseUrl: options.targetUrl,
                   searchChecks: options.searchChecks,
                   siteWide,
+                  marketingLog,
                 });
 
           // 4. Permission Matrix Check
@@ -777,7 +782,6 @@ export class FlowTestOrchestrator {
             stepsToReproduce: [`Open ${testCase.startPage} as ${testCase.role} at ${bp}`, `${s.step}: look for “${s.planned}”`],
             evidence: {},
             resolution: `Check the plan’s value for this step, or whether “${s.planned}” should be offered.`,
-            verifyCommand: `qa-test verify F-OPTION-${testCase.id}-${bp}-${n + 1}`,
             needsConfirmation: true,
           }));
           const keptFindings = [
@@ -864,7 +868,6 @@ export class FlowTestOrchestrator {
             stepsToReproduce: [`Open ${testCase.startPage} as ${testCase.role} at ${bp}`],
             evidence: {},
             resolution: 'Check the page loads at this address for this role; a timeout usually means the page is slow or the server stopped.',
-            verifyCommand: `qa-test verify F-RUN-${testCase.id}-${bp}`,
           };
           allFindings.push(couldNotRun);
           pointResult = {
@@ -991,7 +994,9 @@ export class FlowTestOrchestrator {
     // "Not checked", not an A.
     const grades = calculateSiteAspectGrades(uniqueFindings, {
       checkersRun: results.flatMap((r) => (r.checks || []).map((c) => c.checker)),
+      marketingChecked: marketingLog.homeRead,
     });
+    const marketing = marketingReview(marketingLog);
     const recommendations = generateRankedRecommendations(uniqueFindings);
 
     // Site history tracking, in the data folder beside the site's memory
@@ -1014,6 +1019,7 @@ export class FlowTestOrchestrator {
       results,
       findings: uniqueFindings,
       grades,
+      marketing,
       recommendations,
       history: historyDiff,
       traceability,

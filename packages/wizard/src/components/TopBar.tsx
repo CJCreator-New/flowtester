@@ -14,7 +14,7 @@ export function Mark({ size = 24 }: { size?: number }) {
  * On every screen: the places you can go. Nothing here stops or deletes anything. The check-up in
  * progress is reached from its Resume card on the new check-up screen.
  */
-export function TopBar({ route, hubConnected, checkupInProgress }: { route: Route; hubConnected: boolean; checkupInProgress: boolean }) {
+export function TopBar({ route, checkupInProgress }: { route: Route; checkupInProgress: boolean }) {
   const current = (names: Route['name'][]) => (names.includes(route.name) ? 'page' : undefined);
   const item = 'inline-flex min-h-[44px] items-center rounded px-2 text-sm font-bold transition-colors hover:text-ink';
   const tone = (active?: string) => (active ? 'text-ink underline decoration-stamp decoration-2 underline-offset-8' : 'text-ink-soft');
@@ -67,7 +67,7 @@ export function TopBar({ route, hubConnected, checkupInProgress }: { route: Rout
             </li>
             <li>
               <Link to={PATHS.benchmark} aria-current={current(['benchmark'])} className={`${item} ${tone(current(['benchmark']))}`}>
-                Benchmark
+                Compare sites
               </Link>
             </li>
             <li>
@@ -75,13 +75,6 @@ export function TopBar({ route, hubConnected, checkupInProgress }: { route: Rout
                 Settings
               </Link>
             </li>
-            {hubConnected && (
-              <li>
-                <a href="/hub" className={`${item} text-ink-soft`}>
-                  Team Hub
-                </a>
-              </li>
-            )}
           </ul>
         </nav>
       </div>

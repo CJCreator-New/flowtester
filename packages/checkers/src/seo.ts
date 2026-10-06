@@ -3,7 +3,7 @@ import type { Breakpoint, Finding } from '@qa/types';
 import { SiteRootAuditor } from './site-root.js';
 import { AeoChecker } from './aeo.js';
 import { GeoChecker } from './geo.js';
-import { MarketingChecker } from './marketing.js';
+import { MarketingChecker, type MarketingLog } from './marketing.js';
 
 export interface SeoContext {
   testCaseId?: string;
@@ -22,6 +22,8 @@ export interface SeoContext {
    * each is reported once, on the first page it's seen on, not on every page.
    */
   siteWide?: Set<string>;
+  /** What the marketing basics found over the run, for the report's checklist. */
+  marketingLog?: MarketingLog;
 }
 
 export interface SeoPageDetails {
@@ -89,7 +91,6 @@ export class SeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect the <head> element for a <title> tag'],
         evidence: {},
         resolution: 'Add a distinct, descriptive <title> in the <head> of the HTML document.',
-        verifyCommand: `qa-test verify F-SEO-TITLE`,
       });
     }
 
@@ -111,7 +112,6 @@ export class SeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Search for <meta name="description"> in <head>'],
         evidence: {},
         resolution: 'Add a <meta name="description" content="..."> tag with a 50–160 character summary.',
-        verifyCommand: `qa-test verify F-SEO-DESC`,
       });
     }
 
@@ -133,7 +133,6 @@ export class SeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Check the document headings'],
         evidence: {},
         resolution: 'Add a single top-level <h1> heading identifying the page content.',
-        verifyCommand: `qa-test verify F-SEO-H1`,
       });
     } else if (details.h1Count > 1) {
       findings.push({
@@ -152,7 +151,6 @@ export class SeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Query document.querySelectorAll("h1")'],
         evidence: {},
         resolution: 'Demote secondary <h1> tags to <h2> or <h3> to maintain a single page heading.',
-        verifyCommand: `qa-test verify F-SEO-H1-MULTIPLE`,
       });
     }
 
@@ -178,7 +176,6 @@ export class SeoChecker {
             stepsToReproduce: [`Visit ${context.urlPath}`, `Inspect heading flow between h${curr} and h${next}`],
             evidence: {},
             resolution: `Ensure heading tags don't skip levels. Use CSS classes if styling needs to differ from semantic rank.`,
-            verifyCommand: `qa-test verify F-SEO-HEADING-SKIP`,
           });
           break; // Only flag once per page
         }
@@ -203,7 +200,6 @@ export class SeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'View source and inspect <html lang="...">'],
         evidence: {},
         resolution: 'Add a valid lang attribute to the <html> root element, such as lang="en".',
-        verifyCommand: `qa-test verify F-SEO-LANG`,
       });
     }
 
@@ -226,7 +222,6 @@ export class SeoChecker {
           stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect <head> for link[rel="canonical"]'],
           evidence: {},
           resolution: 'Add a <link rel="canonical" href="https://example.com/page"> pointing to the definitive address of this page.',
-          verifyCommand: `qa-test verify F-SEO-CANONICAL`,
         });
       } else if (details.canonicalCount > 1) {
         findings.push({
@@ -245,7 +240,6 @@ export class SeoChecker {
           stepsToReproduce: [`Visit ${context.urlPath}`, 'Query document.querySelectorAll("link[rel=\'canonical\']")]'],
           evidence: {},
           resolution: 'Remove duplicate <link rel="canonical"> declarations.',
-          verifyCommand: `qa-test verify F-SEO-CANONICAL-MULTIPLE`,
         });
       }
     }
@@ -268,7 +262,6 @@ export class SeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Check <meta name="robots"> in <head>'],
         evidence: {},
         resolution: 'Remove "noindex" from the meta robots tag if this page should appear in search results.',
-        verifyCommand: `qa-test verify F-SEO-NOINDEX`,
       });
     }
 
@@ -291,7 +284,6 @@ export class SeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Search for <meta name="viewport"> in <head>'],
         evidence: {},
         resolution: 'Add <meta name="viewport" content="width=device-width, initial-scale=1"> inside <head>.',
-        verifyCommand: `qa-test verify F-SEO-VIEWPORT`,
       });
     }
 
@@ -313,7 +305,6 @@ export class SeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect <head> for link[rel="icon"]'],
         evidence: {},
         resolution: 'Add a <link rel="icon" href="/favicon.ico"> tag in <head>.',
-        verifyCommand: `qa-test verify F-SEO-FAVICON`,
       });
     }
 
@@ -335,7 +326,6 @@ export class SeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Query images missing alt attribute: document.querySelectorAll("img:not([alt])")'],
         evidence: {},
         resolution: 'Add descriptive alt text to all informative images, or alt="" for purely decorative graphics.',
-        verifyCommand: `qa-test verify F-SEO-IMG-ALT`,
       });
     }
 
@@ -361,7 +351,6 @@ export class SeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect meta tags for property="og:*"'],
         evidence: {},
         resolution: 'Add <meta property="og:title">, <meta property="og:description">, and <meta property="og:image"> tags.',
-        verifyCommand: `qa-test verify F-SEO-OG`,
       });
     }
 
@@ -423,7 +412,7 @@ export class SeoChecker {
 
       // 15. Marketing basics (share previews, call to action, contact, analytics), once per site
       try {
-        findings.push(...(await this.marketingChecker.checkPage(page, context)));
+        findings.push(...(await this.marketingChecker.checkPage(page, { ...context, log: context.marketingLog })));
       } catch {
         // Non-blocking
       }
@@ -548,7 +537,6 @@ export class SeoChecker {
             stepsToReproduce: [`Visit ${context.urlPath}`, `Click or request link to ${linkPath}`],
             evidence: {},
             resolution: `Fix the broken link target or set up a 301 redirect if the page moved.`,
-            verifyCommand: `qa-test verify F-SEO-BROKENLINK`,
           });
         }
       } catch {

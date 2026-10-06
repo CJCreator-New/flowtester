@@ -43,7 +43,6 @@ describe('Single-File Offline HTML Report (html-report.ts)', () => {
         stepsToReproduce: ['Visit /', 'Inspect headers'],
         evidence: {},
         resolution: 'Add CSP header',
-        verifyCommand: 'qa-test verify F-001',
       },
     ],
     grades: {
@@ -100,7 +99,7 @@ describe('Single-File Offline HTML Report (html-report.ts)', () => {
 
     // Findings collapsible details present
     expect(content).toContain('Missing Content-Security-Policy header');
-    expect(content).toContain('qa-test verify F-001');
+    expect(content).toContain('Run the check-up again on the same address');
 
     // Direction B theme color present
     expect(content).toContain('#0D1322');

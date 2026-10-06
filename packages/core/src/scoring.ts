@@ -45,7 +45,14 @@ export function scoreToGrade(score: number, blockerCount: number = 0): AspectGra
  * of the overall score: an aspect that was never looked at isn't an A. A checker that found
  * something always counts as having run.
  */
-export function calculateSiteAspectGrades(findings: Finding[], options: { checkersRun?: Iterable<CheckerType> } = {}): SiteAspectGrades {
+export function calculateSiteAspectGrades(
+  findings: Finding[],
+  options: {
+    checkersRun?: Iterable<CheckerType>;
+    /** False when the home page was never read, so the marketing basics weren't looked at: shown as "Not checked", not 100%. */
+    marketingChecked?: boolean;
+  } = {}
+): SiteAspectGrades {
   const aspects: Record<AspectType, AspectScore> = {
     Works: { grade: 'A', score: 100, findings: [] },
     Accessible: { grade: 'A', score: 100, findings: [] },
@@ -139,7 +146,7 @@ export function calculateSiteAspectGrades(findings: Finding[], options: { checke
         seo: calcSub(seoFindings),
         aeo: calcSub(aeoFindings),
         geo: calcSub(geoFindings),
-        marketing: calcSub(marketingFindings),
+        marketing: { ...calcSub(marketingFindings), ...(options.marketingChecked === false ? { checked: false } : {}) },
       };
     }
   }

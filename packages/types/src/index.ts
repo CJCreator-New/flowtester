@@ -204,7 +204,6 @@ export interface Finding {
     measurements?: Record<string, unknown>;
   };
   resolution: string;
-  verifyCommand: string;
   triageStatus?: TriageStatus;
   /** Why someone marked it intended or not a problem, when they said. */
   triageReason?: string;
@@ -250,7 +249,7 @@ export interface ProductProfile {
   roles: RoleCredential[];
   forbiddenActions?: string[];
   houseStandards?: Record<string, unknown>;
-  /** Path to design-tokens.json (written by `qa-test figma sync`) for Tier 1 token checks. */
+  /** Path to design-tokens.json (exported from Figma) for Tier 1 token checks. */
   figmaTokensFile?: string;
   /** Directory of approved `<testCaseId>-<breakpoint>.png` baselines for Tier 2 visual diffs. */
   visualBaselineDir?: string;
@@ -371,6 +370,8 @@ export interface ReleaseReport {
   /** AI tokens used per stage (planning, repair, journeys, visual review), for the developer details. */
   aiUsage?: Partial<Record<AIStage, AIStageUsage>>;
   grades?: SiteAspectGrades;
+  /** The marketing basics checklist. Absent when no page was read for it (search checks off, or the home page not tested). */
+  marketing?: MarketingReview;
   recommendations?: RankedRecommendation[];
   history?: SiteHistoryDiff;
   singleFileHtmlReportPath?: string;
@@ -415,6 +416,27 @@ export interface AspectSubBreakdown {
   score: number;
   issueCount: number;
   status: 'Clean' | 'Warning' | 'Failing';
+  /** False when nothing was looked at, so the score is not a pass. Absent in older reports: read it as checked. */
+  checked?: boolean;
+}
+
+/** One marketing basic and what the run found. */
+export interface MarketingCheckResult {
+  key: string;
+  label: string;
+  /** 'fact': it is there or it isn't. 'opinion': a suggestion that depends on what kind of site this is. */
+  kind: 'fact' | 'opinion';
+  status: 'ok' | 'gap' | 'not-checked';
+  /** Where it was found or missed, or why it wasn't looked for. */
+  detail: string;
+  findingId?: string;
+}
+
+/** The marketing basics, one line each, so a score is never all there is to read. */
+export interface MarketingReview {
+  /** The pages the basics were read from. */
+  readPages: string[];
+  checks: MarketingCheckResult[];
 }
 
 export interface AspectScore {
@@ -869,7 +891,6 @@ export interface FrictionScorecard {
   requiredFieldsCount: number;
   clickDepth: number;
   frictionIndex: number;
-  avgPageLoadMs: number;
 }
 
 export interface InteractivePattern {
@@ -896,14 +917,12 @@ export interface CompetitiveBenchmark {
     url: string;
     name: string;
     scorecard: FrictionScorecard;
-    a11yScore: number;
     screenshots: string[];
   };
   referenceProduct: {
     url: string;
     name: string;
     scorecard: FrictionScorecard;
-    a11yScore: number;
     screenshots: string[];
   };
   delta: {
@@ -918,6 +937,22 @@ export interface CompetitiveBenchmark {
   }>;
   recommendations: UXRecommendation[];
   createdAt: string;
+}
+
+/** One comparison of two sites: running, or finished and kept. */
+export interface BenchmarkJob {
+  id: string;
+  status: 'running' | 'done' | 'failed';
+  /** What it is doing now, in plain words. */
+  stage: string;
+  flowType: string;
+  ourUrl: string;
+  refUrl: string;
+  startedAt: string;
+  /** True when an AI wrote some of the improvement ideas; false when fixed rules did. */
+  aiUsed?: boolean;
+  error?: string;
+  result?: CompetitiveBenchmark;
 }
 
 // --- Phase 1: Plan review types (Tasks 1.2 & 1.3) ---

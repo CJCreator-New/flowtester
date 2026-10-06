@@ -116,7 +116,6 @@ export class SpecConformanceChecker {
                 domSnapshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.domSnapshotPath,
               },
               resolution: `Show an error next to "${field}" when it is left empty.`,
-              verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
             },
             `Could not verify: no error appeared after leaving "${field}" empty. Confirm whether it should be required.`
           )
@@ -158,7 +157,6 @@ export class SpecConformanceChecker {
             screenshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.screenshotPath,
           },
           resolution: `Check routing or navigation logic after executing "${testCase.steps[testCase.steps.length - 1]?.name}".`,
-          verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
         }, `Could not verify: expected to end on a page matching "${pattern}", but ended on "${urlPath}".`));
       }
     }
@@ -195,7 +193,6 @@ export class SpecConformanceChecker {
             domSnapshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.domSnapshotPath,
           },
           resolution: `Verify UI notification, success banner, or component rendering logic.`,
-          verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
         }, `Could not verify: expected the page to say "${contains}".`));
       }
 
@@ -225,7 +222,6 @@ export class SpecConformanceChecker {
             screenshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.screenshotPath,
           },
           resolution: `Remove error state or unauthorized content for role "${context.role}".`,
-          verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
         }, `Could not verify: expected the page not to say "${notContains}".`));
       }
     }
@@ -259,7 +255,6 @@ export class SpecConformanceChecker {
                 domSnapshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.domSnapshotPath,
               },
               resolution: `After a successful send, take people to a page that confirms it.`,
-              verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
             },
             `Could not verify: expected to move on from ${fromPath}, but stayed there.`
           )
@@ -313,7 +308,6 @@ export class SpecConformanceChecker {
                 domSnapshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.domSnapshotPath,
               },
               resolution: 'Show a short message saying the form was sent.',
-              verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
             },
             'Could not verify: expected a success message after sending the form.'
           )
@@ -366,7 +360,6 @@ export class SpecConformanceChecker {
             domSnapshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.domSnapshotPath,
           },
           resolution: 'Make sure the link goes to a page that exists and loads.',
-          verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
         });
       }
     }
@@ -411,7 +404,6 @@ export class SpecConformanceChecker {
             networkLogs: [failedMatch],
           },
           resolution: `Inspect API endpoint handler for ${method} ${apiPath}.`,
-          verifyCommand: `qa-test verify F-SPEC-${testCase.id}-${counter - 1}`,
         });
       }
     }

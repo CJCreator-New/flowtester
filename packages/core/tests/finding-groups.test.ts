@@ -18,7 +18,6 @@ const finding = (overrides: Partial<Finding> & { urlPath: string; testCaseId: st
     stepsToReproduce: [],
     evidence: {},
     resolution: '',
-    verifyCommand: '',
     ...rest,
   };
 };

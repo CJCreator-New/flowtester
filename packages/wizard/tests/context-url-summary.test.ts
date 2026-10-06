@@ -84,7 +84,6 @@ describe('summarizeReport', () => {
     stepsToReproduce: [],
     evidence: {},
     resolution: '',
-    verifyCommand: '',
   });
   const report = (findings: Finding[], extra: Partial<ReleaseReport> = {}): ReleaseReport => ({
     runId: 'r',
@@ -160,7 +159,6 @@ describe("the report's problems and map", () => {
     stepsToReproduce: [],
     evidence: {},
     resolution: '',
-    verifyCommand: '',
   });
 
   it('groups problems by what to fix first, then by problem, with every page it was found on', () => {

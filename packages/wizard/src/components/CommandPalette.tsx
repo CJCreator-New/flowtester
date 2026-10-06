@@ -100,7 +100,7 @@ export function CommandPalette({ route }: { route: Route }) {
       },
       {
         id: 'nav-benchmark',
-        title: 'Go to Competitive Benchmark',
+        title: 'Go to Compare sites',
         category: 'Navigation',
         shortcut: 'g c',
         keywords: ['competitor', 'gap', 'ux', 'friction', 'scorecard'],
@@ -428,7 +428,7 @@ export function CommandPalette({ route }: { route: Route }) {
                   <kbd className="font-mono rounded bg-panel px-2 py-0.5 border border-edge/40">g then b</kbd>
                 </div>
                 <div className="flex items-center justify-between rounded border border-rule bg-surface/60 p-2">
-                  <span>Go to Benchmark</span>
+                  <span>Go to Compare sites</span>
                   <kbd className="font-mono rounded bg-panel px-2 py-0.5 border border-edge/40">g then c</kbd>
                 </div>
                 <div className="flex items-center justify-between rounded border border-rule bg-surface/60 p-2">

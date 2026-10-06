@@ -1,21 +1,16 @@
 /**
  * The runner as the one server: the built Wizard at / (and at every address of its own), the API
- * beside it, /hub and /api/v1/* passed on to the Report Hub, Studio's old addresses redirected to
- * Past check-ups, and only this computer's own names answered.
+ * beside it, Studio's old addresses redirected to Past check-ups, and only this computer's own names
+ * answered.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'http';
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { TestCase } from '@qa/types';
 import { RunnerServer } from '../src/server.js';
 
 const RUNNER_PORT = 3551;
-const HUB_PORT = 3552;
 const BARE_PORT = 3553;
-const TARGET_PORT = 3554;
-const LONE_PORT = 3555;
-const base = `http://localhost:${RUNNER_PORT}`;
 const scratch = path.join(process.cwd(), '.tmp-single-server');
 const wizardDir = path.join(scratch, 'wizard');
 
@@ -38,40 +33,8 @@ function get(port: number, rawPath: string, host = `localhost:${port}`): Promise
   });
 }
 
-function listen(server: http.Server, port: number): Promise<void> {
-  return new Promise((resolve) => server.listen(port, 'localhost', resolve));
-}
-
-function close(server: http.Server): Promise<void> {
-  return new Promise((resolve) => server.close(() => resolve()));
-}
-
 describe('The runner as the one server', () => {
   let runner: RunnerServer;
-  const hubRequests: Array<{ method: string; url: string; host: string; body: string }> = [];
-  const hub = http.createServer(async (req, res) => {
-    let body = '';
-    for await (const chunk of req) body += chunk;
-    hubRequests.push({ method: req.method || '', url: req.url || '', host: req.headers.host || '', body });
-    if (req.url === '/hub' || req.url === '/hub/') {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end('<!doctype html><title>Report Hub</title>');
-    } else if (req.url === '/api/v1/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
-    } else if (req.url === '/api/v1/echo' && req.method === 'POST') {
-      res.writeHead(201, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ method: req.method, received: JSON.parse(body) }));
-    } else {
-      res.writeHead(404);
-      res.end();
-    }
-  });
-  const target = http.createServer((_req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<!doctype html><html lang="en"><head><title>Target</title></head><body><main><h1>Target</h1></main></body></html>');
-  });
-
   beforeAll(async () => {
     await fs.mkdir(path.join(wizardDir, 'assets'), { recursive: true });
     await fs.writeFile(path.join(wizardDir, 'index.html'), '<!doctype html><title>Wizard</title><div id="root"></div>');
@@ -79,13 +42,10 @@ describe('The runner as the one server', () => {
     await fs.writeFile(path.join(wizardDir, 'favicon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
     await fs.writeFile(path.join(scratch, 'secret.txt'), 'do not serve');
 
-    await listen(hub, HUB_PORT);
-    await listen(target, TARGET_PORT);
     runner = new RunnerServer({
       port: RUNNER_PORT,
       outputDir: path.join(scratch, 'report'),
       dataDir: path.join(scratch, 'data'),
-      hubUrl: `http://localhost:${HUB_PORT}/`,
       ui: [{ base: '/', dir: wizardDir, name: 'Wizard' }],
     });
     await runner.start();
@@ -93,8 +53,6 @@ describe('The runner as the one server', () => {
 
   afterAll(async () => {
     await runner?.stop();
-    await close(hub);
-    await close(target);
     await fs.rm(scratch, { recursive: true, force: true });
   });
 
@@ -140,9 +98,9 @@ describe('The runner as the one server', () => {
     }
   });
 
-  it('keeps the API in front of the app, and says a Hub is connected', async () => {
+  it('keeps the API in front of the app', async () => {
     const status = await get(RUNNER_PORT, '/api/runner/status');
-    expect(JSON.parse(status.body)).toMatchObject({ phase: 'idle', hubConnected: true });
+    expect(JSON.parse(status.body)).toMatchObject({ phase: 'idle' });
     const unknown = await get(RUNNER_PORT, '/api/nothing-here');
     expect(unknown.status).toBe(404);
     expect(unknown.body).not.toContain('<title>Wizard</title>');
@@ -154,31 +112,7 @@ describe('The runner as the one server', () => {
     expect((await get(RUNNER_PORT, '/', `127.0.0.1:${RUNNER_PORT}`)).status).toBe(200);
   });
 
-  it("passes /hub, the Report Hub's own dashboard, on to the Hub", async () => {
-    hubRequests.length = 0;
-    const dashboard = await get(RUNNER_PORT, '/hub');
-    expect(dashboard.status).toBe(200);
-    expect(dashboard.body).toContain('<title>Report Hub</title>');
-    expect(hubRequests[0]).toMatchObject({ url: '/hub', host: `localhost:${HUB_PORT}` });
-  });
-
-  it('passes /api/v1/* on to the Report Hub, body and all', async () => {
-    hubRequests.length = 0;
-    const health = await fetch(`${base}/api/v1/health`);
-    expect(health.status).toBe(200);
-    expect(await health.json()).toEqual({ ok: true });
-    expect(hubRequests[0].host).toBe(`localhost:${HUB_PORT}`);
-
-    const echo = await fetch(`${base}/api/v1/echo`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'ACCEPTED_RISK' }),
-    });
-    expect(echo.status).toBe(201);
-    expect(await echo.json()).toEqual({ method: 'POST', received: { status: 'ACCEPTED_RISK' } });
-  });
-
-  it('without a Hub, answers /hub and /api/v1/* with "Hub not connected", and a missing UI build explains itself', async () => {
+  it('a missing UI build explains itself', async () => {
     const bare = new RunnerServer({
       port: BARE_PORT,
       outputDir: path.join(scratch, 'bare-report'),
@@ -187,13 +121,6 @@ describe('The runner as the one server', () => {
     });
     await bare.start();
     try {
-      for (const address of ['/api/v1/health', '/hub']) {
-        const hubless = await get(BARE_PORT, address);
-        expect(hubless.status, address).toBe(503);
-        expect(JSON.parse(hubless.body), address).toMatchObject({ error: 'Hub not connected', hubConnected: false });
-      }
-      expect(JSON.parse((await get(BARE_PORT, '/api/runner/status')).body)).toMatchObject({ hubConnected: false });
-
       const unbuilt = await get(BARE_PORT, '/');
       expect(unbuilt.status).toBe(503);
       expect(unbuilt.body).toContain('hasn’t been built yet');
@@ -201,63 +128,4 @@ describe('The runner as the one server', () => {
       await bare.stop();
     }
   });
-
-  it('does not send a run to itself as the Hub when no Hub is set up', async () => {
-    const lone = new RunnerServer({ port: LONE_PORT, outputDir: path.join(scratch, 'lone-report'), dataDir: path.join(scratch, 'lone-data') });
-    await lone.start();
-    const events: Array<{ type: string }> = [];
-    const stream = new AbortController();
-    try {
-      const res = await fetch(`http://localhost:${LONE_PORT}/api/runner/stream`, { signal: stream.signal });
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      void (async () => {
-        let buffer = '';
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) return;
-            buffer += decoder.decode(value, { stream: true });
-            for (let end = buffer.indexOf('\n\n'); end >= 0; end = buffer.indexOf('\n\n')) {
-              const chunk = buffer.slice(0, end);
-              buffer = buffer.slice(end + 2);
-              if (chunk.startsWith('data: ')) events.push(JSON.parse(chunk.slice(6)));
-            }
-          }
-        } catch {
-          // stream closed
-        }
-      })();
-
-      const lookAtThePage: TestCase = {
-        id: 'TC-LOOK',
-        flowId: 'look',
-        name: 'Look at the page',
-        role: 'visitor',
-        startPage: '/',
-        steps: [{ action: 'wait', name: 'Look at the page' }],
-        expectations: {},
-      };
-      // A caller may send this server's own address as the Hub: "the Hub behind /api/v1".
-      const started = await fetch(`http://localhost:${LONE_PORT}/api/runner/run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targetUrl: `http://localhost:${TARGET_PORT}/`,
-          hubUrl: `http://localhost:${LONE_PORT}`,
-          breakpoints: ['1440px'],
-          specTestCases: [lookAtThePage],
-        }),
-      });
-      expect(started.status).toBe(202);
-
-      await expect.poll(() => events.some((e) => e.type === 'RUN_COMPLETED'), { timeout: 60000, interval: 250 }).toBe(true);
-      // Pushing to a Hub is the last thing a run does; give it the chance to happen.
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      expect(events.filter((e) => e.type === 'HUB_PUSH_RESULT')).toEqual([]);
-    } finally {
-      stream.abort();
-      await lone.stop();
-    }
-  }, 90000);
 });

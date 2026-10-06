@@ -94,7 +94,6 @@ describe('Design & UX Checkers', () => {
           stepsToReproduce: [],
           evidence: {},
           resolution: '',
-          verifyCommand: '',
         },
         {
           id: 'F-2', // Duplicate on same route and selector from step 2
@@ -106,7 +105,6 @@ describe('Design & UX Checkers', () => {
           stepsToReproduce: [],
           evidence: {},
           resolution: '',
-          verifyCommand: '',
         },
         {
           id: 'F-3', // Distinct issue on different route
@@ -118,7 +116,6 @@ describe('Design & UX Checkers', () => {
           stepsToReproduce: [],
           evidence: {},
           resolution: '',
-          verifyCommand: '',
         },
       ];
 

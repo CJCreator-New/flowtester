@@ -264,6 +264,7 @@ function Report({ report, actions, onReportChanged }: { report: ReleaseReport; a
       <Improvements report={report} />
 
       <AspectGrades report={report} />
+      <MarketingPanel report={report} />
 
       <section aria-labelledby="map-title">
         <details
@@ -498,6 +499,52 @@ function ReportActionsBar({
   );
 }
 
+/** The marketing basics one by one, so the Marketing score is never all there is to read. */
+function MarketingPanel({ report }: { report: ReleaseReport }) {
+  const marketing = report.marketing;
+  if (!marketing) return null;
+  const mark = (c: NonNullable<ReleaseReport['marketing']>['checks'][number]) =>
+    c.status === 'ok'
+      ? { icon: '✓', label: 'OK', tone: 'text-pass' }
+      : c.status === 'gap'
+        ? c.kind === 'opinion'
+          ? { icon: '+', label: 'Worth adding', tone: 'text-warn' }
+          : { icon: '✗', label: 'Missing', tone: 'text-fail' }
+        : { icon: '–', label: 'Not checked', tone: 'text-ink-soft' };
+  return (
+    <section aria-labelledby="marketing-title">
+      <h2 id="marketing-title" className="mb-1 text-2xl font-bold">
+        Marketing basics
+      </h2>
+      <p className="mb-3 max-w-prose text-ink-soft">
+        What a visitor or a marketer looks for, read from {marketing.readPages.length === 1 ? 'one page' : `${marketing.readPages.length} pages`} ({marketing.readPages.slice(0, 3).join(', ')}
+        {marketing.readPages.length > 3 ? ', …' : ''}). Items marked as suggestions depend on what the site is for, so they never count as faults.
+      </p>
+      <ul className="divide-y divide-rule rounded-card border border-edge bg-surface shadow-level-1">
+        {marketing.checks.map((c) => {
+          const m = mark(c);
+          return (
+            <li key={c.key} className="flex items-start gap-3 px-4 py-3">
+              <span aria-hidden="true" className={`mt-0.5 w-5 shrink-0 text-center font-bold ${m.tone}`}>
+                {m.icon}
+              </span>
+              <span className="min-w-0">
+                <span className="block font-bold text-ink">
+                  {c.label}
+                  {c.kind === 'opinion' && <span className="ml-2 text-xs font-normal text-ink-soft">suggestion</span>}
+                </span>
+                <span className="block text-sm text-ink-soft">
+                  <span className={`font-bold ${m.tone}`}>{m.label}.</span> {c.detail}
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function AspectGrades({ report }: { report: ReleaseReport }) {
   if (!report.grades) return null;
   return (
@@ -540,7 +587,7 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
                   ).map(([label, part, hint]) => (
                     <div key={label} title={hint}>
                       <dt className="text-ink-soft">{label}</dt>
-                      <dd className="font-bold text-ink">{part?.score ?? 100}%</dd>
+                      <dd className="font-bold text-ink">{part?.checked === false ? <span className="font-normal text-ink-soft">Not checked</span> : `${part?.score ?? 100}%`}</dd>
                     </div>
                   ))}
                 </dl>

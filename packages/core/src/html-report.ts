@@ -113,6 +113,20 @@ export async function generateSingleFileHtmlReport(
   }
 
   // Recommendations HTML
+  const marketingHtml = report.marketing
+    ? `
+      <section class="section card">
+        <h3 class="section-title">Marketing basics</h3>
+        <p class="section-desc">Read from ${report.marketing.readPages.map((pg) => `<code>${escapeHtml(pg)}</code>`).join(', ')}. A suggestion depends on what the site is for.</p>
+        ${report.marketing.checks
+          .map((c) => {
+            const mark = c.status === 'ok' ? 'OK' : c.status === 'gap' ? (c.kind === 'opinion' ? 'Worth adding' : 'Missing') : 'Not checked';
+            return `<div class="finding-row"><span class="finding-label">${escapeHtml(c.label)}${c.kind === 'opinion' ? ' (suggestion)' : ''}:</span><span class="finding-val"><strong>${mark}.</strong> ${escapeHtml(c.detail)}</span></div>`;
+          })
+          .join('')}
+      </section>`
+    : '';
+
   let recommendationsHtml = '';
   if (report.recommendations && report.recommendations.length > 0) {
     const quickWins = report.recommendations.filter((r) => r.category === 'quick-win');
@@ -195,16 +209,10 @@ export async function generateSingleFileHtmlReport(
               <span class="finding-label">Resolution:</span>
               <span class="finding-val resolve-text">${escapeHtml(f.resolution)}</span>
             </div>
-            ${
-              f.verifyCommand
-                ? `
-              <div class="finding-row">
-                <span class="finding-label">Verify:</span>
-                <code>${escapeHtml(f.verifyCommand)}</code>
-              </div>
-            `
-                : ''
-            }
+            <div class="finding-row">
+              <span class="finding-label">After you fix it:</span>
+              <span class="finding-val">Run the check-up again on the same address. This finding should no longer appear.</span>
+            </div>
             ${
               f.stepsToReproduce && f.stepsToReproduce.length > 0
                 ? `
@@ -488,6 +496,7 @@ export async function generateSingleFileHtmlReport(
     </div>
 
     ${historyBannerHtml}
+    ${marketingHtml}
     ${recommendationsHtml}
 
     <section class="section card">

@@ -1,5 +1,4 @@
 import http from 'http';
-import https from 'https';
 import { timingSafeEqual } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -22,7 +21,7 @@ import type {
   PageInventoryItem,
   PageLink,
   AIRequestBudget,
-  ReferenceFlow,
+  BenchmarkJob,
 } from '@qa/types';
 import {
   FlowTestOrchestrator,
@@ -30,7 +29,6 @@ import {
   TestPlanner,
   buildPageSweep,
   createAIProvider,
-  pushRunToHub,
   runSafeWebsiteScan,
   KeyResolver,
   OpenRouterClient,
@@ -87,8 +85,6 @@ import {
   DeterministicSpider,
   blockChanges,
   isAbortError,
-  BenchmarkingEngine,
-  UXGapSynthesizer,
   type ReplanOptions,
   type VisualReviewItemInput,
   type MemorySummary,
@@ -97,6 +93,7 @@ import {
   type AIProvider,
   type OrchestratorEvent,
 } from '@qa/core';
+import { BenchmarkStore, cleanFlowType, compareSites, siteName } from './benchmarks.js';
 import { SchedulerManager, type CheckupSchedule } from './scheduler.js';
 import { SessionKeyResolver, currentSessionId, enterSession, refusedTarget, sessionFor } from './beta.js';
 
@@ -182,9 +179,6 @@ function matchesSecret(given: string | null | undefined, secret: string): boolea
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Headers that describe one connection, not the message: never passed on to or from the Hub. */
-const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'proxy-connection']);
-
 const MAX_RUN_EVENTS = 5000;
 
 /** Every screen size a check-up can test at. */
@@ -263,8 +257,6 @@ export interface RunnerServerOptions {
   createAIProvider?: (provider: AIProviderType, apiKey: string, model?: string) => AIProvider;
   /** Built UIs served beside the API: the Wizard at "/". None by default. */
   ui?: UiApp[];
-  /** The Report Hub that /api/v1/* is passed on to. Without one, /api/v1/* answers "Hub not connected". */
-  hubUrl?: string;
   /**
    * Extra origins (full URL origins, e.g. "https://abc.trycloudflare.com") that are allowed to make
    * cross-origin requests in addition to localhost. Set via RUNNER_ALLOWED_ORIGINS (comma-separated).
@@ -293,8 +285,6 @@ export interface TriggerRunBody {
   aiProvider?: AIProviderType;
   apiKey?: string;
   aiModel?: string;
-  hubUrl?: string;
-  hubToken?: string;
   releaseTarget?: string;
   breakpoints?: string[];
   headless?: boolean;
@@ -365,8 +355,6 @@ interface StoredPlanRecord {
     aiModels?: { text?: string; vision?: string };
     breakpoints?: Breakpoint[];
     headless?: boolean;
-    hubUrl?: string;
-    hubToken?: string;
     releaseTarget?: string;
     draft: DiscoveryDraft;
     /**
@@ -460,10 +448,8 @@ function asFlow(testCase: TestCase): DiscoveredFlow {
 
 /**
  * RunnerServer is the only component that actually invokes FlowTestOrchestrator /
- * DiscoveryAgent on behalf of the interactive web dashboard. It is intentionally kept
- * separate from the Hub (a passive, durable, cross-run aggregator) and from
- * @qa/dashboard (a read-only reviewer of one finished CLI run) — this is the live,
- * single-flight execution engine for UI-triggered runs.
+ * DiscoveryAgent on behalf of the Wizard. It is the live, single-flight execution engine
+ * for UI-triggered runs.
  */
 export class RunnerServer {
   private server: http.Server | null = null;
@@ -477,6 +463,9 @@ export class RunnerServer {
   private streamSessions = new Map<http.ServerResponse, string | undefined>();
   /** Beta: which visitor started each run. A visitor sees only their own runs, plans and reports. */
   private runOwners = new Map<string, string>();
+  /** Comparisons of two sites, running or just finished; the finished ones are also kept on disk. */
+  private benchmarkJobs = new Map<string, { job: BenchmarkJob; owner?: string }>();
+  private benchmarkBusy = false;
 
   private localhostAlias?: string;
   private hostAliases: Record<string, string>;
@@ -486,7 +475,6 @@ export class RunnerServer {
   private openRouter: OpenRouterClient;
   private makeAIProvider: (provider: AIProviderType, apiKey: string, model?: string) => AIProvider;
   private uiApps: UiApp[];
-  private hubUrl?: string;
   private allowedOrigins: Set<string>;
   private accessToken?: string;
 
@@ -550,7 +538,6 @@ export class RunnerServer {
     this.makeAIProvider =
       options.createAIProvider || ((provider, apiKey, model) => createAIProvider(provider, apiKey, undefined, model));
     this.uiApps = options.ui || [];
-    this.hubUrl = options.hubUrl?.replace(/\/+$/, '') || undefined;
     this.allowedOrigins = new Set(
       (options.allowedOrigins || []).map((o) => {
         const clean = o.replace(/\u001b\[[0-9;]*[a-zA-Z]|\u001b\].*?\u0007/g, '').trim().replace(/\/+$/, '');
@@ -606,7 +593,7 @@ export class RunnerServer {
    * very long run the oldest step events go first: only the latest step matters to someone catching up.
    */
   private recordRunEvent(event: Record<string, unknown>): void {
-    if (!this.currentRunId || event.type === 'HUB_PUSH_RESULT') return;
+    if (!this.currentRunId) return;
     if (typeof event.runId === 'string' && event.runId !== this.currentRunId) return;
     this.runEvents.push(event.type === 'RUN_COMPLETED' ? { type: event.type, runId: event.runId } : event);
     if (this.runEvents.length > MAX_RUN_EVENTS) {
@@ -732,13 +719,6 @@ export class RunnerServer {
             if (await this.betaScope(req, res, pathname)) return;
           }
 
-          // /api/v1/* belongs to the Report Hub, a separate service: passed on when one is set up. So
-          // does /hub, the Hub's own dashboard, whose buttons call /api/v1/* on this same address.
-          if (pathname === '/api/v1' || pathname.startsWith('/api/v1/') || pathname === '/hub' || pathname.startsWith('/hub/')) {
-            this.forwardToHub(req, res, url);
-            return;
-          }
-
           // QA Flow Studio is retired (ADR 0010): its old addresses lead to Past check-ups.
           if (pathname === '/studio' || pathname.startsWith('/studio/')) {
             res.writeHead(308, { Location: '/reports' });
@@ -814,7 +794,6 @@ export class RunnerServer {
                 targetUrl: this.currentPlanRecord?.plan.targetUrl ?? this.currentTargetUrl,
                 // The finished report, when the last run finished.
                 reportRunId: this.lastReport?.runId ?? null,
-                hubConnected: !!this.hubUrl,
                 // A copy shared with other people: their check-ups and reports are visible to each other.
                 beta: this.beta,
               })
@@ -944,9 +923,17 @@ export class RunnerServer {
             return;
           }
 
-          // Competitive Benchmark API
+          // Benchmarking: compare your site with another one.
           if (pathname === '/api/runner/benchmark' && req.method === 'POST') {
-            await this.handleBenchmark(req, res);
+            await this.handleStartBenchmark(req, res);
+            return;
+          }
+          if (pathname === '/api/runner/benchmarks' && req.method === 'GET') {
+            await this.handleListBenchmarks(res);
+            return;
+          }
+          if (pathname.startsWith('/api/runner/benchmark/') && (req.method === 'GET' || req.method === 'DELETE')) {
+            await this.handleBenchmarkById(decodeURIComponent(pathname.slice('/api/runner/benchmark/'.length)), req.method, res);
             return;
           }
 
@@ -1053,39 +1040,6 @@ export class RunnerServer {
     });
   }
 
-  /** Passes a Report Hub request on unchanged and streams the Hub's answer back. */
-  private forwardToHub(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
-    if (!this.hubUrl) {
-      this.sendJson(res, 503, { error: 'Hub not connected', hubConnected: false });
-      return;
-    }
-    const target = new URL(url.pathname + url.search, this.hubUrl);
-    const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => !HOP_BY_HOP.has(name)));
-    const hubRequest = (target.protocol === 'https:' ? https : http).request(
-      target,
-      { method: req.method, headers: { ...headers, host: target.host } },
-      (hubRes) => {
-        const answer = Object.fromEntries(Object.entries(hubRes.headers).filter(([name]) => !HOP_BY_HOP.has(name)));
-        res.writeHead(hubRes.statusCode || 502, answer);
-        hubRes.pipe(res);
-      }
-    );
-    hubRequest.on('error', () => {
-      if (res.headersSent) res.end();
-      else this.sendJson(res, 502, { error: 'The Report Hub isn’t responding.', hubConnected: false });
-    });
-    req.pipe(hubRequest);
-  }
-
-  /** True when the address is this server, as the request reached it. */
-  private isThisServer(address: string, req: http.IncomingMessage): boolean {
-    try {
-      return new URL(address).host === req.headers.host;
-    } catch {
-      return false;
-    }
-  }
-
   private async readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
     let body = '';
     for await (const chunk of req) {
@@ -1104,8 +1058,8 @@ export class RunnerServer {
     const method = req.method;
     if (pathname === '/api/runner/status' && method === 'GET') {
       if (this.isMine(this.currentRunId)) return false;
-      const busy = this.phase === 'scanning' || this.phase === 'testing';
-      this.sendJson(res, 200, { isRunning: false, hasReport: false, lastRunError: null, lastErrorCode: null, phase: 'idle', hasPlan: false, runId: null, targetUrl: null, reportRunId: null, hubConnected: false, beta: true, busy });
+      const busy = this.phase === 'scanning' || this.phase === 'testing' || this.benchmarkBusy;
+      this.sendJson(res, 200, { isRunning: false, hasReport: false, lastRunError: null, lastErrorCode: null, phase: 'idle', hasPlan: false, runId: null, targetUrl: null, reportRunId: null, beta: true, busy });
       return true;
     }
     // What the current run offers: its plan, its changes, finishing its review.
@@ -1142,7 +1096,6 @@ export class RunnerServer {
 
   /** Routes that change what every tester sees; shut on a beta copy. */
   private closedInBeta(method: string | undefined, pathname: string): boolean {
-    if (pathname === '/api/runner/benchmark') return true;
     if (pathname.startsWith('/api/runner/schedules') && method !== 'GET') return true;
     return method === 'DELETE' && (pathname.startsWith('/api/runs/') || pathname.startsWith('/api/runner/baselines/'));
   }
@@ -2102,7 +2055,7 @@ export class RunnerServer {
   }
 
   private async handleTriggerRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (this.phase === 'scanning' || this.phase === 'testing') {
+    if (this.phase === 'scanning' || this.phase === 'testing' || this.benchmarkBusy) {
       this.sendJson(res, 409, {
         error: this.beta ? 'Someone else is running a check-up on this shared copy. Try again in a few minutes.' : 'Another check-up is running. Wait for it to finish, or stop it first.',
         code: 'ERR_RUN_IN_PROGRESS',
@@ -2139,6 +2092,14 @@ export class RunnerServer {
     }
 
     if (await this.refuseTarget(res, body.targetUrl)) return;
+    if (this.beta && body.useAI && body.aiProvider === 'mock') {
+      this.sendJson(res, 400, {
+        error: 'The test AI is not available here.',
+        code: 'ERR_NO_AI_KEY',
+        suggestion: 'Add an OpenRouter key in Settings (the free tier works), then start the check-up again.',
+      });
+      return;
+    }
 
     // A plan waiting for review is kept aside when another site is checked (one waiting plan per
     // site). Only a new check-up of the same site throws it away, so the caller has to say so.
@@ -2162,9 +2123,6 @@ export class RunnerServer {
       });
       return;
     }
-
-    // A caller that names this server as its Hub means the Hub behind /api/v1: runs go to that Hub directly.
-    if (body.hubUrl && this.isThisServer(body.hubUrl, req)) body.hubUrl = this.hubUrl;
 
     // The wizard's plan is written by the AI (ADR 0009), so its scans need a working AI key.
     const wizardScan = body.owner !== undefined && body.mode !== 'safe-public' && !body.specTestCases?.length;
@@ -2364,8 +2322,6 @@ export class RunnerServer {
         profile,
         breakpoints,
         headless: body.headless ?? true,
-        hubUrl: body.hubUrl,
-        hubToken: body.hubToken,
         releaseTarget: body.releaseTarget,
         draft: undefined as unknown as DiscoveryDraft,
         readOnly,
@@ -2504,8 +2460,13 @@ export class RunnerServer {
   }> {
     if (!body.useAI) return {};
     const saved = await this.aiSetup();
-    // The wizard names the provider saved in Settings; other callers name theirs, or get the mock.
-    const providerType: AIProviderType = body.aiProvider || 'mock';
+    // The wizard names the provider saved in Settings; a caller that names none gets OpenRouter, the
+    // one the key check before a run assumes. The mock AI writes made-up journeys, so it is only
+    // for tests and a computer of your own: never on a shared copy, where it would reach other people.
+    const providerType: AIProviderType = body.aiProvider || 'openrouter';
+    if (providerType === 'mock' && this.beta) {
+      throw Object.assign(new Error('The test AI is not available here. Add a real AI key in Settings.'), { code: 'ERR_NO_AI_KEY' });
+    }
     let apiKey = body.apiKey;
     if (!apiKey && providerType !== 'mock') {
       apiKey = await this.storedKey(providerType);
@@ -2832,25 +2793,6 @@ export class RunnerServer {
     this.phase = 'done';
     this.isRunning = false;
     this.currentTargetUrl = null;
-
-    if (context.hubUrl) {
-      try {
-        const pushResult = await pushRunToHub(report, {
-          hubUrl: context.hubUrl,
-          hubToken: context.hubToken,
-          outputDir: runDir,
-          releaseTarget: context.releaseTarget || 'latest',
-        });
-        this.broadcastRunnerEvent({ type: 'HUB_PUSH_RESULT', ...pushResult, timestamp: Date.now() });
-      } catch (hubErr) {
-        this.broadcastRunnerEvent({
-          type: 'HUB_PUSH_RESULT',
-          synced: false,
-          error: hubErr instanceof Error ? hubErr.message : String(hubErr),
-          timestamp: Date.now(),
-        });
-      }
-    }
   }
 
   private async ensurePlanLoaded(): Promise<StoredPlanRecord | null> {
@@ -2975,11 +2917,11 @@ export class RunnerServer {
   }
 
   /**
-   * The plan as written to disk. Sign-in details and the hub token stay in memory only; after a
+   * The plan as written to disk. Sign-in details stay in memory only; after a
    * restart the approval has to send them again.
    */
   private planForDisk(record: StoredPlanRecord): StoredPlanRecord {
-    const { profile, hubToken: _hubToken, ai, ...context } = record.context;
+    const { profile, ai, ...context } = record.context;
     const roles = profile?.roles || [];
     const notSaved = [...new Set([...(context.signInNotSaved || []), ...roles.map((r) => r.role)])];
     return new Redactor(roles).deep({
@@ -3559,15 +3501,13 @@ export class RunnerServer {
       return;
     }
 
-    const body: { breakpoints?: string[]; roles?: RoleCredential[]; hubToken?: string } = await this.readJsonBody<{
+    const body: { breakpoints?: string[]; roles?: RoleCredential[] } = await this.readJsonBody<{
       breakpoints?: string[];
       roles?: RoleCredential[];
-      hubToken?: string;
     }>(req).catch(() => ({}));
     if (body?.breakpoints) {
       record.context.breakpoints = body.breakpoints as Breakpoint[];
     }
-    if (body?.hubToken) record.context.hubToken = body.hubToken;
 
     // Sign-in details are never saved to disk, so a plan read back after a restart needs them again.
     const notSaved = record.context.signInNotSaved || [];
@@ -3753,89 +3693,124 @@ export class RunnerServer {
     }
   }
 
-  private async handleBenchmark(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readJsonBody<{
-      ourUrl: string;
-      ourName?: string;
-      refUrl: string;
-      refName?: string;
-      flowType?: string;
-      targetGoal?: string;
-    }>(req).catch(() => null);
+  /** The AI for the improvement ideas: the one saved in Settings, or none (fixed rules write them then). */
+  private async benchmarkAi(): Promise<AIProvider | undefined> {
+    const settings = await this.readAiModels();
+    const provider = settings.provider ?? 'openrouter';
+    if (provider === 'mock') return undefined;
+    const key = await this.storedKey(provider);
+    return key ? this.makeAIProvider(provider, key, settings.text ?? undefined) : undefined;
+  }
 
-    if (!body || !body.ourUrl || !body.refUrl) {
-      this.sendJson(res, 400, { error: 'Both ourUrl and refUrl are required' });
+  /** An address as typed, with the scheme filled in: http for this computer or a private network, https for the rest. */
+  private benchmarkAddress(typed: string | undefined): string | null {
+    const text = (typed ?? '').trim();
+    if (!text || (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) && !/^https?:\/\//i.test(text))) return null;
+    try {
+      const withScheme = /^https?:\/\//i.test(text) ? text : `${isPrivateHost(new URL(`http://${text}`).hostname) ? 'http' : 'https'}://${text}`;
+      const url = new URL(withScheme);
+      return /^https?:$/.test(url.protocol) ? url.toString() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private benchmarkStore(): BenchmarkStore {
+    return new BenchmarkStore(path.join(this.siteDir(), 'benchmarks'));
+  }
+
+  private async handleStartBenchmark(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readJsonBody<{ ourUrl?: string; ourName?: string; refUrl?: string; refName?: string; flowType?: string }>(req).catch(() => null);
+    const ourUrl = this.benchmarkAddress(body?.ourUrl);
+    const refUrl = this.benchmarkAddress(body?.refUrl);
+    if (!body || !ourUrl || !refUrl) {
+      this.sendJson(res, 400, { error: 'Both addresses are needed, each a web address such as https://example.com.', code: 'ERR_INVALID_REQUEST' });
+      return;
+    }
+    if ((await this.refuseTarget(res, ourUrl)) || (await this.refuseTarget(res, refUrl))) return;
+    if (this.phase === 'scanning' || this.phase === 'testing' || this.benchmarkBusy) {
+      this.sendJson(res, 409, {
+        error: this.beta ? 'Someone else is using this shared copy right now. Try again in a few minutes.' : 'A check-up or comparison is running. Wait for it to finish first.',
+        code: 'ERR_RUN_IN_PROGRESS',
+      });
       return;
     }
 
-    const flowType = body.flowType || 'checkout';
-    let ourName = body.ourName;
-    let refName = body.refName;
-    try {
-      ourName = ourName || new URL(body.ourUrl).hostname;
-    } catch {
-      ourName = ourName || body.ourUrl;
+    const id = `bench-${Date.now()}`;
+    const flowType = cleanFlowType(body.flowType);
+    const ourName = siteName(ourUrl, body.ourName);
+    const refName = siteName(refUrl, body.refName);
+    const job: BenchmarkJob = { id, status: 'running', stage: 'Starting…', flowType, ourUrl, refUrl, startedAt: new Date().toISOString() };
+    this.benchmarkJobs.set(id, { job, owner: this.beta ? currentSessionId() : undefined });
+    this.benchmarkBusy = true;
+    const store = this.benchmarkStore();
+    const shots = path.join(this.dataDir, 'benchmark-shots', id);
+    this.sendJson(res, 202, { id });
+
+    void (async () => {
+      try {
+        const { result, aiUsed } = await compareSites({
+          ourUrl,
+          ourName,
+          refUrl,
+          refName,
+          flowType,
+          outputDir: shots,
+          resolveUrl: (address) => this.resolveTargetUrl(address),
+          ai: await this.benchmarkAi(),
+          onStage: (stage) => {
+            job.stage = stage;
+          },
+        });
+        // The screenshots are not kept: they are another visitor's pages on a shared copy, and large.
+        result.ourProduct.screenshots = [];
+        result.referenceProduct.screenshots = [];
+        job.result = result;
+        job.aiUsed = aiUsed;
+        job.status = 'done';
+        job.stage = 'Done';
+      } catch (err) {
+        job.status = 'failed';
+        job.stage = 'Stopped';
+        job.error = `The comparison couldn’t finish: ${err instanceof Error ? err.message : String(err)}`;
+      } finally {
+        this.benchmarkBusy = false;
+        await store.save(job).catch(() => undefined);
+        await fs.rm(shots, { recursive: true, force: true }).catch(() => undefined);
+        // Kept on disk now; the copy in memory only serves the screen that is waiting on it.
+        setTimeout(() => this.benchmarkJobs.delete(id), 60_000).unref();
+      }
+    })();
+  }
+
+  /** The comparisons this visitor can see: any running now, then the kept ones, newest first. The full result is fetched one at a time. */
+  private async handleListBenchmarks(res: http.ServerResponse): Promise<void> {
+    const me = this.beta ? currentSessionId() : undefined;
+    const running = [...this.benchmarkJobs.values()].filter((e) => e.job.status === 'running' && (!this.beta || e.owner === me)).map((e) => e.job);
+    const kept = await this.benchmarkStore().list();
+    const list = [...running, ...kept.filter((k) => !running.some((r) => r.id === k.id))];
+    this.sendJson(res, 200, list.map(({ result: _result, ...summary }) => summary));
+  }
+
+  private async handleBenchmarkById(id: string, method: string, res: http.ServerResponse): Promise<void> {
+    const live = this.benchmarkJobs.get(id);
+    const mine = live && (!this.beta || live.owner === currentSessionId());
+    if (method === 'DELETE') {
+      if (mine && live.job.status === 'running') {
+        this.sendJson(res, 409, { error: 'That comparison is still running.', code: 'ERR_RUN_IN_PROGRESS' });
+        return;
+      }
+      if (mine) this.benchmarkJobs.delete(id);
+      const removed = await this.benchmarkStore().remove(id);
+      this.sendJson(res, removed ? 200 : 404, { removed });
+      return;
     }
-    try {
-      refName = refName || new URL(body.refUrl).hostname;
-    } catch {
-      refName = refName || body.refUrl;
+    const job = mine ? live.job : await this.benchmarkStore().get(id);
+    if (!job) {
+      this.sendJson(res, 404, { error: 'That comparison isn’t here any more.', code: 'ERR_NOT_FOUND' });
+      return;
     }
-
-    // Build representative flow data based on flowType
-    const stepCountMap: Record<string, { our: number; ref: number; ourFields: number; refFields: number }> = {
-      checkout: { our: 4, ref: 2, ourFields: 11, refFields: 5 },
-      signup: { our: 3, ref: 1, ourFields: 6, refFields: 2 },
-      onboarding: { our: 5, ref: 3, ourFields: 8, refFields: 4 },
-      search: { our: 2, ref: 1, ourFields: 2, refFields: 1 },
-      custom: { our: 3, ref: 2, ourFields: 5, refFields: 3 },
-    };
-
-    const config = stepCountMap[flowType] || stepCountMap.custom;
-    const now = new Date().toISOString();
-
-    const ourFlow: ReferenceFlow = {
-      id: `flow_our_${Date.now()}`,
-      targetDomain: ourName,
-      name: `${ourName} - ${flowType}`,
-      entryUrl: body.ourUrl,
-      timestamp: now,
-      steps: Array.from({ length: config.our }, (_, i) => ({
-        stepIndex: i + 1,
-        action: i === 0 ? 'navigate' : 'fill-form',
-        url: `${body.ourUrl}#step-${i + 1}`,
-        title: `Step ${i + 1}`,
-        fieldsCount: Math.ceil(config.ourFields / config.our),
-        requiredFieldsCount: Math.ceil(config.ourFields / config.our),
-        interactiveControlsFound: i === 0 ? ['submit-btn', 'field-input'] : ['field-input'],
-      })),
-    };
-
-    const refFlow: ReferenceFlow = {
-      id: `flow_ref_${Date.now()}`,
-      targetDomain: refName,
-      name: `${refName} - ${flowType}`,
-      entryUrl: body.refUrl,
-      timestamp: now,
-      steps: Array.from({ length: config.ref }, (_, i) => ({
-        stepIndex: i + 1,
-        action: i === 0 ? 'navigate' : 'fill-form',
-        url: `${body.refUrl}#step-${i + 1}`,
-        title: `Step ${i + 1}`,
-        fieldsCount: Math.ceil(config.refFields / config.ref),
-        requiredFieldsCount: Math.floor(config.refFields / config.ref),
-        interactiveControlsFound: i === 0 ? ['google-sso', 'pricing-frequency-tabs', 'submit-btn'] : ['submit-btn'],
-      })),
-    };
-
-    const engine = new BenchmarkingEngine();
-    const synthesizer = new UXGapSynthesizer();
-    const ourScore = engine.calculateScorecard(ourFlow);
-    const refScore = engine.calculateScorecard(refFlow);
-    const recommendations = await synthesizer.synthesize(ourFlow, refFlow, ourScore, refScore);
-    const benchmark = engine.compareFlows(flowType, ourFlow, refFlow, recommendations);
-
-    this.sendJson(res, 200, benchmark);
+    this.sendJson(res, 200, job);
   }
 
   private async handleAddSchedule(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

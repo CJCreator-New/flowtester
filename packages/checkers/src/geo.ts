@@ -51,7 +51,6 @@ export class GeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Check DOM structure for <main> or <article> tag'],
         evidence: {},
         resolution: 'Wrap the primary page content in a semantic <main> or <article> landmark.',
-        verifyCommand: 'qa-test verify F-GEO-MAIN-MISSING',
       });
     }
 
@@ -75,7 +74,6 @@ export class GeoChecker {
           stepsToReproduce: [`Visit ${context.urlPath}`, 'Compare innerText volume with outerHTML volume'],
           evidence: {},
           resolution: 'Ensure primary textual content is server-rendered or hydrated cleanly without excessive HTML wrapper bloat.',
-          verifyCommand: 'qa-test verify F-GEO-LOW-DENSITY',
         });
       }
     }
@@ -98,7 +96,6 @@ export class GeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect links pointing to external domains'],
         evidence: {},
         resolution: 'Add citations, reference links, or outbound authority links corroborating claims on the page.',
-        verifyCommand: 'qa-test verify F-GEO-WEAK-CITATIONS',
       });
     }
 
@@ -120,7 +117,6 @@ export class GeoChecker {
         stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect document for author metadata and <time> tags'],
         evidence: {},
         resolution: 'Add an author byline with bio/profile links and a semantic <time datetime="..."> publication date.',
-        verifyCommand: 'qa-test verify F-GEO-AUTHOR-BYLINE',
       });
     }
 
