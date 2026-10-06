@@ -601,6 +601,7 @@ export default function App() {
             waitingPlans={waitingPlans}
             onResumePlan={(h) => void resumePlan(h)}
             shared={!!status?.beta}
+            busy={!!status?.busy}
           />
         );
         break;

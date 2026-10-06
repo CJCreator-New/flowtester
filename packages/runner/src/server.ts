@@ -98,7 +98,7 @@ import {
   type OrchestratorEvent,
 } from '@qa/core';
 import { SchedulerManager, type CheckupSchedule } from './scheduler.js';
-import { SessionKeyResolver, enterSession, refusedTarget, sessionFor } from './beta.js';
+import { SessionKeyResolver, currentSessionId, enterSession, refusedTarget, sessionFor } from './beta.js';
 
 function isInside(dir: string, file: string): boolean {
   const rel = path.relative(dir, file);
@@ -473,6 +473,10 @@ export class RunnerServer {
   private dataDir: string;
   private planFile: string;
   private streamClients = new Set<http.ServerResponse>();
+  /** Beta: which visitor each open stream belongs to, so a run's events reach only the visitor who started it. */
+  private streamSessions = new Map<http.ServerResponse, string | undefined>();
+  /** Beta: which visitor started each run. A visitor sees only their own runs, plans and reports. */
+  private runOwners = new Map<string, string>();
 
   private localhostAlias?: string;
   private hostAliases: Record<string, string>;
@@ -561,10 +565,34 @@ export class RunnerServer {
   }
 
 
+  /** Beta: whether a run belongs to the visitor making this request. Outside beta every run is everyone's. */
+  private isMine(runId: string | null | undefined): boolean {
+    if (!this.beta) return true;
+    const me = currentSessionId();
+    return !!me && !!runId && this.runOwners.get(runId) === me;
+  }
+
+  /** Where this visitor's remembered sites live: shared outside beta, one folder per visitor in beta. */
+  private siteDir(): string {
+    if (!this.beta) return this.dataDir;
+    return path.join(this.dataDir, 'sessions', (currentSessionId() ?? 'none').replace(/[^\w-]/g, '_'));
+  }
+
+  /** Answers 404 and returns true when the run is another visitor's. */
+  private refuseNotMine(res: http.ServerResponse, runId: string | null | undefined): boolean {
+    if (this.isMine(runId)) return false;
+    this.sendJson(res, 404, { error: 'There’s nothing of yours at that address.', code: 'ERR_NOT_YOURS' });
+    return true;
+  }
+
   public broadcastRunnerEvent(event: OrchestratorEvent | Record<string, unknown>): void {
     this.recordRunEvent(event as Record<string, unknown>);
     const payload = `data: ${JSON.stringify(event)}\n\n`;
+    const eventRun = typeof (event as Record<string, unknown>).runId === 'string' ? ((event as Record<string, unknown>).runId as string) : this.currentRunId;
+    const owner = this.beta && eventRun ? this.runOwners.get(eventRun) : undefined;
     for (const client of this.streamClients) {
+      // Beta: a run's events go only to the visitor who started it.
+      if (this.beta && (!owner || this.streamSessions.get(client) !== owner)) continue;
       try {
         client.write(payload);
       } catch {
@@ -701,6 +729,7 @@ export class RunnerServer {
               this.sendJson(res, 403, { error: 'This is closed on the shared beta copy, so testers don’t change each other’s check-ups.', code: 'ERR_BETA' });
               return;
             }
+            if (await this.betaScope(req, res, pathname)) return;
           }
 
           // /api/v1/* belongs to the Report Hub, a separate service: passed on when one is set up. So
@@ -733,11 +762,13 @@ export class RunnerServer {
               'X-Accel-Buffering': 'no',
             });
             res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
-            // A page that opens or reconnects mid-run catches up: this run's events so far, in order.
-            for (const event of this.runEvents) res.write(`data: ${JSON.stringify({ ...event, replayed: true })}\n\n`);
+            // A page that opens or reconnects mid-run catches up: this run's events so far, in order (beta: only the visitor's own run).
+            if (this.isMine(this.currentRunId)) for (const event of this.runEvents) res.write(`data: ${JSON.stringify({ ...event, replayed: true })}\n\n`);
             this.streamClients.add(res);
+            if (this.beta) this.streamSessions.set(res, currentSessionId());
             req.on('close', () => {
               this.streamClients.delete(res);
+              this.streamSessions.delete(res);
             });
             return;
           }
@@ -1064,6 +1095,51 @@ export class RunnerServer {
     return JSON.parse(body) as T;
   }
 
+  /**
+   * Beta only: each visitor sees their own check-up and nothing of anyone else's. The runner holds one
+   * run at a time, so what is "current" belongs to whoever started it; to everyone else it doesn't
+   * exist. True once the request has been answered here.
+   */
+  private async betaScope(req: http.IncomingMessage, res: http.ServerResponse, pathname: string): Promise<boolean> {
+    const method = req.method;
+    if (pathname === '/api/runner/status' && method === 'GET') {
+      if (this.isMine(this.currentRunId)) return false;
+      const busy = this.phase === 'scanning' || this.phase === 'testing';
+      this.sendJson(res, 200, { isRunning: false, hasReport: false, lastRunError: null, lastErrorCode: null, phase: 'idle', hasPlan: false, runId: null, targetUrl: null, reportRunId: null, hubConnected: false, beta: true, busy });
+      return true;
+    }
+    // What the current run offers: its plan, its changes, finishing its review.
+    const ofCurrentRun = (pathname.startsWith('/api/runner/plan') && pathname !== '/api/runner/waiting-plans') || pathname === '/api/runner/ai/finish';
+    if (ofCurrentRun) return this.refuseNotMine(res, this.currentRunId);
+    if ((pathname === '/api/runner/abort' || pathname === '/api/runner/stop') && method === 'POST') {
+      if (this.isMine(this.currentRunId)) return false;
+      this.sendJson(res, 200, { aborted: false, message: 'No run currently active' });
+      return true;
+    }
+    if ((pathname === '/api/report' || pathname.startsWith('/api/report/download/')) && method === 'GET') {
+      return this.refuseNotMine(res, this.lastReport?.runId);
+    }
+    if (pathname.startsWith('/api/evidence/')) {
+      let rel = '';
+      try {
+        rel = decodeURIComponent(pathname.slice('/api/evidence/'.length));
+      } catch {
+        // not a path
+      }
+      return this.refuseNotMine(res, rel.match(/^runs\/(run-\d+)\//)?.[1]);
+    }
+    // Visual baselines are kept per site for the whole copy: not offered here.
+    if (pathname.startsWith('/api/baselines/') || pathname.startsWith('/api/runner/baselines')) {
+      if (pathname === '/api/runner/baselines' && method === 'GET') {
+        this.sendJson(res, 200, []);
+        return true;
+      }
+      this.sendJson(res, 403, { error: 'This is closed on the shared beta copy, so testers don’t change each other’s check-ups.', code: 'ERR_BETA' });
+      return true;
+    }
+    return false;
+  }
+
   /** Routes that change what every tester sees; shut on a beta copy. */
   private closedInBeta(method: string | undefined, pathname: string): boolean {
     if (pathname === '/api/runner/benchmark') return true;
@@ -1123,7 +1199,7 @@ export class RunnerServer {
     // Said before the scan: whether this address can be tested fully (a Test Copy), and what was
     // chosen for the site last time, so the screen can start from it.
     const typed = new URL(targetUrl);
-    const memory = await loadSiteMemory(this.dataDir, typed.host).catch(() => null);
+    const memory = await loadSiteMemory(this.siteDir(), typed.host).catch(() => null);
     const about = {
       host: typed.host,
       testCopy: isTestHost(typed.hostname, memory?.staging ? [typed.hostname] : []),
@@ -1170,7 +1246,7 @@ export class RunnerServer {
    */
   private async handleSites(host: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (!host && req.method === 'GET') {
-      const sites = await listSiteMemories(this.dataDir);
+      const sites = await listSiteMemories(this.siteDir());
       this.sendJson(res, 200, {
         sites: sites.map((m) => ({
           host: m.host,
@@ -1191,7 +1267,7 @@ export class RunnerServer {
         this.sendJson(res, 400, { error: 'Invalid JSON body' });
         return;
       }
-      const memory = await loadSiteMemory(this.dataDir, host);
+      const memory = await loadSiteMemory(this.siteDir(), host);
       if (!memory) {
         this.sendJson(res, 404, { error: 'That site isn’t remembered.' });
         return;
@@ -1201,7 +1277,7 @@ export class RunnerServer {
         memory.signIns = (memory.signIns ?? []).filter((s) => s.role !== body.forgetSignIn);
         await this.keyResolver.forgetSecret(this.signInAccount(memory.host, body.forgetSignIn));
       }
-      await saveSiteMemory(this.dataDir, memory);
+      await saveSiteMemory(this.siteDir(), memory);
       this.sendJson(res, 200, { saved: true });
       return;
     }
@@ -1292,7 +1368,7 @@ export class RunnerServer {
     } catch {
       // estimated for a typical site
     }
-    const memory = host ? await loadSiteMemory(this.dataDir, host).catch(() => null) : null;
+    const memory = host ? await loadSiteMemory(this.siteDir(), host).catch(() => null) : null;
     const maxPages = typeof body.maxPages === 'number' && body.maxPages > 0 ? Math.min(Math.floor(body.maxPages), 1000) : 200;
     // Pages whose approved plan is reused aren't asked about again.
     const planned = memory?.plan ? Object.keys(memory.plan.pages).length : undefined;
@@ -1408,7 +1484,7 @@ export class RunnerServer {
 
   private async handleRuns(rest: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if ((rest === '' || rest === '/') && req.method === 'GET') {
-      this.sendJson(res, 200, { runs: await this.listRuns() });
+      this.sendJson(res, 200, { runs: (await this.listRuns()).filter((r) => this.isMine(r.runId)) });
       return;
     }
     const [, runId, action, file] = rest.split('/');
@@ -1416,6 +1492,7 @@ export class RunnerServer {
       this.sendJson(res, 404, { error: 'No such check-up' });
       return;
     }
+    if (this.refuseNotMine(res, runId)) return;
 
     if (!action && req.method === 'GET') {
       const report = await this.readRunReport(runId);
@@ -1989,7 +2066,9 @@ export class RunnerServer {
     // site). Only a new check-up of the same site throws it away, so the caller has to say so.
     await this.ensurePlanLoaded();
     const waiting = this.phase === 'awaiting-review' ? this.currentPlanRecord : null;
-    const parkWaiting = !!waiting && this.hostOfPlan(waiting) !== hostOfAddress(body.targetUrl);
+    // Beta: a plan another visitor left waiting is kept aside for them, whatever the site, and is never named here.
+    const othersPlan = this.beta && !!waiting && !this.isMine(waiting.plan.runId);
+    const parkWaiting = !!waiting && (othersPlan || this.hostOfPlan(waiting) !== hostOfAddress(body.targetUrl));
     if (waiting && !parkWaiting && !body.replacePlan) {
       let waitingFor = waiting.plan.targetUrl;
       try {
@@ -2031,6 +2110,10 @@ export class RunnerServer {
     // is the SAME id the orchestrator will use for RUN_STARTED/RUN_COMPLETED — otherwise a
     // UI that trusts this response id would never see it appear in the SSE stream.
     const runId = `run-${Date.now()}`;
+    if (this.beta) {
+      const me = currentSessionId();
+      if (me) this.runOwners.set(runId, me);
+    }
     this.currentRunId = runId;
     this.currentTargetUrl = body.targetUrl;
     this.runEvents = [];
@@ -2164,7 +2247,7 @@ export class RunnerServer {
       // Full testing needs the owner's say-so and a test host. Decided here, not by the screen.
       const typed = new URL(body.targetUrl);
       const siteHost = typed.host;
-      let memory = await loadSiteMemory(this.dataDir, siteHost);
+      let memory = await loadSiteMemory(this.siteDir(), siteHost);
       // What the person chose for the site is remembered, so the next check-up starts from it.
       if (body.stagingHost !== undefined || body.owner !== undefined || body.searchChecks !== undefined) {
         memory = {
@@ -2173,13 +2256,13 @@ export class RunnerServer {
           ...(body.owner !== undefined ? { owner: body.owner } : {}),
           ...(body.searchChecks !== undefined ? { searchChecks: body.searchChecks } : {}),
         };
-        await saveSiteMemory(this.dataDir, memory);
+        await saveSiteMemory(this.siteDir(), memory);
       }
       // Sign-ins: the ones given (remembered when asked), or the ones saved for the site.
       const signIns = await this.signInsFor(body, memory, siteHost);
       if (signIns.memory && signIns.memory !== memory) {
         memory = signIns.memory;
-        await saveSiteMemory(this.dataDir, memory);
+        await saveSiteMemory(this.siteDir(), memory);
       }
       const profile: ProductProfile | undefined = signIns.roles?.length ? { name: productId, productId, roles: signIns.roles } : undefined;
       // Test again tests at the screen sizes the plan was approved with, unless told otherwise; a
@@ -2285,7 +2368,7 @@ export class RunnerServer {
       if (body.testAgain && approvedAt && memory && this.nothingNew(draft, sinceLastRun, memory)) {
         applySafeAnswers(record.plan.questions);
         applySafeAnswers(draft.ambiguityQuestions);
-        await saveSiteMemory(this.dataDir, rememberRun(memory, siteHost, draft, { reviewed: false }));
+        await saveSiteMemory(this.siteDir(), rememberRun(memory, siteHost, draft, { reviewed: false }));
         const { specTestCases, notRun } = this.testsFor(record.context);
         record.plan.testCases = specTestCases;
         await this.savePlan(record);
@@ -2316,7 +2399,7 @@ export class RunnerServer {
 
       // No review: every question gets its safe answer, and only what was there is remembered.
       applySafeAnswers(draft.ambiguityQuestions);
-      await saveSiteMemory(this.dataDir, rememberRun(memory, siteHost, draft, { reviewed: false }));
+      await saveSiteMemory(this.siteDir(), rememberRun(memory, siteHost, draft, { reviewed: false }));
       const { specTestCases, notRun } = this.testsFor(record.context);
       context.reportNotes.push(...this.handCheckNotes(draft));
       await this.executeTesting(record, specTestCases, notRun, generation);
@@ -2628,10 +2711,10 @@ export class RunnerServer {
 
     // What the site was seen doing (the error it shows for an empty field) confirms a guessed rule next time.
     if (context.siteHost && context.draft) {
-      const memory = await loadSiteMemory(this.dataDir, context.siteHost);
+      const memory = await loadSiteMemory(this.siteDir(), context.siteHost);
       if (memory) {
         rememberObservations(memory, context.draft, report);
-        await saveSiteMemory(this.dataDir, memory).catch(() => {});
+        await saveSiteMemory(this.siteDir(), memory).catch(() => {});
       }
     }
 
@@ -2772,7 +2855,7 @@ export class RunnerServer {
    */
   private async handleWaitingPlans(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (req.method === 'GET') {
-      this.sendJson(res, 200, { plans: await this.listParkedPlans() });
+      this.sendJson(res, 200, { plans: (await this.listParkedPlans()).filter((p) => this.isMine(p.runId)) });
       return;
     }
     let body: { host?: string } = {};
@@ -2783,6 +2866,10 @@ export class RunnerServer {
     }
     if (this.phase === 'scanning' || this.phase === 'testing') {
       this.sendJson(res, 409, { error: 'A check-up is running. Wait for it to finish, or stop it first.', code: 'ERR_RUN_IN_PROGRESS' });
+      return;
+    }
+    if (this.beta && body.host && !this.isMine(this.parkedPlans.get(body.host)?.plan.runId)) {
+      this.sendJson(res, 404, { error: 'There’s no plan kept for that site.' });
       return;
     }
     const record = body.host ? await this.unparkPlan(body.host) : null;
@@ -3441,7 +3528,7 @@ export class RunnerServer {
     if (draft) {
       record.context.reportNotes = [...(record.context.reportNotes || []), ...this.handCheckNotes(draft)];
       if (record.context.siteHost) {
-        const memory = await loadSiteMemory(this.dataDir, record.context.siteHost);
+        const memory = await loadSiteMemory(this.siteDir(), record.context.siteHost);
         await saveSiteMemory(
           this.dataDir,
           rememberRun(memory, record.context.siteHost, draft, { reviewed: true, answeredByOwner, screenSizes: this.screenSizesOf(record.context) })

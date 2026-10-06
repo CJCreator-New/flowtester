@@ -64,6 +64,11 @@ export function sessionFor(req: http.IncomingMessage, res: http.ServerResponse, 
   return id;
 }
 
+/** The session the current request (or a run it started) belongs to; undefined outside beta mode. */
+export function currentSessionId(): string | undefined {
+  return current.getStore();
+}
+
 /** Makes the rest of this request (and everything it starts) belong to that session. */
 export function enterSession(sessionId: string): void {
   current.enterWith(sessionId);

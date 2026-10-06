@@ -58,6 +58,8 @@ export interface RunnerStatus {
   hubConnected?: boolean;
   /** A copy shared with other people (the free online one): check-ups and reports are visible to all of them. */
   beta?: boolean;
+  /** Shared copy only: another visitor's check-up is running, so a new one would have to wait. */
+  busy?: boolean;
 }
 
 /** null means the runner can't be reached (not started yet, or stopped). */

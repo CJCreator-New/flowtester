@@ -49,6 +49,7 @@ export function NewCheckupScreen({
   waitingPlans = [],
   onResumePlan,
   shared = false,
+  busy = false,
 }: {
   /** null while it's being read. */
   ai: AiSetup | null;
@@ -64,8 +65,10 @@ export function NewCheckupScreen({
   /** Plans kept aside for other sites, each waiting for review. */
   waitingPlans?: WaitingPlan[];
   onResumePlan?: (host: string) => void;
-  /** This is the free shared copy: other people using it can see every check-up and report. */
+  /** This is the free shared copy: everyone shares one server, but each visitor sees only their own check-ups. */
   shared?: boolean;
+  /** Someone else's check-up is running on the shared copy, so a new one has to wait. */
+  busy?: boolean;
 }) {
   const [check, setCheck] = useState<AddressCheck>({ state: 'empty' });
   const [recheck, setRecheck] = useState(0);
@@ -196,8 +199,9 @@ export function NewCheckupScreen({
         <div className="mb-8">
           <Notice tone="warn" title="This is a shared copy">
             <p>
-              Check-ups and reports here can be seen by other people using it, and only one check-up runs at a time. Only public sites can be checked. Don’t check anything you want kept private.
+              Other people use this copy too, but you only see your own check-ups and reports. They share one server, so only one check-up runs at a time. Only public sites can be checked.
             </p>
+            {busy && <p className="mt-2 font-bold">Someone else’s check-up is running right now. Yours can start when it finishes: try again in a few minutes.</p>}
           </Notice>
         </div>
       )}
