@@ -177,7 +177,7 @@ export interface AiEstimate {
   left: number | null;
   limit: number | null;
   /** About what the scan costs in dollars; only when the provider reports a price. */
-  estimatedUsd?: number;
+  estimatedUsd?: number | null;
   /** Requests that may run at once (1 for a free key). */
   concurrency?: number;
   /** The cap that was sent, echoed back. */

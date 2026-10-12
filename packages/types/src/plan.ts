@@ -229,7 +229,7 @@ export interface AIRequestBudget {
   /** The person's cap for this Check-up. */
   cap?: RunCap;
   /** About what the Plan will cost in dollars, only when the AI service reports a price. */
-  estimatedUsd?: number;
+  estimatedUsd?: number | null;
   /** Dollars spent so far, from tokens used times the reported price. */
   spentUsd?: number;
   /** Requests allowed in flight at once, from the AI service's reported limits. */

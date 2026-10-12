@@ -20,4 +20,12 @@ describe('cap', () => {
   it('warns when the cap is lower', () => {
     expect(capLine({ low: 60, high: 80 }, { requests: 50 })).toMatch(/fixed rules/);
   });
+  it('handles null and undefined estimatedUsd safely without crashing', () => {
+    const lineWithNull = capLine({ low: 30, high: 46, estimatedUsd: null }, { requests: 50, dollars: 5 });
+    expect(lineWithNull).toBe('About 38 requests of your 50 cap.');
+    expect(lineWithNull).not.toMatch(/\$/);
+
+    const lineWithUndefined = capLine({ low: 30, high: 46, estimatedUsd: undefined });
+    expect(lineWithUndefined).toBe('About 38 requests.');
+  });
 });

@@ -303,13 +303,13 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
                           : 'text-fail'
                       }`}
                     >
-                      {result.ourProduct.scorecard.frictionIndex.toFixed(0)}
+                      {(result.ourProduct.scorecard.frictionIndex ?? 0).toFixed(0)}
                     </span>
                   </div>
                   <div className="text-right">
                     <span className="text-xs text-ink-soft block">{result.referenceProduct.name}</span>
                     <span className="text-2xl font-bold text-ink">
-                      {result.referenceProduct.scorecard.frictionIndex.toFixed(0)}
+                      {(result.referenceProduct.scorecard.frictionIndex ?? 0).toFixed(0)}
                     </span>
                   </div>
                 </div>

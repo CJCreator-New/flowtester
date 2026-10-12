@@ -217,7 +217,7 @@ export function VisualBaselinesScreen() {
                       <div>
                         {hasDiff ? (
                           <span className="inline-flex items-center rounded-full bg-fail/15 px-2 py-0.5 text-xs font-bold text-fail">
-                            {item.diffPercent !== undefined ? `${item.diffPercent.toFixed(1)}% diff` : 'Changed'}
+                            {item.diffPercent != null && Number.isFinite(item.diffPercent) ? `${item.diffPercent.toFixed(1)}% diff` : 'Changed'}
                           </span>
                         ) : (
                           <span className="inline-flex items-center rounded-full bg-pass/15 px-2 py-0.5 text-xs font-bold text-pass">
@@ -228,7 +228,7 @@ export function VisualBaselinesScreen() {
                     </div>
 
                     <div className="mt-2.5 flex items-center justify-between text-xs text-ink-soft border-t border-rule/50 pt-2">
-                      <span>{(item.fileSizeBytes / 1024).toFixed(0)} KB</span>
+                      <span>{(Number(item.fileSizeBytes || 0) / 1024).toFixed(0)} KB</span>
                       <span>{formatWhen(item.updatedAt)}</span>
                     </div>
                   </div>
@@ -250,7 +250,7 @@ export function VisualBaselinesScreen() {
                       </span>
                     </h3>
                     <p className="text-xs text-ink-soft">
-                      Updated {formatWhen(activeItem.updatedAt)} · {(activeItem.fileSizeBytes / 1024).toFixed(1)} KB
+                      Updated {formatWhen(activeItem.updatedAt)} · {(Number(activeItem.fileSizeBytes || 0) / 1024).toFixed(1)} KB
                     </p>
                   </div>
 
@@ -312,7 +312,7 @@ export function VisualBaselinesScreen() {
                     )}
                   </div>
 
-                  {activeItem.diffPercent !== undefined && (
+                  {activeItem.diffPercent != null && Number.isFinite(activeItem.diffPercent) && (
                     <div className="text-right">
                       <span className="font-bold text-fail">{activeItem.diffPercent.toFixed(2)}% difference</span>
                     </div>

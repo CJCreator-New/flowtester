@@ -1335,7 +1335,7 @@ function AiEstimateLine({
             onChange={(e) => onFormChange((f) => ({ ...f, capRequests: e.target.value }))}
           />
         </label>
-        {estimate.estimatedUsd !== undefined && (
+        {estimate.estimatedUsd != null && (
           <label>
             <span className="mb-1 block font-bold">Limit spend in dollars (optional)</span>
             <input

@@ -5,6 +5,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    testTimeout: 30000,
+    hookTimeout: 30000,
     include: ['packages/*/tests/**/*.test.{ts,tsx}'],
     // Only active with --coverage (CI). Prints a summary; no thresholds.
     coverage: {

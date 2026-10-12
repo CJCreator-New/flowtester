@@ -12,6 +12,7 @@ export function capFromInputs(requests: string, dollars: string): RunCap | undef
 }
 
 function money(n: number): string {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '$0.00';
   return `$${n.toFixed(2)}`;
 }
 
@@ -22,7 +23,7 @@ function money(n: number): string {
 export function capLine(estimate: Pick<AiEstimate, 'low' | 'high' | 'estimatedUsd'>, cap?: RunCap): string {
   const about = Math.round((estimate.low + estimate.high) / 2);
   const parts: string[] = [cap?.requests ? `About ${about} requests of your ${cap.requests} cap` : `About ${about} requests`];
-  if (estimate.estimatedUsd !== undefined) {
+  if (estimate.estimatedUsd != null && Number.isFinite(estimate.estimatedUsd)) {
     parts.push(
       cap?.dollars
         ? `about ${money(estimate.estimatedUsd)} of your ${money(cap.dollars)} cap`
@@ -32,7 +33,7 @@ export function capLine(estimate: Pick<AiEstimate, 'low' | 'high' | 'estimatedUs
   let line = parts.join(', ') + '.';
   const over =
     (cap?.requests !== undefined && about > cap.requests) ||
-    (cap?.dollars !== undefined && estimate.estimatedUsd !== undefined && estimate.estimatedUsd > cap.dollars);
+    (cap?.dollars !== undefined && estimate.estimatedUsd != null && estimate.estimatedUsd > cap.dollars);
   if (over) line += ' The cap is lower than the estimate, so the rest is planned with fixed rules.';
   return line;
 }

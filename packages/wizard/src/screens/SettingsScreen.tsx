@@ -421,7 +421,7 @@ function ModelChoice({ setup, onSaved }: { setup: AiSetup; onSaved: () => void }
         Sends one short request{openRouter ? ', which counts toward today’s free requests' : ''}.
       </p>
       <div role="status" className="mt-2 text-sm">
-        {test.result?.ok && (
+        {test.result?.ok && test.result.ms != null && (
           <span className="font-bold text-pass">✓ It answered in {(test.result.ms / 1000).toFixed(1)} s.</span>
         )}
         {test.result && !test.result.ok && <span className="font-bold text-fail">✗ {test.result.reason}</span>}

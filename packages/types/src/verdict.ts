@@ -47,11 +47,12 @@ export function countsTowardVerdict(f: Pick<Finding, 'triageStatus' | 'needsConf
 }
 
 export function releaseVerdict(
-  findings: Array<Pick<Finding, 'severity' | 'triageStatus' | 'needsConfirmation' | 'title'> & Partial<Finding>>,
+  findings?: Array<Pick<Finding, 'severity' | 'triageStatus' | 'needsConfirmation' | 'title'> & Partial<Finding>> | null,
   gate?: ReleaseGateCriteria
 ): ReleaseVerdict {
+  const safeFindings = findings ?? [];
   const problems = groupIntoProblems(
-    findings.map(
+    safeFindings.map(
       (f) =>
         ({ checker: 'bug-detection', id: '', where: { urlPath: '', role: '', breakpoint: '1440px' }, ...f }) as Finding
     )
@@ -102,7 +103,7 @@ export function releaseVerdict(
     mustFix,
     total: active.length,
     toConfirm: problems.length - active.length,
-    findings: findings.filter(countsTowardVerdict).length,
+    findings: safeFindings.filter(countsTowardVerdict).length,
     gate,
     breaches: breaches.length > 0 ? breaches : undefined,
   };

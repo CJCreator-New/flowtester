@@ -174,9 +174,9 @@ export function isDismissed(f: Pick<Finding, 'triageStatus'>): boolean {
  * Findings as problems: the same problem on several pages, or from several checks, is one problem
  * that lists them. Dismissed findings are left out; unconfirmed AI guesses are kept apart.
  */
-export function groupIntoProblems(findings: Finding[]): Problem[] {
+export function groupIntoProblems(findings?: Finding[] | null): Problem[] {
   const problems = new Map<string, Problem>();
-  for (const f of findings) {
+  for (const f of findings ?? []) {
     if (isDismissed(f)) continue;
     const toConfirm = !!f.needsConfirmation;
     const key = `${toConfirm ? 'confirm|' : ''}${problemKey(f)}`;

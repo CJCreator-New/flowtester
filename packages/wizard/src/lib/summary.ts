@@ -87,8 +87,9 @@ export function plainTitle(f: Pick<Finding, 'title'>): string {
 }
 
 export function summarizeReport(report: ReleaseReport): ReportSummary {
-  const verdict = releaseVerdict(report.findings);
-  const problems = groupIntoProblems(report.findings).filter((p) => !p.toConfirm);
+  const findings = report?.findings ?? [];
+  const verdict = releaseVerdict(findings);
+  const problems = groupIntoProblems(findings).filter((p) => !p.toConfirm);
   const total = verdict.total;
 
   const counts = SEVERITY_ORDER.map((severity) => ({ severity, count: verdict.counts[severity] }))
