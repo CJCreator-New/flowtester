@@ -63,7 +63,7 @@ describe('PreFlightChecker.signIn', () => {
 
   it('signs in on a two-step login (username, then password)', async () => {
     const result = await trySignIn(twoStep());
-    expect(result).toEqual({ ok: true, landingPath: '/account' });
+    expect(result).toMatchObject({ ok: true, landingPath: '/account' });
   }, 60000);
 
   it('signs in on a login that opens in a modal', async () => {
@@ -91,27 +91,27 @@ describe('PreFlightChecker.signIn', () => {
 
   it('reports no-form when the page has no sign-in form', async () => {
     const result = await trySignIn(manager('/login-nothing'));
-    expect(result).toEqual({ ok: false, reason: 'no-form' });
+    expect(result).toMatchObject({ ok: false, reason: 'no-form' });
   }, 60000);
 
   it('reports needs-more for a CAPTCHA', async () => {
     const result = await trySignIn(manager('/login-captcha'));
-    expect(result).toEqual({ ok: false, reason: 'needs-more' });
+    expect(result).toMatchObject({ ok: false, reason: 'needs-more' });
   }, 60000);
 
   it('reports needs-more for a single-sign-on-only page', async () => {
     const result = await trySignIn(manager('/login-sso'));
-    expect(result).toEqual({ ok: false, reason: 'needs-more' });
+    expect(result).toMatchObject({ ok: false, reason: 'needs-more' });
   }, 60000);
 
   it('reports unreachable when the site refuses connection', async () => {
     const result = await trySignIn(manager('/signin'), `http://localhost:${CLOSED_PORT}`);
-    expect(result).toEqual({ ok: false, reason: 'unreachable' });
+    expect(result).toMatchObject({ ok: false, reason: 'unreachable' });
   }, 60000);
 
   it('reports unreachable on a timeout', async () => {
     const result = await trySignIn(manager('/signin'), `http://localhost:${HANG_PORT}`, { gotoTimeoutMs: 1500 });
-    expect(result).toEqual({ ok: false, reason: 'unreachable' });
+    expect(result).toMatchObject({ ok: false, reason: 'unreachable' });
   }, 60000);
 
   it('gives the same reason every time for the same failure', async () => {

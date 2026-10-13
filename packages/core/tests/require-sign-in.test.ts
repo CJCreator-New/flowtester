@@ -14,7 +14,7 @@ const page = (title: string, body: string) =>
   `<!doctype html><html lang="en"><head><title>${title}</title></head><body><main><h1>${title}</h1>${body}</main></body></html>`;
 
 describe('requireSignIn', () => {
-  const PORT = 3547;
+  const PORT = 3557;
   const baseUrl = `http://localhost:${PORT}`;
   const outputDir = path.join(process.cwd(), '.tmp-require-sign-in');
   const USER = 'member-user@example.com';

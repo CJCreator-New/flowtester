@@ -2,14 +2,17 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { BrowserContext, Locator, Page } from 'playwright';
 import type {
-  PreFlightResult,
+  PreFlightResult as BasePreFlightResult,
   ProductProfile,
   RoleCredential,
   SignInFailureReason,
   StorageStateData,
 } from '@qa/types';
 import { signInReasonText } from '@qa/types';
+import type { SignInStep } from '@qa/types/src/signin.js';
 import type { BrowserManager } from './browser.js';
+import { debugLog } from './debug-log.js';
+import { navigate } from './navigate.js';
 
 /** A required sign-in failed. The message is the fixed wording for the reason: never any typed detail. */
 export class SignInFailedError extends Error {
@@ -21,6 +24,15 @@ export class SignInFailedError extends Error {
     super(signInReasonText(reason));
     this.name = 'SignInFailedError';
   }
+}
+
+export type SignInResult =
+  | { ok: true; landingPath: string; attempts?: number }
+  | { ok: false; reason: SignInFailureReason; failedStep?: SignInStep; attempts?: number };
+
+export interface PreFlightResult extends BasePreFlightResult {
+  roleDiagnostics: Record<string, { ok: boolean; failedStep?: SignInStep; attempts: number; landedPath?: string }>;
+  startWarning?: 'start-4xx';
 }
 
 const USERNAME_SELECTOR =
@@ -35,6 +47,25 @@ const OPENER_NAME = /^(log ?in|sign ?in)$/i;
 const NEXT_NAME = /^(next|continue)$/i;
 const SSO_NAME = /(continue|sign in|log in) with (google|microsoft|apple|github|sso)/i;
 const SEARCH_FIELD = /search/i;
+
+function isInside(child: string, parent: string): boolean {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function originsMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  try {
+    const uA = new URL(a);
+    const uB = new URL(b);
+    if (uA.protocol !== uB.protocol || uA.port !== uB.port) return false;
+    const hA = uA.hostname.replace(/^www\./, '');
+    const hB = uB.hostname.replace(/^www\./, '');
+    return hA === hB;
+  } catch {
+    return false;
+  }
+}
 
 /** The first match that is on screen, or null. */
 async function firstVisible(locator: Locator): Promise<Locator | null> {
@@ -87,48 +118,81 @@ export class PreFlightChecker {
     url: string,
     tunnelAuth?: string,
     /** Shared machine: fetches with the address checks on every hop instead of plain fetch (ADR 0014). */
-    get?: (url: string, headers: Record<string, string>) => Promise<{ status: number; headers: Record<string, string> }>
-  ): Promise<{ ok: boolean; status?: number; error?: string; testCopyHeader?: boolean }> {
-    try {
-      const headers: Record<string, string> = {
-        'User-Agent': 'QA-Readiness-Checker/0.1.0',
-        'X-Tunnel-Skip-AntiPhishing-Page': 'true',
-      };
-      if (tunnelAuth) {
-        headers['X-Tunnel-Authorization'] = tunnelAuth;
-      }
+    get?: (url: string, headers: Record<string, string>) => Promise<{ status: number; headers: Record<string, string> }>,
+    customHeaders?: Record<string, string>,
+    headerHosts?: string[]
+  ): Promise<{ ok: boolean; status?: number; error?: string; testCopyHeader?: boolean; startWarning?: 'start-4xx' }> {
+    const headers: Record<string, string> = {
+      'User-Agent': 'QA-Readiness-Checker/0.1.0',
+      'X-Tunnel-Skip-AntiPhishing-Page': 'true',
+    };
+    if (tunnelAuth) {
+      headers['X-Tunnel-Authorization'] = tunnelAuth;
+    }
 
-      let res: { status: number; headers: { get(name: string): string | null } };
-      if (get) {
-        const got = await get(url, headers);
-        res = { status: got.status, headers: { get: (name) => got.headers[name.toLowerCase()] ?? null } };
-      } else {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        res = await fetch(url, {
-          method: 'GET',
-          headers,
-          signal: controller.signal,
-        });
+    try {
+      const parsed = new URL(url);
+      const targetHost = parsed.host;
+      const targetHostname = parsed.hostname;
+      const allowedHosts = headerHosts?.length ? headerHosts : [targetHost, targetHostname];
+      const isAllowed = allowedHosts.some((h) => {
+        const lowerH = h.toLowerCase();
+        return lowerH === targetHost.toLowerCase() || lowerH === targetHostname.toLowerCase();
+      });
+      if (customHeaders && isAllowed) {
+        Object.assign(headers, customHeaders);
+      }
+    } catch {
+      // invalid URL format handled by fetch
+    }
+
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const timeoutMs = attempt === 1 ? 25000 : 10000;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        let res: { status: number; headers: { get(name: string): string | null } };
+        if (get) {
+          const got = await get(url, headers);
+          res = { status: got.status, headers: { get: (name) => got.headers[name.toLowerCase()] ?? null } };
+        } else {
+          res = await fetch(url, {
+            method: 'GET',
+            headers,
+            signal: controller.signal,
+          });
+        }
+
+        const isTestCopyHeader =
+          res.headers.get('x-test-copy') === 'true' ||
+          res.headers.get('x-staging') === 'true' ||
+          ['staging', 'test', 'development', 'dev'].includes((res.headers.get('x-environment') || '').toLowerCase());
+
+        const isOk = res.status < 400 || res.status === 401 || res.status === 403;
+        const startWarning = res.status >= 400 && res.status < 500 ? 'start-4xx' : undefined;
+
+        return {
+          ok: isOk,
+          status: res.status,
+          testCopyHeader: isTestCopyHeader,
+          ...(startWarning ? { startWarning } : {}),
+        };
+      } catch (err: unknown) {
+        lastErr = err;
+        if (attempt === 1) {
+          await new Promise((resolve) => setTimeout(resolve, 4000));
+        }
+      } finally {
         clearTimeout(timeoutId);
       }
-
-      const isTestCopyHeader =
-        res.headers.get('x-test-copy') === 'true' ||
-        res.headers.get('x-staging') === 'true' ||
-        ['staging', 'test', 'development', 'dev'].includes((res.headers.get('x-environment') || '').toLowerCase());
-
-      return {
-        ok: res.status < 500,
-        status: res.status,
-        testCopyHeader: isTestCopyHeader,
-      };
-    } catch (err: unknown) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
     }
+
+    return {
+      ok: false,
+      error: lastErr instanceof Error ? lastErr.message : String(lastErr),
+    };
   }
 
   async verifyRoleLogin(
@@ -143,10 +207,9 @@ export class PreFlightChecker {
   /**
    * Signs in on the role's sign-in page, in a fixed order with no AI: find the sign-in fields (inside a
    * dialog if one is open, after clicking a "Sign in" opener if none shows), fill the username, press Next
-   * when the password comes on a second step, fill the password and submit. Succeeds only when the password
-   * field is gone afterwards. A failure carries one reason; it is never built from the page, the typed
-   * details or an error message, so no credential can reach a log, response or report through it.
-   * Known blur: a slow site and wrong details can look alike; failed or 5xx page loads count as unreachable.
+   * when the password comes on a second step, fill the password and submit. Succeeds only when all success
+   * conditions are met (origin matches, not on login path, no visible password, storageState not empty).
+   * A failure carries one reason and failedStep; it is never built from page text, typed details or error messages.
    */
   async signIn(
     context: BrowserContext,
@@ -154,131 +217,325 @@ export class PreFlightChecker {
     credential: RoleCredential,
     saveStorageStatePath?: string,
     options?: { gotoTimeoutMs?: number }
-  ): Promise<{ ok: boolean; landingPath?: string; reason?: SignInFailureReason }> {
-    let page: Page | undefined;
+  ): Promise<SignInResult> {
+    const targetOrigin = new URL(baseUrl).origin;
+    let resolvedLoginUrl: URL;
     try {
-      page = await context.newPage();
-      const live = page;
-      const loginUrl = new URL(credential.loginPath || '/login', baseUrl).toString();
+      resolvedLoginUrl = new URL(credential.loginPath || '/login', baseUrl);
+    } catch {
+      debugLog('auth', 'failed to parse loginUrl', { role: credential.role, step: 'goto' });
+      return { ok: false, reason: 'unreachable', failedStep: 'goto', attempts: 1 };
+    }
 
-      let navigationFailed = false;
-      live.on('requestfailed', (req) => {
-        if (req.isNavigationRequest() && req.frame() === live.mainFrame()) navigationFailed = true;
+    // Origin guard: block cross-origin loginPath before any network request
+    if (!originsMatch(resolvedLoginUrl.origin, targetOrigin)) {
+      debugLog('auth', 'cross-origin loginPath blocked before request', {
+        role: credential.role,
+        step: 'goto',
       });
-      live.on('response', (res) => {
-        const req = res.request();
-        if (req.isNavigationRequest() && req.frame() === live.mainFrame() && res.status() >= 500) {
-          navigationFailed = true;
+      return { ok: false, reason: 'needs-more', failedStep: 'goto', attempts: 1 };
+    }
+
+    let lastFailure: { reason: SignInFailureReason; failedStep: SignInStep } = {
+      reason: 'unreachable',
+      failedStep: 'goto',
+    };
+
+    let page: Page | undefined;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      let currentStep: SignInStep = 'goto';
+      try {
+        page = await context.newPage();
+        const live = page;
+        debugLog('auth', 'signIn attempt', { role: credential.role, attempt });
+
+        // Step 1: goto
+        currentStep = 'goto';
+        let navRes;
+        try {
+          navRes = await navigate(live, resolvedLoginUrl.toString(), {
+            timeoutMs: options?.gotoTimeoutMs ?? 12000,
+            retries: 0,
+          });
+        } catch {
+          lastFailure = { reason: 'unreachable', failedStep: 'goto' };
+          debugLog('auth', 'navigation error, will retry if attempt 1', {
+            role: credential.role,
+            attempt,
+            step: 'goto',
+          });
+          await page.close().catch(() => {});
+          page = undefined;
+          continue;
         }
-      });
 
-      const opened = await live.goto(loginUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: options?.gotoTimeoutMs ?? 12000,
-      });
-      if (opened && opened.status() >= 500) return { ok: false, reason: 'unreachable' };
-      const origin = new URL(live.url()).origin;
+        if (!navRes.ok || (navRes.status && navRes.status >= 500)) {
+          lastFailure = { reason: 'unreachable', failedStep: 'goto' };
+          debugLog('auth', 'navigation failed or returned 5xx status', {
+            role: credential.role,
+            attempt,
+            status: navRes.status,
+          });
+          await page.close().catch(() => {});
+          page = undefined;
+          continue;
+        }
 
-      const needsMore = async (): Promise<boolean> =>
-        (await anyVisible(live.locator(CAPTCHA_SELECTOR))) || (await anyVisible(live.locator(OTP_SELECTOR)));
-      const anyField = `${USERNAME_SELECTOR}, ${PASSWORD_SELECTOR}`;
+        // Origin guard: check origin after navigation (redirects)
+        const currentOrigin = new URL(live.url()).origin;
+        if (!originsMatch(currentOrigin, targetOrigin)) {
+          debugLog('auth', 'landed on cross-origin page, aborting before fill', {
+            role: credential.role,
+            step: 'goto',
+          });
+          await page.close().catch(() => {});
+          return { ok: false, reason: 'needs-more', failedStep: 'goto', attempts: attempt };
+        }
 
-      let scope = await pickScope(live);
-      let hasField = (await findField(scope, anyField)) !== null;
+        // Step 2: find-fields
+        currentStep = 'find-fields';
+        const anyField = `${USERNAME_SELECTOR}, ${PASSWORD_SELECTOR}`;
 
-      if (!hasField && !credential.usernameSelector) {
-        // Some sites keep the form behind a "Sign in" button.
-        const opener = await firstVisible(
-          live.getByRole('button', { name: OPENER_NAME }).or(live.getByRole('link', { name: OPENER_NAME }))
-        );
-        if (opener) {
-          await opener.click().catch(() => {});
+        // Wait for form readiness (cap 6s for SPAs / hydration)
+        if (credential.usernameSelector) {
+          await live
+            .locator(credential.usernameSelector)
+            .first()
+            .waitFor({ state: 'visible', timeout: 6000 })
+            .catch(() => {});
+        } else {
           await live
             .locator(anyField)
             .first()
-            .waitFor({ state: 'visible', timeout: 3000 })
+            .waitFor({ state: 'visible', timeout: 6000 })
             .catch(() => {});
-          scope = await pickScope(live);
-          hasField = (await findField(scope, anyField)) !== null;
         }
-      }
-      if (!hasField && !credential.usernameSelector) {
-        if (await needsMore()) return { ok: false, reason: 'needs-more' };
-        const sso =
-          (await anyVisible(live.getByRole('button', { name: SSO_NAME }))) ||
-          (await anyVisible(live.getByRole('link', { name: SSO_NAME })));
-        return { ok: false, reason: sso ? 'needs-more' : 'no-form' };
-      }
-      if (await needsMore()) return { ok: false, reason: 'needs-more' };
 
-      const username = credential.usernameSelector
-        ? await firstVisible(live.locator(credential.usernameSelector))
-        : await findField(scope, USERNAME_SELECTOR);
-      if (username && credential.username) await username.fill(credential.username);
+        const needsMore = async (): Promise<boolean> =>
+          (await anyVisible(live.locator(CAPTCHA_SELECTOR))) || (await anyVisible(live.locator(OTP_SELECTOR)));
 
-      let password = credential.passwordSelector
-        ? await firstVisible(live.locator(credential.passwordSelector))
-        : await findField(scope, PASSWORD_SELECTOR);
-      if (!password) {
-        // Two-step sign-in: the password comes after the username.
-        const next =
-          (await firstVisible(scope.getByRole('button', { name: NEXT_NAME }))) ??
-          (await firstVisible(scope.locator(SUBMIT_SELECTOR)));
-        if (!next) return { ok: false, reason: 'no-form' };
-        await next.click().catch(() => {});
-        await scope
-          .locator(PASSWORD_SELECTOR)
-          .first()
-          .waitFor({ state: 'visible', timeout: 6000 })
-          .catch(() => {});
-        password = credential.passwordSelector
+        let scope = await pickScope(live);
+        let hasField = (await findField(scope, anyField)) !== null;
+
+        if (!hasField && !credential.usernameSelector) {
+          // Some sites keep the form behind a "Sign in" button.
+          const opener = await firstVisible(
+            live.getByRole('button', { name: OPENER_NAME }).or(live.getByRole('link', { name: OPENER_NAME }))
+          );
+          if (opener) {
+            currentStep = 'opener';
+            await opener.click().catch(() => {});
+            await live
+              .locator(anyField)
+              .first()
+              .waitFor({ state: 'visible', timeout: 3000 })
+              .catch(() => {});
+            scope = await pickScope(live);
+            hasField = (await findField(scope, anyField)) !== null;
+            currentStep = 'find-fields';
+          }
+        }
+
+        if (!hasField && !credential.usernameSelector) {
+          if (await needsMore()) {
+            await page.close().catch(() => {});
+            return { ok: false, reason: 'needs-more', failedStep: 'find-fields', attempts: attempt };
+          }
+          const sso =
+            (await anyVisible(live.getByRole('button', { name: SSO_NAME }))) ||
+            (await anyVisible(live.getByRole('link', { name: SSO_NAME })));
+          await page.close().catch(() => {});
+          return { ok: false, reason: sso ? 'needs-more' : 'no-form', failedStep: 'find-fields', attempts: attempt };
+        }
+        if (await needsMore()) {
+          await page.close().catch(() => {});
+          return { ok: false, reason: 'needs-more', failedStep: 'find-fields', attempts: attempt };
+        }
+
+        // Step 3: username
+        currentStep = 'username';
+        const username = credential.usernameSelector
+          ? await firstVisible(live.locator(credential.usernameSelector))
+          : await findField(scope, USERNAME_SELECTOR);
+        if (username && credential.username) {
+          await username.fill(credential.username);
+        }
+
+        // Step 4: password
+        currentStep = 'password';
+        let password = credential.passwordSelector
           ? await firstVisible(live.locator(credential.passwordSelector))
           : await findField(scope, PASSWORD_SELECTOR);
         if (!password) {
-          if (await needsMore()) return { ok: false, reason: 'needs-more' };
-          if (navigationFailed) return { ok: false, reason: 'unreachable' };
-          const alerted = await anyVisible(live.locator(ALERT_SELECTOR));
-          return { ok: false, reason: alerted ? 'wrong-details' : 'no-form' };
+          // Two-step sign-in: password comes after username
+          const next =
+            (await firstVisible(scope.getByRole('button', { name: NEXT_NAME }))) ??
+            (await firstVisible(scope.locator(SUBMIT_SELECTOR)));
+          if (!next) {
+            await page.close().catch(() => {});
+            return { ok: false, reason: 'no-form', failedStep: 'next', attempts: attempt };
+          }
+          currentStep = 'next';
+          await next.click().catch(() => {});
+          await scope
+            .locator(PASSWORD_SELECTOR)
+            .first()
+            .waitFor({ state: 'visible', timeout: 6000 })
+            .catch(() => {});
+          currentStep = 'password';
+          password = credential.passwordSelector
+            ? await firstVisible(live.locator(credential.passwordSelector))
+            : await findField(scope, PASSWORD_SELECTOR);
+          if (!password) {
+            if (await needsMore()) {
+              await page.close().catch(() => {});
+              return { ok: false, reason: 'needs-more', failedStep: 'password', attempts: attempt };
+            }
+            const alerted = await anyVisible(live.locator(ALERT_SELECTOR));
+            await page.close().catch(() => {});
+            return {
+              ok: false,
+              reason: alerted ? 'wrong-details' : 'no-form',
+              failedStep: 'password',
+              attempts: attempt,
+            };
+          }
         }
+        if (credential.password) {
+          await password.fill(credential.password);
+        }
+
+        // Step 5: submit
+        currentStep = 'submit';
+        const submit = credential.submitSelector
+          ? await firstVisible(live.locator(credential.submitSelector))
+          : await firstVisible(scope.locator(SUBMIT_SELECTOR));
+        if (!submit) {
+          await page.close().catch(() => {});
+          return { ok: false, reason: 'no-form', failedStep: 'submit', attempts: attempt };
+        }
+
+        const urlBefore = live.url();
+        const settled = Promise.race([
+          live.waitForURL((url) => url.toString() !== urlBefore, { timeout: 10000 }),
+          password.waitFor({ state: 'hidden', timeout: 10000 }),
+          live.waitForFunction(
+            () => document.cookie.length > 0 || localStorage.length > 0,
+            undefined,
+            { timeout: 10000 }
+          ),
+        ]).catch(() => {});
+
+        await submit.click().catch(() => {});
+        await settled;
+        await live.waitForLoadState('domcontentloaded').catch(() => {});
+
+        // Step 6: post-submit-check
+        currentStep = 'post-submit-check';
+
+        // Check for visible alert first -> wrong-details immediately (no retry)
+        const hasAlert = await anyVisible(live.locator(ALERT_SELECTOR));
+        if (hasAlert) {
+          debugLog('auth', 'visible alert detected after submit', {
+            role: credential.role,
+            step: 'post-submit-check',
+          });
+          await page.close().catch(() => {});
+          return { ok: false, reason: 'wrong-details', failedStep: 'post-submit-check', attempts: attempt };
+        }
+
+        const landed = new URL(live.url());
+        if (!originsMatch(landed.origin, targetOrigin)) {
+          debugLog('auth', 'redirected to foreign origin after submit', {
+            role: credential.role,
+            step: 'post-submit-check',
+          });
+          await page.close().catch(() => {});
+          return { ok: false, reason: 'needs-more', failedStep: 'post-submit-check', attempts: attempt };
+        }
+
+        const stillOnSignInForm = await live
+          .locator(PASSWORD_SELECTOR)
+          .first()
+          .isVisible()
+          .catch(() => false);
+        if (stillOnSignInForm) {
+          const more = await needsMore();
+          debugLog('auth', 'password field still visible after submit', {
+            role: credential.role,
+            step: 'post-submit-check',
+          });
+          await page.close().catch(() => {});
+          return {
+            ok: false,
+            reason: more ? 'needs-more' : 'wrong-details',
+            failedStep: 'post-submit-check',
+            attempts: attempt,
+          };
+        }
+
+        // Verify storageState has cookies or localStorage entries
+        const state = await context.storageState();
+        const hasSession =
+          (state.cookies?.length ?? 0) > 0 ||
+          (state.origins?.some((o) => (o.localStorage?.length ?? 0) > 0) ?? false);
+
+        const isSamePathAsLogin = landed.pathname === resolvedLoginUrl.pathname;
+
+        let postLoginOk = true;
+        if (credential.postLoginSelector) {
+          const visible = await live.locator(credential.postLoginSelector).first().isVisible().catch(() => false);
+          if (!visible) postLoginOk = false;
+        }
+        if (credential.postLoginUrl) {
+          if (!landed.pathname.startsWith(credential.postLoginUrl)) postLoginOk = false;
+        }
+
+        if (!hasSession || (isSamePathAsLogin && !credential.postLoginUrl) || !postLoginOk) {
+          debugLog('auth', 'session criteria not met after submit', {
+            role: credential.role,
+            hasSession,
+            isSamePathAsLogin,
+            postLoginOk,
+          });
+          await page.close().catch(() => {});
+          return { ok: false, reason: 'wrong-details', failedStep: 'post-submit-check', attempts: attempt };
+        }
+
+        // Step 7: save storage state if requested
+        if (saveStorageStatePath) {
+          await context.storageState({ path: saveStorageStatePath });
+          await fs.chmod(saveStorageStatePath, 0o600).catch(() => {});
+        }
+
+        const landingPath = landed.pathname + landed.search;
+        debugLog('auth', 'sign-in success', {
+          role: credential.role,
+          landingPath,
+          attempts: attempt,
+        });
+        await page.close().catch(() => {});
+        return { ok: true, landingPath, attempts: attempt };
+      } catch (err: unknown) {
+        const kind = err instanceof Error ? `${err.name} ${err.message}` : '';
+        debugLog('auth', 'sign-in unexpected error caught', {
+          role: credential.role,
+          attempt,
+          step: currentStep,
+        });
+        await page?.close().catch(() => {});
+        page = undefined;
+
+        if (/TimeoutError|net::ERR_/.test(kind)) {
+          lastFailure = { reason: 'unreachable', failedStep: currentStep };
+          continue;
+        }
+
+        return { ok: false, reason: 'unreachable', failedStep: currentStep, attempts: attempt };
       }
-      if (credential.password) await password.fill(credential.password);
-
-      const submit = credential.submitSelector
-        ? await firstVisible(live.locator(credential.submitSelector))
-        : await firstVisible(scope.locator(SUBMIT_SELECTOR));
-      if (!submit) return { ok: false, reason: 'no-form' };
-      const urlBefore = live.url();
-      const settled = Promise.race([
-        live.waitForURL((url) => url.toString() !== urlBefore, { timeout: 8000 }),
-        password.waitFor({ state: 'hidden', timeout: 8000 }),
-      ]).catch(() => {});
-      await submit.click().catch(() => {});
-      await settled;
-      await live.waitForLoadState('domcontentloaded').catch(() => {});
-      await live.waitForTimeout(400);
-
-      if (navigationFailed) return { ok: false, reason: 'unreachable' };
-      const landed = new URL(live.url());
-      if (landed.origin !== origin) return { ok: false, reason: 'needs-more' };
-
-      const stillOnSignInForm = await live
-        .locator(PASSWORD_SELECTOR)
-        .first()
-        .isVisible()
-        .catch(() => false);
-      if (stillOnSignInForm) {
-        return { ok: false, reason: (await needsMore()) ? 'needs-more' : 'wrong-details' };
-      }
-
-      if (saveStorageStatePath) await context.storageState({ path: saveStorageStatePath });
-      return { ok: true, landingPath: landed.pathname + landed.search };
-    } catch (err: unknown) {
-      // Only the kind of error is looked at; its text is never returned or logged.
-      const kind = err instanceof Error ? `${err.name} ${err.message}` : '';
-      return { ok: false, reason: /TimeoutError|net::ERR_/.test(kind) ? 'unreachable' : 'no-form' };
-    } finally {
-      await page?.close().catch(() => {});
     }
+
+    return { ok: false, reason: lastFailure.reason, failedStep: lastFailure.failedStep, attempts: 2 };
   }
 
   async runPreFlight(
@@ -290,9 +547,18 @@ export class PreFlightChecker {
       authDir?: string;
       /** Sessions the person saved, by role. Held in memory only: never written to disk or logged. */
       suppliedSessions?: Record<string, StorageStateData>;
+      customHeaders?: Record<string, string>;
+      userAgent?: string;
+      headerHosts?: string[];
     }
   ): Promise<PreFlightResult> {
-    const urlCheck = await this.checkUrlReachable(targetUrl, tunnelAuth);
+    const urlCheck = await this.checkUrlReachable(
+      targetUrl,
+      tunnelAuth,
+      undefined,
+      options?.customHeaders,
+      options?.headerHosts
+    );
     if (!urlCheck.ok) {
       return {
         ok: false,
@@ -301,6 +567,8 @@ export class PreFlightChecker {
         loginReachable: false,
         roleAuthResults: {},
         error: `Target URL is unreachable (${urlCheck.error || `HTTP ${urlCheck.status}`}). Verify the server or tunnel is running.`,
+        roleDiagnostics: {},
+        startWarning: urlCheck.startWarning,
       };
     }
 
@@ -308,47 +576,85 @@ export class PreFlightChecker {
     const roleStorageStates: Record<string, string | StorageStateData> = {};
     const roleLandingPaths: Record<string, string> = {};
     const roleFailures: Record<string, SignInFailureReason> = {};
+    const roleDiagnostics: Record<
+      string,
+      { ok: boolean; failedStep?: SignInStep; attempts: number; landedPath?: string }
+    > = {};
 
     if (profile?.roles && profile.roles.length > 0) {
       if (options?.authDir) {
-        await fs.mkdir(options.authDir, { recursive: true });
+        await fs.mkdir(options.authDir, { recursive: true, mode: 0o700 });
       }
 
       for (const role of profile.roles) {
         if (options?.browserManager && options?.authDir) {
-          const statePath = path.join(options.authDir, `${role.role}.json`);
+          const slug = role.role.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40);
+          const statePath = path.join(options.authDir, `${slug}.json`);
+          if (!isInside(statePath, options.authDir)) {
+            throw new Error(`State path is outside authDir: ${statePath}`);
+          }
+
           const supplied = options.suppliedSessions?.[role.role];
-          try {
-            if (supplied) {
-              const checked = await this.checkSuppliedSession(options.browserManager, targetUrl, tunnelAuth, supplied);
+          if (supplied) {
+            try {
+              const checked = await this.checkSuppliedSession(
+                options.browserManager,
+                targetUrl,
+                tunnelAuth,
+                supplied,
+                options
+              );
               roleResults[role.role] = checked.ok;
               if (checked.ok) {
                 roleStorageStates[role.role] = supplied;
                 if (checked.landingPath) roleLandingPaths[role.role] = checked.landingPath;
+                roleDiagnostics[role.role] = { ok: true, attempts: 1, landedPath: checked.landingPath };
               } else {
                 roleFailures[role.role] = checked.reason;
+                roleDiagnostics[role.role] = { ok: false, failedStep: 'goto', attempts: 1 };
               }
-              continue;
+            } catch {
+              roleResults[role.role] = false;
+              roleFailures[role.role] = 'unreachable';
+              roleDiagnostics[role.role] = { ok: false, failedStep: 'goto', attempts: 1 };
             }
-            const context = await options.browserManager.createContext({
+            continue;
+          }
+
+          let context: BrowserContext | undefined;
+          try {
+            context = await options.browserManager.createContext({
               baseUrl: targetUrl,
               tunnelAuth,
+              customHeaders: options.customHeaders,
+              userAgent: options.userAgent,
+              headerHosts: options.headerHosts,
             });
             const signedIn = await this.signIn(context, targetUrl, role, statePath);
             roleResults[role.role] = signedIn.ok;
+            roleDiagnostics[role.role] = {
+              ok: signedIn.ok,
+              failedStep: signedIn.ok ? undefined : signedIn.failedStep,
+              attempts: signedIn.attempts ?? 1,
+              landedPath: signedIn.ok ? signedIn.landingPath : undefined,
+            };
+
             if (signedIn.ok) {
               roleStorageStates[role.role] = statePath;
               if (signedIn.landingPath) roleLandingPaths[role.role] = signedIn.landingPath;
             } else {
               roleFailures[role.role] = signedIn.reason ?? 'no-form';
             }
-            await context.close();
           } catch {
             roleResults[role.role] = false;
             roleFailures[role.role] = 'unreachable';
+            roleDiagnostics[role.role] = { ok: false, failedStep: 'goto', attempts: 1 };
+          } finally {
+            await context?.close().catch(() => {});
           }
         } else {
           roleResults[role.role] = true;
+          roleDiagnostics[role.role] = { ok: true, attempts: 0 };
         }
       }
     }
@@ -362,6 +668,8 @@ export class PreFlightChecker {
       roleStorageStates,
       ...(Object.keys(roleFailures).length > 0 ? { roleFailures } : {}),
       roleLandingPaths,
+      roleDiagnostics,
+      ...(urlCheck.startWarning ? { startWarning: urlCheck.startWarning } : {}),
     };
   }
 
@@ -374,17 +682,34 @@ export class PreFlightChecker {
     browserManager: BrowserManager,
     targetUrl: string,
     tunnelAuth: string | undefined,
-    session: StorageStateData
+    session: StorageStateData,
+    options?: {
+      customHeaders?: Record<string, string>;
+      userAgent?: string;
+      headerHosts?: string[];
+    }
   ): Promise<{ ok: true; landingPath: string } | { ok: false; reason: SignInFailureReason }> {
     let context: BrowserContext | undefined;
     try {
-      context = await browserManager.createContext({ baseUrl: targetUrl, tunnelAuth, storageState: session });
+      context = await browserManager.createContext({
+        baseUrl: targetUrl,
+        tunnelAuth,
+        storageState: session,
+        customHeaders: options?.customHeaders,
+        userAgent: options?.userAgent,
+        headerHosts: options?.headerHosts,
+      });
       const page = await context.newPage();
-      const opened = await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
-      if (opened && opened.status() >= 500) return { ok: false, reason: 'unreachable' };
-      await page.waitForTimeout(300);
-      if (new URL(page.url()).origin !== new URL(targetUrl).origin) return { ok: false, reason: 'session-expired' };
-      if (await anyVisible(page.locator(PASSWORD_SELECTOR))) return { ok: false, reason: 'session-expired' };
+      const navRes = await navigate(page, targetUrl, { timeoutMs: 12000 });
+      if (!navRes.ok || (navRes.status && navRes.status >= 500)) return { ok: false, reason: 'unreachable' };
+
+      const targetOrigin = new URL(targetUrl).origin;
+      if (!originsMatch(new URL(page.url()).origin, targetOrigin)) {
+        return { ok: false, reason: 'session-expired' };
+      }
+      if (await anyVisible(page.locator(PASSWORD_SELECTOR))) {
+        return { ok: false, reason: 'session-expired' };
+      }
       const landed = new URL(page.url());
       return { ok: true, landingPath: landed.pathname + landed.search };
     } catch (err: unknown) {
