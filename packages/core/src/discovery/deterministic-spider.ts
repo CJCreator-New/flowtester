@@ -22,6 +22,8 @@ import { exploreInteractiveStates, type ReadForm } from './interactive-states.js
 import { inferCrud, readCrudStructure, probeDeleteConfirm } from './crud-facts.js';
 import { navigate, toTelemetry, looksLikeLogin } from '../navigate.js';
 import { debugLog } from '../debug-log.js';
+import { normalizeRoute, CrawlFrontier } from './frontier.js';
+import { dismissOverlays } from './overlay.js';
 
 export interface FormInputInfo {
   /** The HTML name attribute (may be empty). */
@@ -103,6 +105,20 @@ export interface CrawlOptions {
   role?: string;
   /** Whether the crawl is signed in */
   isSignedIn?: boolean;
+  /** Maximum crawl depth from start URL (default 8) */
+  maxDepth?: number;
+  /** Maximum pages per route shape to bound crawler traps (default 25) */
+  maxPerShape?: number;
+  /** Maximum duration of crawl in milliseconds (default 10 min) */
+  maxDurationMs?: number;
+  /** Epoch ms deadline shared across crawls */
+  deadlineAt?: number;
+  /** Allowed query parameters included in canonical route key */
+  routeQueryParams?: string[];
+  /** Whether to include hash fragment in route key */
+  includeHash?: boolean;
+  /** Whether to seed crawl with /sitemap.xml (default true) */
+  seedSitemap?: boolean;
 }
 
 /** Links and buttons that would end a signed-in session. */
@@ -111,8 +127,8 @@ export const SESSION_ENDING = /log\s*-?\s*out|sign\s*-?\s*out|log\s*off|signoff/
 export const RISKY_TO_CLICK =
   /reset|delete|remove|destroy|clear|cancel|pay|purchase|buy|place order|subscribe|send|submit|finish|confirm|save|apply|upload|download|print|share|invite|deactivate|close/i;
 /** Buttons whose name suggests they only move to another screen. */
-const NAVIGATION_WORDS =
-  /checkout|cart|basket|bag|view|details|more|next|continue|back|browse|shop|start|explore|profile|account|settings|dashboard|home|open/i;
+export const NAVIGATION_WORDS =
+  /checkout|cart|basket|bag|view|details|more|next|continue|back|browse|shop|start|explore|profile|account|settings|dashboard|home|open|target/i;
 const MAX_CLICKS_PER_PAGE = 8;
 const MAX_EXPLORATION_CLICKS = 100;
 /** Pages a crawl visits at most: enough to list a whole site, not so many that a shop's catalogue runs for hours. */
@@ -285,12 +301,33 @@ export class DeterministicSpider {
     let consecutiveWalls = 0;
     const onSite = (u: URL) => isSameSiteOrLoopback(u.host, site.host);
     const exploreClicks = options.exploreClicks ?? true;
+    const maxDepth = options.maxDepth ?? 8;
+    const maxPerShape = options.maxPerShape ?? 25;
+    const envMinutes = process.env.QA_CRAWL_MAX_MINUTES ? parseInt(process.env.QA_CRAWL_MAX_MINUTES, 10) : undefined;
+    const defaultMaxDurationMs = envMinutes && !isNaN(envMinutes) ? envMinutes * 60 * 1000 : 10 * 60 * 1000;
+    const maxDurationMs = options.maxDurationMs ?? defaultMaxDurationMs;
+    const startTime = Date.now();
+    const deadline = Math.min(options.deadlineAt ?? Infinity, startTime + maxDurationMs);
+    let timedOut = false;
 
-    // Pages are told apart by path; the first query string seen for a path is kept so the page
-    // can be reopened (e.g. /item?id=4 in a single-page app).
-    const visited = new Set<string>();
-    const queued = new Set<string>();
-    const queue: string[] = [];
+    const frontier = new CrawlFrontier({
+      maxPerShape,
+      maxDepth,
+      routeQueryParams: options.routeQueryParams,
+      includeHash: options.includeHash,
+    });
+    const normRoute = (u: string) =>
+      normalizeRoute(u, site.toString(), {
+        routeQueryParams: options.routeQueryParams,
+        includeHash: options.includeHash,
+      });
+    const loggedTrapShapes = new Set<string>();
+
+    interface QueueItem {
+      url: string;
+      depth: number;
+    }
+    const queue: QueueItem[] = [];
 
     let activeWorkers = 0;
     let attemptsCount = 0;
@@ -303,14 +340,95 @@ export class DeterministicSpider {
     const onAbort = () => notifyWork();
     options.signal?.addEventListener('abort', onAbort, { once: true });
 
-    const enqueue = (pathAndSearch: string) => {
-      const key = new URL(pathAndSearch, targetUrl).pathname;
-      if (visited.has(key) || queued.has(key)) return;
-      queued.add(key);
-      queue.push(pathAndSearch);
+    const skipped: SkippedPageInfo[] = [];
+
+    const enqueue = (rawUrl: string, depth: number) => {
+      if (options.signal?.aborted || sessionLost || startRedirectedOffSite) return;
+      if (Date.now() >= deadline) {
+        timedOut = true;
+        return;
+      }
+      let u: URL;
+      try {
+        u = new URL(rawUrl, site);
+      } catch {
+        return;
+      }
+      if (!onSite(u)) return;
+
+      const admitted = frontier.admit(u.toString(), site.toString(), depth);
+      if (!admitted.admit) {
+        if (admitted.reason === 'trap-limit') {
+          const shape = frontier.getShape(u.toString(), site.toString());
+          if (!loggedTrapShapes.has(shape)) {
+            loggedTrapShapes.add(shape);
+            debugLog('crawl', 'shape limit reached', {
+              shape,
+              path: redactUrl(u.pathname + u.search),
+            });
+          }
+          skipped.push({ urlPath: redactUrl(u.pathname), why: 'trap-limit' });
+        }
+        return;
+      }
+
+      queue.push({ url: u.toString(), depth });
       notifyWork();
     };
-    for (const start of [...(options.startPaths || []), baseUrlObj.pathname + baseUrlObj.search || '/']) enqueue(start);
+
+    for (const start of [...(options.startPaths || []), baseUrlObj.pathname + baseUrlObj.search || '/']) {
+      enqueue(start, 0);
+    }
+
+    // Sitemap seeding (crawls /sitemap.xml and robots.txt Sitemap: lines)
+    if (options.seedSitemap !== false) {
+      try {
+        const sitemapUrls = [new URL('/sitemap.xml', site).toString()];
+        try {
+          const robotsRes = await context.request.get(new URL('/robots.txt', site).toString(), { timeout: 5000 });
+          if (robotsRes.ok()) {
+            const robotsText = await robotsRes.text();
+            for (const line of robotsText.split(/\r?\n/)) {
+              const m = line.match(/^\s*sitemap:\s*(.+)$/i);
+              if (m && m[1]) {
+                const sm = m[1].trim();
+                if (sm && !sitemapUrls.includes(sm)) sitemapUrls.push(sm);
+              }
+            }
+          }
+        } catch {
+          // Ignore robots fetch failure for sitemap
+        }
+
+        let locCount = 0;
+        for (const smUrl of sitemapUrls) {
+          if (locCount >= 200) break;
+          try {
+            const res = await context.request.get(smUrl, { timeout: 10000 });
+            if (!res.ok()) continue;
+            const text = await res.text();
+            const matches = text.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi);
+            for (const m of matches) {
+              if (m[1]) {
+                const loc = m[1].trim();
+                try {
+                  const locUrl = new URL(loc, site);
+                  if (onSite(locUrl)) {
+                    enqueue(loc, 1);
+                    locCount++;
+                    if (locCount >= 200) break;
+                  }
+                } catch {}
+              }
+            }
+          } catch (err) {
+            debugLog('crawl', 'sitemap fetch failed', { url: smUrl, error: String(err) });
+          }
+        }
+      } catch (err) {
+        debugLog('crawl', 'sitemap seeding failed', { error: String(err) });
+      }
+    }
 
     const pages: SpiderPageInventoryItem[] = [];
     const forms: DiscoveredFormInfo[] = [];
@@ -318,7 +436,6 @@ export class DeterministicSpider {
     const ambiguityQuestions: AmbiguityQuestion[] = [];
     const signInWalls: string[] = [];
     const skippedByRobots: string[] = [];
-    const skipped: SkippedPageInfo[] = [];
     const routes: RouteTelemetry[] = [];
     /** Addresses the site redirected elsewhere on the site, so a link to one is expected to land on the other. */
     const redirects = new Map<string, string>();
@@ -363,7 +480,7 @@ export class DeterministicSpider {
         idleResolvers.push(onWake);
       });
 
-    const evaluatePage = async (page: Page, requested: string, requestedPath: string) => {
+    const evaluatePage = async (page: Page, requested: string, requestedPath: string, requestedDepth = 0) => {
       const fullUrl = new URL(requested, site).toString();
       if (options.robots && !options.robots.isAllowed(requested)) {
         skippedByRobots.push(requestedPath);
@@ -481,8 +598,8 @@ export class DeterministicSpider {
 
           // Only enqueue if the sign-in form is on the exact same site/host as the crawl
           if (!isRoleSignedIn && onSite(landed) && landed.host.toLowerCase() === site.host.toLowerCase()) {
-            redirects.set(requestedPath, landed.pathname);
-            enqueue(landed.pathname + landed.search);
+            redirects.set(requestedPath, normalizeRoute(landed.toString(), site.toString()).path);
+            enqueue(landed.pathname + landed.search, requestedDepth + 1);
           }
           return;
         } else {
@@ -556,9 +673,11 @@ export class DeterministicSpider {
         }
 
         // Redirected within the site: the page is recorded once, under the address it really has.
-        if (landed.pathname !== requestedPath) {
-          redirects.set(requestedPath, landed.pathname);
-          if (visited.has(landed.pathname)) {
+        const landedNorm = normRoute(landed.toString());
+        const requestedNorm = normRoute(requestedPath);
+        if (landedNorm.key !== requestedNorm.key) {
+          redirects.set(requestedPath, landedNorm.path);
+          if (frontier.has(landedNorm.key)) {
             telemetry.outcome = 'skipped';
             telemetry.skipReason = 'duplicate';
             routes.push(telemetry);
@@ -573,27 +692,84 @@ export class DeterministicSpider {
             });
             return;
           }
-          visited.add(landed.pathname);
+          frontier.markVisited(landedNorm.key);
         }
 
         const pageUrl = page.url();
         // Recorded without secrets: some sign-in forms put the password in the address.
-        const currentPath = redactUrl(landed.pathname + landed.search);
+        const currentPath = redactUrl(
+          landed.pathname + landed.search + (options.includeHash && landed.hash ? landed.hash : '')
+        );
         const title = await page.title().catch(() => currentPath);
 
-        // 1. Discover links (never the ones that would end a signed-in session or are transient)
-        const hrefs = await page.$$eval('a[href]', (anchors) =>
-          anchors
-            .filter((a) => !a.closest('[data-transient="true"]'))
-            .map((a) => ({ href: a.getAttribute('href') || '', text: (a.textContent || '').trim() }))
-        );
+        // Dismiss overlays (cookie banners) before link extraction
+        await dismissOverlays(page);
 
-        for (const { href, text } of hrefs) {
+        // 1. Discover links (anchors, role=link, data-href, get-forms)
+        const rawLinks = await page.evaluate(() => {
+          const results: Array<{ href: string; text: string }> = [];
+
+          // (a) a[href]
+          const anchors = Array.from(document.querySelectorAll('a[href]'));
+          for (const a of anchors) {
+            if (a.closest('[data-transient="true"]')) continue;
+            results.push({
+              href: a.getAttribute('href') || '',
+              text: (a.textContent || '').trim(),
+            });
+          }
+
+          // (b) [role=link][data-href], [data-href], [role=link]
+          const extraLinkEls = Array.from(document.querySelectorAll('[role="link"], [data-href]'));
+          for (const el of extraLinkEls) {
+            if (el.tagName.toLowerCase() === 'a') continue;
+            if (el.closest('[data-transient="true"]')) continue;
+            const href = el.getAttribute('href') || el.getAttribute('data-href') || '';
+            if (href) {
+              results.push({
+                href,
+                text: (el.textContent || '').trim(),
+              });
+            }
+          }
+
+          // (c) <form method=get action=...> without fields that need input
+          const forms = Array.from(document.querySelectorAll('form'));
+          for (const f of forms) {
+            const method = (f.getAttribute('method') || 'get').toLowerCase();
+            if (method !== 'get') continue;
+            const hasSensitiveOrRequired = f.querySelector(
+              'input[type="password"], input[type="file"], input[required], select[required], textarea[required]'
+            );
+            if (hasSensitiveOrRequired) continue;
+            const action = f.getAttribute('action');
+            if (action) {
+              results.push({ href: action, text: 'form-get' });
+            }
+          }
+
+          return results;
+        });
+
+        for (const { href, text } of rawLinks) {
           try {
-            if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
+            if (!href || href.startsWith('javascript:')) continue;
             if (SESSION_ENDING.test(href) || SESSION_ENDING.test(text)) continue;
+
+            if (href.startsWith('#')) {
+              if (options.includeHash) {
+                const resolved = new URL(href, pageUrl);
+                if (onSite(resolved)) {
+                  enqueue(resolved.toString(), requestedDepth + 1);
+                }
+              }
+              continue;
+            }
+
             const resolved = new URL(href, pageUrl);
-            if (onSite(resolved)) enqueue(resolved.pathname + resolved.search);
+            if (onSite(resolved)) {
+              enqueue(resolved.toString(), requestedDepth + 1);
+            }
           } catch {
             // invalid URL ignored
           }
@@ -701,17 +877,21 @@ export class DeterministicSpider {
                 page.waitForTimeout(250),
               ]).catch(() => {});
               const after = new URL(page.url());
-              if (onSite(after) && after.pathname !== landed.pathname) {
-                enqueue(after.pathname + after.search);
-                // A button or script link that moved to another page is navigation too.
-                if (!links.some((l) => l.selector === el.selector)) {
-                  links.push({
-                    name: el.name,
-                    selector: el.selector,
-                    to: after.pathname,
-                    scripted: true,
-                    landmark: el.landmark,
-                  });
+              if (onSite(after)) {
+                const normAfter = normRoute(after.toString());
+                const normLanded = normRoute(landed.toString());
+                if (normAfter.key !== normLanded.key) {
+                  enqueue(after.toString(), requestedDepth + 1);
+                  // A button or script link that moved to another page is navigation too.
+                  if (!links.some((l) => l.selector === el.selector)) {
+                    links.push({
+                      name: el.name,
+                      selector: el.selector,
+                      to: normAfter.path,
+                      scripted: true,
+                      landmark: el.landmark,
+                    });
+                  }
                 }
               }
             } catch {
@@ -784,28 +964,30 @@ export class DeterministicSpider {
           !options.signal?.aborted &&
           !sessionLost &&
           !startRedirectedOffSite &&
+          !timedOut &&
+          Date.now() < deadline &&
           pages.length < this.maxPages &&
           attemptsCount < maxAttempts
         ) {
-          let requested: string | null = null;
+          let requestedItem: QueueItem | null = null;
           let requestedPath = '';
 
           while (queue.length > 0) {
             const item = queue.shift()!;
-            const p = new URL(item, targetUrl).pathname;
-            if (!visited.has(p)) {
-              visited.add(p);
-              requested = item;
-              requestedPath = p;
+            const norm = normRoute(item.url);
+            if (!frontier.isVisited(norm.key)) {
+              frontier.markVisited(norm.key);
+              requestedItem = item;
+              requestedPath = norm.key;
               break;
             }
           }
 
-          if (requested) {
+          if (requestedItem) {
             attemptsCount++;
             activeWorkers++;
             try {
-              await evaluatePage(workerPage, requested, requestedPath);
+              await evaluatePage(workerPage, requestedItem.url, requestedPath, requestedItem.depth);
             } finally {
               activeWorkers--;
               notifyWork();
@@ -817,6 +999,8 @@ export class DeterministicSpider {
               attemptsCount >= maxAttempts ||
               sessionLost ||
               startRedirectedOffSite ||
+              timedOut ||
+              Date.now() >= deadline ||
               options.signal?.aborted
             ) {
               break;
@@ -833,13 +1017,26 @@ export class DeterministicSpider {
     await Promise.all(workers);
     options.signal?.removeEventListener('abort', onAbort);
 
-    // If session was lost, drain remaining queue entries into skipped with session-lost (up to 50)
-    if (sessionLost) {
+    // If deadline passed, session was lost, or maxPages reached: drain remaining queue entries
+    if (timedOut || Date.now() >= deadline) {
       let count = 0;
       for (const left of queue) {
-        const leftPath = new URL(left, targetUrl).pathname;
-        if (!visited.has(leftPath)) {
-          skipped.push({ urlPath: leftPath, why: 'session-lost' });
+        const norm = normRoute(left.url);
+        if (!frontier.isVisited(norm.key)) {
+          skipped.push({ urlPath: redactUrl(norm.path), why: 'time-limit' });
+          count++;
+          if (count >= 50) break;
+        }
+      }
+      if (count === 0 && !skipped.some((s) => s.why === 'time-limit')) {
+        skipped.push({ urlPath: redactUrl(normRoute(targetUrl).path), why: 'time-limit' });
+      }
+    } else if (sessionLost) {
+      let count = 0;
+      for (const left of queue) {
+        const norm = normRoute(left.url);
+        if (!frontier.isVisited(norm.key)) {
+          skipped.push({ urlPath: redactUrl(norm.path), why: 'session-lost' });
           count++;
           if (count >= 50) break;
         }
@@ -847,8 +1044,8 @@ export class DeterministicSpider {
     } else if (pages.length >= this.maxPages && !options.signal?.aborted) {
       // Still queued when the page limit ended the crawl: found, never opened.
       for (const left of queue) {
-        const leftPath = new URL(left, targetUrl).pathname;
-        if (!visited.has(leftPath)) skipped.push({ urlPath: leftPath, why: 'page-limit' });
+        const norm = normRoute(left.url);
+        if (!frontier.isVisited(norm.key)) skipped.push({ urlPath: redactUrl(norm.path), why: 'page-limit' });
       }
     }
 

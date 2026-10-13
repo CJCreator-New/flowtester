@@ -381,7 +381,7 @@
         "fixtures/test-app/server.js",
         "packages/core/src/competitive/robots.ts"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-113",

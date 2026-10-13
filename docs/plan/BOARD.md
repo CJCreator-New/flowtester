@@ -15,7 +15,7 @@ All tickets start `todo`. Update the Status column when a ticket is picked up (`
 | 2 | T-109 | Wizard: show crawl coverage and crawl health | M | T-101, T-108 | G-019, G-053 | done |
 | 2 | T-110 | Deterministic sign-in (preflight) | L | T-101, T-102, T-103, T-105, T-107 | G-001, G-002, G-003, G-004, G-022, G-023, G-037, G-027 | done |
 | 2 | T-111 | Spider reliability core | L | T-101, T-102, T-103, T-105, T-107 | G-005, G-006, G-007, G-009, G-015, G-021, G-038, G-040, G-027 | done |
-| 3 | T-112 | Spider link discovery and trap protection | M | T-102, T-111 | G-010, G-020, G-031 | todo |
+| 3 | T-112 | Spider link discovery and trap protection | M | T-102, T-111 | G-010, G-020, G-031 | done |
 | 3 | T-114 | Orchestrator: reuse sign-in, detect session loss, real status for Permission Matrix | M | T-102, T-103, T-107, T-110 | G-008, G-011, G-014, G-004 | todo |
 | 4 | T-113 | Discovery agent: headers everywhere, one sign-in, session-drop reporting, telemetry | M | T-102, T-103, T-105, T-110, T-111, T-112 | G-004, G-014, G-006, G-007, G-010 | todo |
 | 5 | T-115 | Runner integration: headers to every stage, reuse sign-in, per-run auth dir, redacted errors | L | T-103, T-104, T-105, T-110, T-113, T-114 | G-004, G-014, G-022, G-036 | todo |
