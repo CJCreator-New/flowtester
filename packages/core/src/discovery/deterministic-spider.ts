@@ -1,7 +1,17 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import type { BrowserContext, Page } from 'playwright';
-import type { TestCaseStep, PageInventoryItem, SensitiveAction, AmbiguityQuestion, ElementInventoryItem, PageLink } from '@qa/types';
+import type {
+  TestCaseStep,
+  PageInventoryItem,
+  SensitiveAction,
+  AmbiguityQuestion,
+  ElementInventoryItem,
+  PageLink,
+  RouteTelemetry,
+  SkippedPageInfo,
+  RouteSkipReason,
+} from '@qa/types';
 import { SafetyFilter } from './safety-filter.js';
 import { collectElementInventory, TEST_ID_ATTRIBUTES } from './element-inventory.js';
 import { redactUrl } from '../redact.js';
@@ -10,6 +20,8 @@ import { readLayoutFingerprint } from '../competitive/safe-crawler.js';
 import type { RobotsPolicy } from '../competitive/robots.js';
 import { exploreInteractiveStates, type ReadForm } from './interactive-states.js';
 import { inferCrud, readCrudStructure, probeDeleteConfirm } from './crud-facts.js';
+import { navigate, toTelemetry, looksLikeLogin } from '../navigate.js';
+import { debugLog } from '../debug-log.js';
 
 export interface FormInputInfo {
   /** The HTML name attribute (may be empty). */
@@ -38,8 +50,12 @@ export interface DiscoveredFormInfo {
   opening?: TestCaseStep[];
 }
 
+export interface SpiderPageInventoryItem extends PageInventoryItem {
+  exploreErrors?: number;
+}
+
 export interface SpiderResult {
-  pages: PageInventoryItem[];
+  pages: SpiderPageInventoryItem[];
   forms: DiscoveredFormInfo[];
   sensitiveActions: SensitiveAction[];
   ambiguityQuestions: AmbiguityQuestion[];
@@ -48,13 +64,13 @@ export interface SpiderResult {
   /** Same-site pages robots.txt asked crawlers to leave alone. */
   skippedByRobots?: string[];
   /** Pages found but not reached, and why. Paths only, never a query string. */
-  skipped?: SkippedPage[];
+  skipped?: SkippedPageInfo[];
+  routes?: RouteTelemetry[];
+  sessionLost?: boolean;
+  startRedirectedOffSite?: boolean;
 }
 
-export interface SkippedPage {
-  urlPath: string;
-  why: 'page-limit' | 'did-not-load' | 'robots' | 'sign-in';
-}
+export type SkippedPage = SkippedPageInfo;
 
 export interface CrawlOptions {
   /** Where to start besides the target URL, e.g. the page a role landed on after signing in. */
@@ -77,6 +93,16 @@ export interface CrawlOptions {
   onPage?: (page: PageInventoryItem, pagesSoFar: number, forms: SpiderResult['forms']) => void;
   /** Once aborted, no more pages are opened: the crawl returns what it found so far. */
   signal?: AbortSignal;
+  /** Maximum navigation attempts before giving up (default maxPages * 3) */
+  maxAttempts?: number;
+  /** Known login paths for detecting bounce / auth walls */
+  knownLoginPaths?: string[];
+  /** How many consecutive sign-in walls / 401s before session is declared lost (default 3) */
+  stopAfterWalls?: number;
+  /** Role name (e.g. 'visitor', 'admin', 'manager') */
+  role?: string;
+  /** Whether the crawl is signed in */
+  isSignedIn?: boolean;
 }
 
 /** Links and buttons that would end a signed-in session. */
@@ -91,6 +117,19 @@ const MAX_CLICKS_PER_PAGE = 8;
 const MAX_EXPLORATION_CLICKS = 100;
 /** Pages a crawl visits at most: enough to list a whole site, not so many that a shop's catalogue runs for hours. */
 export const DEFAULT_MAX_PAGES = 200;
+
+function isLoopback(h: string): boolean {
+  const hostWithoutPort = h.replace(/:\d+$/, '').toLowerCase();
+  return hostWithoutPort === 'localhost' || hostWithoutPort === '127.0.0.1';
+}
+
+function isSameSiteOrLoopback(h1: string, h2: string): boolean {
+  if (isSameSite(h1, h2)) return true;
+  const p1 = h1.match(/:(\d+)$/)?.[1] || '';
+  const p2 = h2.match(/:(\d+)$/)?.[1] || '';
+  if (p1 === p2 && isLoopback(h1) && isLoopback(h2)) return true;
+  return false;
+}
 
 /**
  * The page's visible links and where each goes, from its element inventory: the facts Navigation
@@ -140,86 +179,84 @@ export function contentKeyOf(elements: ElementInventoryItem[], formCount: number
 /** Every form on the page as it is now, with whether a person could see it. */
 export async function readPageForms(page: Page): Promise<ReadForm[]> {
   return page.$$eval(
-      'form',
-      (formEls, testIdAttributes) =>
-        formEls.map((f) => {
-          const action = f.getAttribute('action') || '';
-          const method = (f.getAttribute('method') || 'GET').toUpperCase();
-          const clean = (s: string | null | undefined) => (s || '').replace(/\s+/g, ' ').trim();
-          const testIdSelector = (el: Element) => {
-            const attr = testIdAttributes.find((a) => el.hasAttribute(a));
-            return attr ? `[${attr}="${el.getAttribute(attr)}"]` : null;
+    'form',
+    (formEls, testIdAttributes) =>
+      formEls.map((f) => {
+        const action = f.getAttribute('action') || '';
+        const method = (f.getAttribute('method') || 'GET').toUpperCase();
+        const clean = (s: string | null | undefined) => (s || '').replace(/\s+/g, ' ').trim();
+        const testIdSelector = (el: Element) => {
+          const attr = testIdAttributes.find((a) => el.hasAttribute(a));
+          return attr ? `[${attr}="${el.getAttribute(attr)}"]` : null;
+        };
+        const inputs = Array.from(f.querySelectorAll('input:not([type="hidden"]), select, textarea')).map((inp) => {
+          const name = inp.getAttribute('name') || '';
+          const type = inp.getAttribute('type') || inp.tagName.toLowerCase();
+          const id = inp.getAttribute('id');
+          const ariaLabel = clean(inp.getAttribute('aria-label'));
+          const placeholder = clean(inp.getAttribute('placeholder'));
+          const selector =
+            testIdSelector(inp) ||
+            (id
+              ? `#${id}`
+              : name
+                ? `[name="${name}"]`
+                : ariaLabel
+                  ? `[aria-label="${ariaLabel}"]`
+                  : placeholder
+                    ? `[placeholder="${placeholder}"]`
+                    : `${inp.tagName.toLowerCase()}[type="${type}"]`);
+          const required = inp.hasAttribute('required');
+          const forLabel = id ? document.querySelector(`label[for="${id}"]`) : null;
+          const wrapping = inp.closest('label')?.cloneNode(true) as Element | undefined;
+          wrapping?.querySelectorAll('input, select, textarea').forEach((c) => c.remove());
+          // What a person would call the field: its label, then placeholder, then id, then name.
+          const label =
+            clean(inp.getAttribute('aria-label')) ||
+            clean(forLabel?.textContent) ||
+            clean(wrapping?.textContent) ||
+            clean(inp.getAttribute('placeholder')) ||
+            clean(id) ||
+            name;
+          const attr = (n: string) => inp.getAttribute(n) ?? undefined;
+          const num = (n: string) => {
+            const v = inp.getAttribute(n);
+            return v !== null && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined;
           };
-          const inputs = Array.from(f.querySelectorAll('input:not([type="hidden"]), select, textarea')).map(
-            (inp) => {
-              const name = inp.getAttribute('name') || '';
-              const type = inp.getAttribute('type') || inp.tagName.toLowerCase();
-              const id = inp.getAttribute('id');
-              const ariaLabel = clean(inp.getAttribute('aria-label'));
-              const placeholder = clean(inp.getAttribute('placeholder'));
-              const selector =
-                testIdSelector(inp) ||
-                (id
-                  ? `#${id}`
-                  : name
-                    ? `[name="${name}"]`
-                    : ariaLabel
-                      ? `[aria-label="${ariaLabel}"]`
-                      : placeholder
-                        ? `[placeholder="${placeholder}"]`
-                        : `${inp.tagName.toLowerCase()}[type="${type}"]`);
-              const required = inp.hasAttribute('required');
-              const forLabel = id ? document.querySelector(`label[for="${id}"]`) : null;
-              const wrapping = inp.closest('label')?.cloneNode(true) as Element | undefined;
-              wrapping?.querySelectorAll('input, select, textarea').forEach((c) => c.remove());
-              // What a person would call the field: its label, then placeholder, then id, then name.
-              const label =
-                clean(inp.getAttribute('aria-label')) ||
-                clean(forLabel?.textContent) ||
-                clean(wrapping?.textContent) ||
-                clean(inp.getAttribute('placeholder')) ||
-                clean(id) ||
-                name;
-              const attr = (n: string) => inp.getAttribute(n) ?? undefined;
-              const num = (n: string) => {
-                const v = inp.getAttribute(n);
-                return v !== null && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined;
-              };
-              return {
-                name,
-                label,
-                type,
-                selector,
-                required,
-                pattern: attr('pattern'),
-                min: attr('min'),
-                max: attr('max'),
-                minLength: num('minlength'),
-                maxLength: num('maxlength'),
-              };
-            }
-          );
+          return {
+            name,
+            label,
+            type,
+            selector,
+            required,
+            pattern: attr('pattern'),
+            min: attr('min'),
+            max: attr('max'),
+            minLength: num('minlength'),
+            maxLength: num('maxlength'),
+          };
+        });
 
-          const submitBtn = f.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
-          let submitSelector: string | undefined;
-          if (submitBtn) {
-            const sTestId = testIdSelector(submitBtn);
-            const sId = submitBtn.getAttribute('id');
-            submitSelector = sTestId
-              ? sTestId
-              : sId
-                ? `#${sId}`
-                : submitBtn.tagName.toLowerCase() === 'input'
-                  ? 'input[type="submit"]'
-                  : 'button[type="submit"]';
-          }
+        const submitBtn = f.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+        let submitSelector: string | undefined;
+        if (submitBtn) {
+          const sTestId = testIdSelector(submitBtn);
+          const sId = submitBtn.getAttribute('id');
+          submitSelector = sTestId
+            ? sTestId
+            : sId
+              ? `#${sId}`
+              : submitBtn.tagName.toLowerCase() === 'input'
+                ? 'input[type="submit"]'
+                : 'button[type="submit"]';
+        }
 
-          // checkVisibility also sees through a closed <details>, which keeps its content out of the layout.
-          const visible = f.getClientRects().length > 0 && f.checkVisibility({ checkVisibilityCSS: true });
-          return { action, method, inputs, submitButtonSelector: submitSelector, visible };
-        }),
-      TEST_ID_ATTRIBUTES
-    );
+        // checkVisibility also sees through a closed <details>, which keeps its content out of the layout.
+        const visible = f.getClientRects().length > 0 && f.checkVisibility({ checkVisibilityCSS: true });
+        return { action, method, inputs, submitButtonSelector: submitSelector, visible };
+      }),
+    TEST_ID_ATTRIBUTES
+  );
 }
 
 export class DeterministicSpider {
@@ -234,17 +271,19 @@ export class DeterministicSpider {
   async crawl(context: BrowserContext, targetUrl: string, options: CrawlOptions = {}): Promise<SpiderResult> {
     const concurrency = Math.max(1, Math.min(5, options.concurrency ?? 2));
     const pageDelayMs = options.pageDelayMs !== undefined ? options.pageDelayMs : 100;
-
-    if (options.customHeaders && Object.keys(options.customHeaders).length > 0) {
-      await context.setExtraHTTPHeaders(options.customHeaders).catch(() => {});
-    }
+    const maxAttempts = options.maxAttempts ?? this.maxPages * 3;
+    const stopAfterWalls = options.stopAfterWalls ?? 3;
+    const isRoleSignedIn = Boolean(options.isSignedIn || (options.role && options.role !== 'visitor'));
 
     const baseUrlObj = new URL(targetUrl);
     // The site is where the start address lands: example.com that redirects to www.example.com is
     // crawled as www.example.com. Until a page has opened, it's the address as typed.
     let site = new URL(baseUrlObj.origin);
     let landedOnce = false;
-    const onSite = (u: URL) => isSameSite(u.host, site.host);
+    let startRedirectedOffSite = false;
+    let sessionLost = false;
+    let consecutiveWalls = 0;
+    const onSite = (u: URL) => isSameSiteOrLoopback(u.host, site.host);
     const exploreClicks = options.exploreClicks ?? true;
 
     // Pages are told apart by path; the first query string seen for a path is kept so the page
@@ -254,6 +293,7 @@ export class DeterministicSpider {
     const queue: string[] = [];
 
     let activeWorkers = 0;
+    let attemptsCount = 0;
     let idleResolvers: (() => void)[] = [];
     const notifyWork = () => {
       const resolvers = idleResolvers;
@@ -272,13 +312,14 @@ export class DeterministicSpider {
     };
     for (const start of [...(options.startPaths || []), baseUrlObj.pathname + baseUrlObj.search || '/']) enqueue(start);
 
-    const pages: PageInventoryItem[] = [];
+    const pages: SpiderPageInventoryItem[] = [];
     const forms: DiscoveredFormInfo[] = [];
     const sensitiveActions: SensitiveAction[] = [];
     const ambiguityQuestions: AmbiguityQuestion[] = [];
     const signInWalls: string[] = [];
     const skippedByRobots: string[] = [];
-    const skipped: SkippedPage[] = [];
+    const skipped: SkippedPageInfo[] = [];
+    const routes: RouteTelemetry[] = [];
     /** Addresses the site redirected elsewhere on the site, so a link to one is expected to land on the other. */
     const redirects = new Map<string, string>();
     let questionCounter = 1;
@@ -286,9 +327,24 @@ export class DeterministicSpider {
     let screenshotIndex = 0;
     if (options.screenshotDir) await fs.mkdir(options.screenshotDir, { recursive: true });
 
+    // Shared pacing clock across all workers
+    let lastLoadAt = 0;
+    const waitForPacing = async () => {
+      if (pageDelayMs > 0) {
+        const now = Date.now();
+        const waitMs = Math.max(0, lastLoadAt + pageDelayMs - now);
+        if (waitMs > 0) {
+          lastLoadAt = Math.max(lastLoadAt, now) + pageDelayMs;
+          await new Promise((res) => setTimeout(res, waitMs));
+        } else {
+          lastLoadAt = now;
+        }
+      }
+    };
+
     const waitForWork = () =>
       new Promise<void>((resolve) => {
-        if (options.signal?.aborted) return resolve();
+        if (options.signal?.aborted || sessionLost || startRedirectedOffSite) return resolve();
         let done = false;
         const timer = setTimeout(() => {
           if (!done) {
@@ -307,58 +363,219 @@ export class DeterministicSpider {
         idleResolvers.push(onWake);
       });
 
-    const evaluatePage = async (
-      page: Page,
-      requested: string,
-      requestedPath: string,
-      getLastLoadAt: () => number,
-      setLastLoadAt: (t: number) => void
-    ) => {
+    const evaluatePage = async (page: Page, requested: string, requestedPath: string) => {
       const fullUrl = new URL(requested, site).toString();
       if (options.robots && !options.robots.isAllowed(requested)) {
         skippedByRobots.push(requestedPath);
         skipped.push({ urlPath: requestedPath, why: 'robots' });
+        const rTel: RouteTelemetry = {
+          requestedPath: redactUrl(requestedPath),
+          outcome: 'skipped',
+          skipReason: 'robots',
+          attempts: 0,
+          durationMs: 0,
+          who: options.role || (isRoleSignedIn ? 'signed-in' : 'visitor'),
+        };
+        routes.push(rTel);
+        debugLog('crawl', 'route skipped by robots', {
+          path: rTel.requestedPath,
+          outcome: 'skipped',
+          reason: 'robots',
+          attempts: 0,
+          ms: 0,
+        });
         return;
       }
 
-      try {
-        // Go easy on sites we don't own: a pause between page loads (default 100ms per FR-1.7).
-        if (pageDelayMs > 0) {
-          const waitMs = Math.max(0, getLastLoadAt() + pageDelayMs - Date.now());
-          if (waitMs > 0) await page.waitForTimeout(waitMs);
-        }
-        setLastLoadAt(Date.now());
-        await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-        const landed = new URL(page.url());
-        const hasSignInForm = (await page.locator('input[type="password"]').count()) > 0;
+      let recorded = false;
+      let exploreErrors = 0;
 
-        // Sent somewhere else to sign in: the requested page is behind a sign-in. A start address
-        // that lands on another host's sign-in form (a company sign-in service) doesn't move the site.
-        if (landed.pathname !== requestedPath && hasSignInForm) {
+      try {
+        await waitForPacing();
+
+        let navRes;
+        try {
+          navRes = await navigate(page, fullUrl, {
+            timeoutMs: 10000,
+            needLinks: true,
+            who: options.role || (isRoleSignedIn ? 'signed-in' : 'visitor'),
+          });
+        } catch (err: unknown) {
+          const detail = err instanceof Error ? err.name : 'other';
+          const rTel: RouteTelemetry = {
+            requestedPath: redactUrl(requestedPath),
+            outcome: 'skipped',
+            skipReason: 'did-not-load',
+            detail,
+            attempts: 1,
+            durationMs: 0,
+            who: options.role || (isRoleSignedIn ? 'signed-in' : 'visitor'),
+          };
+          routes.push(rTel);
+          skipped.push({ urlPath: requestedPath, why: 'did-not-load', detail });
+          debugLog('crawl', 'route navigation failed', {
+            path: rTel.requestedPath,
+            outcome: 'skipped',
+            reason: 'did-not-load',
+            attempts: 1,
+            ms: 0,
+          });
+          return;
+        }
+
+        const landed = new URL(navRes.finalUrl || page.url());
+        const telemetry = toTelemetry(navRes, requestedPath, {
+          who: options.role || (isRoleSignedIn ? 'signed-in' : 'visitor'),
+        });
+
+        // Classification 1: Navigation did not succeed (timeout, network error)
+        if (!navRes.ok) {
+          const skipWhy: RouteSkipReason = navRes.error?.kind === 'timeout' ? 'timeout' : 'did-not-load';
+          const detail = navRes.error?.kind || 'net';
+          telemetry.outcome = 'skipped';
+          telemetry.skipReason = skipWhy;
+          telemetry.detail = detail;
+          routes.push(telemetry);
+          skipped.push({ urlPath: requestedPath, why: skipWhy, status: navRes.status, detail });
+          debugLog('crawl', 'route failed to load', {
+            path: telemetry.requestedPath,
+            status: telemetry.status,
+            finalPath: telemetry.finalPath,
+            outcome: 'skipped',
+            reason: skipWhy,
+            attempts: telemetry.attempts,
+            ms: telemetry.durationMs,
+          });
+          return;
+        }
+
+        // Classification 2: Bounce / sign-in wall / session loss (Scope 6)
+        // Must be checked before first-landing rebase so a start URL sent to another host's sign-in
+        // service does not move the site to that service.
+        const hasSignInForm = await looksLikeLogin(page, options.knownLoginPaths);
+        const isLoginPath = options.knownLoginPaths?.includes(landed.pathname);
+        const isWall = (hasSignInForm && (landed.pathname !== requestedPath || isLoginPath)) || navRes.status === 401;
+
+        if (isWall) {
           signInWalls.push(requestedPath);
-          skipped.push({ urlPath: requestedPath, why: 'sign-in' });
-          if (onSite(landed)) {
-            // A link there lands on the sign-in page for whoever is exploring.
+          if (isRoleSignedIn) {
+            consecutiveWalls++;
+            if (consecutiveWalls >= stopAfterWalls) {
+              sessionLost = true;
+            }
+          }
+          const skipWhy: RouteSkipReason = isRoleSignedIn ? 'session-lost' : 'sign-in';
+          telemetry.outcome = 'skipped';
+          telemetry.skipReason = skipWhy;
+          routes.push(telemetry);
+          skipped.push({ urlPath: requestedPath, why: skipWhy, status: navRes.status });
+          debugLog('crawl', 'route hit sign-in wall or session loss', {
+            path: telemetry.requestedPath,
+            status: telemetry.status,
+            finalPath: telemetry.finalPath,
+            outcome: 'skipped',
+            reason: skipWhy,
+            attempts: telemetry.attempts,
+            ms: telemetry.durationMs,
+          });
+
+          // Only enqueue if the sign-in form is on the exact same site/host as the crawl
+          if (!isRoleSignedIn && onSite(landed) && landed.host.toLowerCase() === site.host.toLowerCase()) {
             redirects.set(requestedPath, landed.pathname);
             enqueue(landed.pathname + landed.search);
           }
           return;
+        } else {
+          consecutiveWalls = 0;
         }
-        if (!landedOnce) {
-          landedOnce = true;
-          if (/^https?:$/.test(landed.protocol)) site = new URL(landed.origin);
+
+        // Classification 3: First landing rebase rule (Scope 7)
+        if (!landedOnce && (navRes.status === undefined || navRes.status < 400)) {
+          if (isSameSiteOrLoopback(landed.host, site.host)) {
+            landedOnce = true;
+            site = new URL(landed.origin);
+          } else {
+            // First landing redirected off-site!
+            startRedirectedOffSite = true;
+            telemetry.outcome = 'skipped';
+            telemetry.skipReason = 'off-site-redirect';
+            routes.push(telemetry);
+            skipped.push({ urlPath: requestedPath, why: 'off-site-redirect', status: navRes.status });
+            debugLog('crawl', 'start address redirected off-site', {
+              path: telemetry.requestedPath,
+              status: telemetry.status,
+              finalPath: telemetry.finalPath,
+              outcome: 'skipped',
+              reason: 'off-site-redirect',
+              attempts: telemetry.attempts,
+              ms: telemetry.durationMs,
+            });
+            return;
+          }
         }
-        // Redirected off the site: not one of its pages.
+
+        // Classification 4: Off-site redirect
         if (!onSite(landed)) {
-          skipped.push({ urlPath: requestedPath, why: 'did-not-load' });
+          telemetry.outcome = 'skipped';
+          telemetry.skipReason = 'off-site-redirect';
+          routes.push(telemetry);
+          skipped.push({
+            urlPath: requestedPath,
+            why: 'off-site-redirect',
+            status: navRes.status,
+            finalPath: redactUrl(landed.pathname + landed.search),
+          });
+          debugLog('crawl', 'route redirected off-site', {
+            path: telemetry.requestedPath,
+            status: telemetry.status,
+            finalPath: telemetry.finalPath,
+            outcome: 'skipped',
+            reason: 'off-site-redirect',
+            attempts: telemetry.attempts,
+            ms: telemetry.durationMs,
+          });
           return;
         }
+
+        // Classification 5: HTTP >= 400 (not recorded in pages)
+        if (navRes.status && navRes.status >= 400) {
+          telemetry.outcome = 'skipped';
+          telemetry.skipReason = 'http-error';
+          routes.push(telemetry);
+          skipped.push({ urlPath: requestedPath, why: 'http-error', status: navRes.status });
+          debugLog('crawl', 'route returned http-error', {
+            path: telemetry.requestedPath,
+            status: telemetry.status,
+            finalPath: telemetry.finalPath,
+            outcome: 'skipped',
+            reason: 'http-error',
+            attempts: telemetry.attempts,
+            ms: telemetry.durationMs,
+          });
+          return;
+        }
+
         // Redirected within the site: the page is recorded once, under the address it really has.
         if (landed.pathname !== requestedPath) {
           redirects.set(requestedPath, landed.pathname);
-          if (visited.has(landed.pathname)) return;
+          if (visited.has(landed.pathname)) {
+            telemetry.outcome = 'skipped';
+            telemetry.skipReason = 'duplicate';
+            routes.push(telemetry);
+            debugLog('crawl', 'route redirected to already-visited path', {
+              path: telemetry.requestedPath,
+              status: telemetry.status,
+              finalPath: telemetry.finalPath,
+              outcome: 'skipped',
+              reason: 'duplicate',
+              attempts: telemetry.attempts,
+              ms: telemetry.durationMs,
+            });
+            return;
+          }
           visited.add(landed.pathname);
         }
+
         const pageUrl = page.url();
         // Recorded without secrets: some sign-in forms put the password in the address.
         const currentPath = redactUrl(landed.pathname + landed.search);
@@ -425,7 +642,7 @@ export class DeterministicSpider {
             .catch(() => (screenshotPath = undefined));
         }
 
-        const pageItem: PageInventoryItem = {
+        const pageItem: SpiderPageInventoryItem = {
           urlPath: currentPath,
           title,
           interactiveElementsCount: elements.length,
@@ -437,7 +654,27 @@ export class DeterministicSpider {
           links,
           contentKey: contentKeyOf(elements, pageForms.length),
         };
+        if (pages.length >= this.maxPages) {
+          telemetry.outcome = 'skipped';
+          telemetry.skipReason = 'page-limit';
+          routes.push(telemetry);
+          skipped.push({ urlPath: requestedPath, why: 'page-limit' });
+          return;
+        }
         pages.push(pageItem);
+        recorded = true;
+        telemetry.outcome = 'recorded';
+        telemetry.skipReason = undefined;
+        routes.push(telemetry);
+        debugLog('crawl', 'route recorded', {
+          path: telemetry.requestedPath,
+          status: telemetry.status,
+          finalPath: telemetry.finalPath,
+          outcome: 'recorded',
+          reason: undefined,
+          attempts: telemetry.attempts,
+          ms: telemetry.durationMs,
+        });
         options.onPage?.(pageItem, pages.length, forms.slice(forms.length - pageForms.length));
 
         // 4. Single-page apps navigate by script: try the controls that look like navigation.
@@ -449,19 +686,20 @@ export class DeterministicSpider {
             tried.add(key);
             return true;
           });
-          for (const el of candidates.slice(0, MAX_CLICKS_PER_PAGE)) {
+          const pageClickLimit = Math.min(MAX_CLICKS_PER_PAGE, candidates.length);
+          for (const el of candidates.slice(0, pageClickLimit)) {
             if (clickBudget-- <= 0) break;
             try {
               if (page.url() !== pageUrl) {
-                if (pageDelayMs > 0) {
-                  const waitMs = Math.max(0, getLastLoadAt() + pageDelayMs - Date.now());
-                  if (waitMs > 0) await page.waitForTimeout(waitMs);
-                }
-                setLastLoadAt(Date.now());
-                await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+                await waitForPacing();
+                await navigate(page, pageUrl, { timeoutMs: 10000 });
               }
+              const urlBefore = page.url();
               await page.locator(el.selector).first().click({ timeout: 3000 });
-              await page.waitForTimeout(600);
+              await Promise.race([
+                page.waitForURL((u) => u.toString() !== urlBefore, { timeout: 1500 }),
+                page.waitForTimeout(250),
+              ]).catch(() => {});
               const after = new URL(page.url());
               if (onSite(after) && after.pathname !== landed.pathname) {
                 enqueue(after.pathname + after.search);
@@ -477,7 +715,7 @@ export class DeterministicSpider {
                 }
               }
             } catch {
-              // Not clickable after all; move on.
+              exploreErrors++;
             }
           }
         }
@@ -486,12 +724,8 @@ export class DeterministicSpider {
         // Guarded (ADR 0025): nothing is submitted, changing requests are aborted, dialogs dismissed.
         if (exploreClicks && clickBudget > 0 && onSite(landed)) {
           const reload = async () => {
-            if (pageDelayMs > 0) {
-              const waitMs = Math.max(0, getLastLoadAt() + pageDelayMs - Date.now());
-              if (waitMs > 0) await page.waitForTimeout(waitMs);
-            }
-            setLastLoadAt(Date.now());
-            await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+            await waitForPacing();
+            await navigate(page, pageUrl, { timeoutMs: 10000 });
           };
           try {
             clickBudget -= await exploreInteractiveStates({
@@ -523,12 +757,18 @@ export class DeterministicSpider {
               }
             }
           } catch {
-            // Exploring states is a bonus; the page itself is already recorded.
+            exploreErrors++;
           }
         }
+
+        if (exploreErrors > 0) {
+          pageItem.exploreErrors = exploreErrors;
+        }
       } catch {
-        // Skip page on navigation failure
-        skipped.push({ urlPath: requestedPath, why: 'did-not-load' });
+        // Double-record fix: only record as skipped if page was not already recorded
+        if (!recorded) {
+          skipped.push({ urlPath: requestedPath, why: 'did-not-load' });
+        }
       }
     };
 
@@ -539,9 +779,14 @@ export class DeterministicSpider {
       } catch {
         return;
       }
-      let lastLoadAt = 0;
       try {
-        while (!options.signal?.aborted && visited.size < this.maxPages) {
+        while (
+          !options.signal?.aborted &&
+          !sessionLost &&
+          !startRedirectedOffSite &&
+          pages.length < this.maxPages &&
+          attemptsCount < maxAttempts
+        ) {
           let requested: string | null = null;
           let requestedPath = '';
 
@@ -557,15 +802,23 @@ export class DeterministicSpider {
           }
 
           if (requested) {
+            attemptsCount++;
             activeWorkers++;
             try {
-              await evaluatePage(workerPage, requested, requestedPath, () => lastLoadAt, (t) => { lastLoadAt = t; });
+              await evaluatePage(workerPage, requested, requestedPath);
             } finally {
               activeWorkers--;
               notifyWork();
             }
           } else {
-            if (activeWorkers === 0 || visited.size >= this.maxPages || options.signal?.aborted) {
+            if (
+              activeWorkers === 0 ||
+              pages.length >= this.maxPages ||
+              attemptsCount >= maxAttempts ||
+              sessionLost ||
+              startRedirectedOffSite ||
+              options.signal?.aborted
+            ) {
               break;
             }
             await waitForWork();
@@ -580,10 +833,19 @@ export class DeterministicSpider {
     await Promise.all(workers);
     options.signal?.removeEventListener('abort', onAbort);
 
-    // When the person stops the scan (abort), the queue left over is not listed as skipped on purpose:
-    // 'page-limit' would be inaccurate, and the report carries a "you stopped the scan" note instead.
-    // Still queued when the page limit ended the crawl: found, never opened.
-    if (visited.size >= this.maxPages && !options.signal?.aborted) {
+    // If session was lost, drain remaining queue entries into skipped with session-lost (up to 50)
+    if (sessionLost) {
+      let count = 0;
+      for (const left of queue) {
+        const leftPath = new URL(left, targetUrl).pathname;
+        if (!visited.has(leftPath)) {
+          skipped.push({ urlPath: leftPath, why: 'session-lost' });
+          count++;
+          if (count >= 50) break;
+        }
+      }
+    } else if (pages.length >= this.maxPages && !options.signal?.aborted) {
+      // Still queued when the page limit ended the crawl: found, never opened.
       for (const left of queue) {
         const leftPath = new URL(left, targetUrl).pathname;
         if (!visited.has(leftPath)) skipped.push({ urlPath: leftPath, why: 'page-limit' });
@@ -606,6 +868,9 @@ export class DeterministicSpider {
       signInWalls,
       skippedByRobots: skippedByRobots.length > 0 ? skippedByRobots : undefined,
       skipped: skipped.length > 0 ? skipped : undefined,
+      routes,
+      sessionLost,
+      startRedirectedOffSite,
     };
   }
 

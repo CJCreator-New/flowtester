@@ -38,14 +38,15 @@ describe('DeterministicSpider: concurrency, delay and bypass headers (FR-1.7)', 
   });
 
   it('crawls multi-page site with concurrency = 2 and sends custom bypass headers', async () => {
-    const context = await browser.newContext();
+    const context = await browser.newContext({
+      extraHTTPHeaders: {
+        'x-qa-bypass-token': 'allow-me-123',
+      },
+    });
     const spider = new DeterministicSpider();
     const result = await spider.crawl(context, `http://localhost:${PORT}/`, {
       concurrency: 2,
       pageDelayMs: 50,
-      customHeaders: {
-        'x-qa-bypass-token': 'allow-me-123',
-      },
     });
     await context.close();
 

@@ -349,7 +349,7 @@
         "packages/types/src/route-telemetry.ts",
         "fixtures/test-app/server.js"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-112",
