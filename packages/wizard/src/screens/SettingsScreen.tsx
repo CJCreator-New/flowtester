@@ -948,6 +948,10 @@ function AddSignIn({ host, onSaved }: { host: string; onSaved: () => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginPath, setLoginPath] = useState('');
+  const [usernameSelector, setUsernameSelector] = useState('');
+  const [passwordSelector, setPasswordSelector] = useState('');
+  const [submitSelector, setSubmitSelector] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -969,12 +973,19 @@ function AddSignIn({ host, onSaved }: { host: string; onSaved: () => void }) {
         username: username.trim(),
         password,
         loginPath: loginPath.trim() || undefined,
+        usernameSelector: usernameSelector.trim() || undefined,
+        passwordSelector: passwordSelector.trim() || undefined,
+        submitSelector: submitSelector.trim() || undefined,
       });
       setNote(r.note ?? 'Signed in and saved' + (r.landingPath ? ' (lands on ' + r.landingPath + ')' : '') + '.');
       setRole('');
       setUsername('');
       setPassword('');
       setLoginPath('');
+      setUsernameSelector('');
+      setPasswordSelector('');
+      setSubmitSelector('');
+      setShowAdvanced(false);
       onSaved();
     } catch (err) {
       setError(err instanceof RunnerError ? err.message : 'That couldn’t be saved.');
@@ -1003,6 +1014,7 @@ function AddSignIn({ host, onSaved }: { host: string; onSaved: () => void }) {
       </label>
       <label className="text-sm">
         <span className="mb-1 block font-bold">Sign-in page</span>
+        <span className="mb-1 block text-xs text-ink-soft">Where the sign-in form is, for example /login</span>
         <input
           className="field py-2 text-sm"
           value={loginPath}
@@ -1029,6 +1041,47 @@ function AddSignIn({ host, onSaved }: { host: string; onSaved: () => void }) {
           onChange={(e) => setPassword(e.target.value)}
         />
       </label>
+      <div className="sm:col-span-2">
+        <button
+          type="button"
+          className="btn-link text-xs font-medium"
+          onClick={() => setShowAdvanced((v) => !v)}
+          aria-expanded={showAdvanced}
+        >
+          {showAdvanced ? 'Hide advanced settings' : 'Advanced (custom form selectors)'}
+        </button>
+        {showAdvanced ? (
+          <div className="mt-2 grid gap-2 rounded-card border border-edge bg-surface-base/50 p-2 sm:grid-cols-3">
+            <label className="text-xs">
+              <span className="mb-1 block font-medium">Username selector</span>
+              <input
+                className="field py-1 text-xs"
+                placeholder='input[name="user"]'
+                value={usernameSelector}
+                onChange={(e) => setUsernameSelector(e.target.value)}
+              />
+            </label>
+            <label className="text-xs">
+              <span className="mb-1 block font-medium">Password selector</span>
+              <input
+                className="field py-1 text-xs"
+                placeholder='input[type="password"]'
+                value={passwordSelector}
+                onChange={(e) => setPasswordSelector(e.target.value)}
+              />
+            </label>
+            <label className="text-xs">
+              <span className="mb-1 block font-medium">Submit button selector</span>
+              <input
+                className="field py-1 text-xs"
+                placeholder='button[type="submit"]'
+                value={submitSelector}
+                onChange={(e) => setSubmitSelector(e.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+      </div>
       <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
         <button
           type="submit"

@@ -4,7 +4,7 @@ import { withIntentSwitched } from '../lib/intent-view';
 import { SiteMap } from '../components/SiteMap';
 import { FocusHeading, Notice, Spinner } from '../components/text';
 import { count } from '../lib/format';
-import { approveRolesOf } from '../lib/form';
+import { approveRolesOf, SIGN_IN_AGAIN_TEXT } from '../lib/form';
 import { useDocumentTitle } from '../lib/title';
 import { PlanDocument, type PlanActions } from '../components/plan/PlanDocument';
 import { showItem } from '../components/plan/parts';
@@ -44,7 +44,7 @@ export interface PlanReviewScreenProps {
   /** Roles are the sign-in typed again, when the saved plan's details were forgotten. */
   onApprove: (roles?: RoleCredential[]) => void;
   /** The plan was saved with test sign-in consent but the details are gone: ask for them again. */
-  needsSignIn?: boolean;
+  needsSignIn?: boolean | string[];
   onPlanUpdated: (plan: ReviewPlan) => void;
   update: PlanUpdateState;
   approveError?: string | null;
@@ -484,47 +484,89 @@ export function PlanReviewScreen({
             {approveError}
           </p>
         )}
-        {needsSignIn && <SignInAgain busy={busy || approving} onSubmit={(roles) => onApprove(roles)} />}
+        {needsSignIn && (
+          <SignInAgain
+            busy={busy || approving}
+            needsSignIn={needsSignIn}
+            onSubmit={(roles) => onApprove(roles)}
+          />
+        )}
       </div>
     </div>
   );
 }
 
 /** The sign-in fields shown again at approval. Typed values live here only and are cleared once sent. */
-function SignInAgain({ busy, onSubmit }: { busy: boolean; onSubmit: (roles: RoleCredential[]) => void }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const roles = approveRolesOf(username, password);
+function SignInAgain({
+  busy,
+  needsSignIn,
+  onSubmit,
+}: {
+  busy: boolean;
+  needsSignIn?: boolean | string[];
+  onSubmit: (roles: RoleCredential[]) => void;
+}) {
+  const pendingRoles = Array.isArray(needsSignIn) && needsSignIn.length > 0 ? needsSignIn : ['member'];
+  const [roleInputs, setRoleInputs] = useState<Record<string, { username: string; password: string }>>({});
+
+  const allRoles: RoleCredential[] = pendingRoles
+    .map((role) => ({
+      role,
+      username: (roleInputs[role]?.username || '').trim(),
+      password: roleInputs[role]?.password || '',
+    }))
+    .filter((r) => r.username && r.password);
+
+  const canSubmit = allRoles.length === pendingRoles.length && allRoles.length > 0;
+
   return (
     <form
-      className="mx-auto mt-2 flex max-w-6xl flex-wrap items-end gap-3"
+      className="mx-auto mt-2 max-w-6xl space-y-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (roles.length === 0) return;
-        onSubmit(roles);
-        setPassword('');
+        if (!canSubmit) return;
+        onSubmit(allRoles);
+        setRoleInputs({});
       }}
     >
-      <label className="text-sm font-bold text-ink">
-        Sign-in username
-        <input
-          className="input mt-1 block"
-          autoComplete="off"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
-      </label>
-      <label className="text-sm font-bold text-ink">
-        Sign-in password
-        <input
-          className="input mt-1 block"
-          type="password"
-          autoComplete="off"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-      </label>
-      <button type="submit" className="btn-primary" disabled={busy || roles.length === 0}>
+      <p className="text-sm font-bold text-ink">{SIGN_IN_AGAIN_TEXT}</p>
+      {pendingRoles.map((role) => (
+        <fieldset key={role} className="flex flex-wrap items-end gap-3 rounded-md border border-rule p-3">
+          {pendingRoles.length > 1 && (
+            <legend className="px-1 text-sm font-bold">Role: {role}</legend>
+          )}
+          <label className="text-sm font-bold text-ink">
+            Sign-in username
+            <input
+              className="input mt-1 block"
+              autoComplete="off"
+              value={roleInputs[role]?.username || ''}
+              onChange={(e) =>
+                setRoleInputs((prev) => ({
+                  ...prev,
+                  [role]: { ...prev[role], username: e.target.value, password: prev[role]?.password || '' },
+                }))
+              }
+            />
+          </label>
+          <label className="text-sm font-bold text-ink">
+            Sign-in password
+            <input
+              className="input mt-1 block"
+              type="password"
+              autoComplete="off"
+              value={roleInputs[role]?.password || ''}
+              onChange={(e) =>
+                setRoleInputs((prev) => ({
+                  ...prev,
+                  [role]: { ...prev[role], password: e.target.value, username: prev[role]?.username || '' },
+                }))
+              }
+            />
+          </label>
+        </fieldset>
+      ))}
+      <button type="submit" className="btn-primary" disabled={busy || !canSubmit}>
         Approve with these details
       </button>
     </form>

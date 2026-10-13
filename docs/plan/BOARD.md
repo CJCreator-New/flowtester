@@ -11,7 +11,7 @@ All tickets start `todo`. Update the Status column when a ticket is picked up (`
 | 1 | T-104 | Runner input validation: roles, login path, header rules | S | T-101 | G-018, G-022, G-023 | done |
 | 1 | T-105 | Redacted debug logger and CLI debug switch | S | T-101 | G-003, G-006, G-018 | done |
 | 1 | T-107 | Shared navigation helper: settle, status, redirects, retry | M | T-101 | G-030, G-001, G-005, G-007, G-008, G-009 | done |
-| 1 | T-108 | Wizard sign-in form: selectors, login URL, header validation, re-approval roles, a11y | M | T-101 | G-017, G-018, G-033, G-013 | todo |
+| 1 | T-108 | Wizard sign-in form: selectors, login URL, header validation, re-approval roles, a11y | M | T-101 | G-017, G-018, G-033, G-013 | done |
 | 2 | T-109 | Wizard: show crawl coverage and crawl health | M | T-101, T-108 | G-019, G-053 | todo |
 | 2 | T-110 | Deterministic sign-in (preflight) | L | T-101, T-102, T-103, T-105, T-107 | G-001, G-002, G-003, G-004, G-022, G-023, G-037, G-027 | todo |
 | 2 | T-111 | Spider reliability core | L | T-101, T-102, T-103, T-105, T-107 | G-005, G-006, G-007, G-009, G-015, G-021, G-038, G-040, G-027 | todo |

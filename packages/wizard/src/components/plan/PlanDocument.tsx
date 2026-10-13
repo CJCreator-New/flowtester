@@ -491,6 +491,9 @@ function AddSignIn({ actions }: { actions: PlanActions }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginPath, setLoginPath] = useState('');
+  const [usernameSelector, setUsernameSelector] = useState('');
+  const [passwordSelector, setPasswordSelector] = useState('');
+  const [submitSelector, setSubmitSelector] = useState('');
   const [error, setError] = useState<string | null>(null);
   if (!open) {
     return (
@@ -516,9 +519,15 @@ function AddSignIn({ actions }: { actions: PlanActions }) {
             username: username.trim(),
             password,
             loginPath: loginPath.trim() || undefined,
+            usernameSelector: usernameSelector.trim() || undefined,
+            passwordSelector: passwordSelector.trim() || undefined,
+            submitSelector: submitSelector.trim() || undefined,
           });
           setOpen(false);
           setPassword('');
+          setUsernameSelector('');
+          setPasswordSelector('');
+          setSubmitSelector('');
         } catch (err) {
           setError(err instanceof Error ? err.message : 'The sign-in couldn’t be added.');
         }
@@ -534,15 +543,6 @@ function AddSignIn({ actions }: { actions: PlanActions }) {
           placeholder="member"
           value={role}
           onChange={(e) => setRole(e.target.value)}
-        />
-      </label>
-      <label className="text-sm">
-        <span className="mb-1 block font-bold">Sign-in page (optional)</span>
-        <input
-          className="field py-2 text-sm"
-          placeholder="/login"
-          value={loginPath}
-          onChange={(e) => setLoginPath(e.target.value)}
         />
       </label>
       <label className="text-sm">
@@ -564,6 +564,52 @@ function AddSignIn({ actions }: { actions: PlanActions }) {
           onChange={(e) => setPassword(e.target.value)}
         />
       </label>
+      <details className="col-span-full space-y-3">
+        <summary className="cursor-pointer text-sm font-bold text-stamp hover:underline">
+          Advanced
+        </summary>
+        <div className="grid gap-3 pt-2 sm:grid-cols-2">
+          <label className="text-sm">
+            <span className="mb-1 block font-bold">Sign-in page</span>
+            <span className="mb-1 block text-xs text-ink-soft">
+              Where the sign-in form is, for example /login
+            </span>
+            <input
+              className="field py-2 text-sm"
+              placeholder="/login"
+              value={loginPath}
+              onChange={(e) => setLoginPath(e.target.value)}
+            />
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block font-bold">Username selector (optional)</span>
+            <input
+              className="field py-2 text-sm"
+              placeholder='input[name="user"]'
+              value={usernameSelector}
+              onChange={(e) => setUsernameSelector(e.target.value)}
+            />
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block font-bold">Password selector (optional)</span>
+            <input
+              className="field py-2 text-sm"
+              placeholder='input[type="password"]'
+              value={passwordSelector}
+              onChange={(e) => setPasswordSelector(e.target.value)}
+            />
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block font-bold">Submit selector (optional)</span>
+            <input
+              className="field py-2 text-sm"
+              placeholder='button[type="submit"]'
+              value={submitSelector}
+              onChange={(e) => setSubmitSelector(e.target.value)}
+            />
+          </label>
+        </div>
+      </details>
       {error && (
         <p role="alert" className="text-sm text-fail sm:col-span-2">
           {error}

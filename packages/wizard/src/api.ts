@@ -27,11 +27,21 @@ export const STREAM_URL = '/api/runner/stream';
 export class RunnerError extends Error {
   code?: string;
   suggestion?: string;
-  constructor(message: string, code?: string, suggestion?: string) {
+  needsSignIn?: string[];
+  needsHeaders?: string[];
+  constructor(
+    message: string,
+    code?: string,
+    suggestion?: string,
+    needsSignIn?: string[],
+    needsHeaders?: string[]
+  ) {
     super(message);
     this.name = 'RunnerError';
     this.code = code;
     this.suggestion = suggestion;
+    this.needsSignIn = needsSignIn;
+    this.needsHeaders = needsHeaders;
   }
 }
 
@@ -606,19 +616,24 @@ export async function approvePlan(options?: {
   roles?: RoleCredential[];
   breakpoints?: string[];
   idempotencyKey?: string;
+  customHeaders?: string;
 }): Promise<void> {
   const token = options?.idempotencyKey || `approve-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const body: Record<string, unknown> = {};
+  if (options?.roles) body.roles = options.roles;
+  if (options?.breakpoints) body.breakpoints = options.breakpoints;
+  if (options?.customHeaders) body.customHeaders = options.customHeaders;
   const res = await call('/api/runner/plan/approve', {
     method: 'POST',
     headers: { 'Idempotency-Key': token },
-    body: JSON.stringify(options || {}),
+    body: JSON.stringify(body),
   });
   if (res.status === 409) {
-    const err = await json<{ error: string; code?: string; needsSignIn?: string[] }>(res);
+    const err = await json<{ error: string; code?: string; needsSignIn?: string[]; needsHeaders?: string[] }>(res);
     if (err.code === 'ERR_DUPLICATE_APPROVAL') {
       return;
     }
-    throw new RunnerError(err.error, err.code);
+    throw new RunnerError(err.error, err.code, undefined, err.needsSignIn, err.needsHeaders);
   }
   if (res.status === 404)
     throw new RunnerError('This plan isn’t waiting for review any more. Start a new check-up.', 'ERR_NO_PLAN');
@@ -736,7 +751,15 @@ export async function updateSite(
  */
 export async function addSiteSignIn(
   host: string,
-  signIn: { role: string; username: string; password: string; loginPath?: string }
+  signIn: {
+    role: string;
+    username: string;
+    password: string;
+    loginPath?: string;
+    usernameSelector?: string;
+    passwordSelector?: string;
+    submitSelector?: string;
+  }
 ): Promise<{ landingPath?: string; saved: boolean; note?: string }> {
   const res = await call(
     `/api/sites/${encodeURIComponent(host)}`,
@@ -758,16 +781,29 @@ export async function addSiteSignIn(
 /** Signs in with a saved sign-in to check it still works. */
 export async function testSiteSignIn(
   host: string,
-  role: string
+  role: string,
+  customHeaders?: string
 ): Promise<{ verified: boolean; landingPath?: string; reason?: SignInFailureReason; error?: string }> {
+  const payload: { testSignIn: string; customHeaders?: string } = { testSignIn: role };
+  if (customHeaders) payload.customHeaders = customHeaders;
   const res = await call(
     `/api/sites/${encodeURIComponent(host)}`,
-    { method: 'POST', body: JSON.stringify({ testSignIn: role }) },
+    { method: 'POST', body: JSON.stringify(payload) },
     30000
   );
   const body = await json<{ verified?: boolean; landingPath?: string; error?: string; reason?: string }>(res);
-  if (!res.ok) throw new RunnerError(body.error || 'The sign-in couldn’t be tested. Try again.');
   const reason = isSignInFailureReason(body.reason) ? body.reason : undefined;
+  if (!res.ok) {
+    if (reason) {
+      return {
+        verified: false,
+        landingPath: body.landingPath,
+        reason,
+        error: signInReasonText(reason),
+      };
+    }
+    throw new RunnerError(body.error || 'The sign-in couldn’t be tested. Try again.');
+  }
   return {
     verified: !!body.verified,
     landingPath: body.landingPath,
@@ -848,8 +884,13 @@ export async function listWaitingPlans(): Promise<WaitingPlan[]> {
 }
 
 /** Brings a kept-aside plan back for review; the plan waiting now, if any, is kept aside instead. */
-export async function resumeWaitingPlan(host: string): Promise<{ runId: string; targetUrl: string }> {
-  const res = await call('/api/runner/waiting-plans', { method: 'POST', body: JSON.stringify({ host }) });
+export async function resumeWaitingPlan(
+  host: string,
+  customHeaders?: string
+): Promise<{ runId: string; targetUrl: string }> {
+  const payload: { host: string; customHeaders?: string } = { host };
+  if (customHeaders) payload.customHeaders = customHeaders;
+  const res = await call('/api/runner/waiting-plans', { method: 'POST', body: JSON.stringify(payload) });
   const body = await json<{ runId: string; targetUrl: string; error?: string }>(res);
   if (!res.ok) throw new RunnerError(body.error || 'That plan couldn’t be opened. Try again.');
   return body;

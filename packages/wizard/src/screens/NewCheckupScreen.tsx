@@ -31,16 +31,19 @@ import {
   clampMaxPages,
   EMPTY_SIGN_IN,
   hasSignInDetails,
+  headerErrorsOf,
   lookOnly,
   MAX_PAGES_LIMIT,
   primarySignInOf,
   rememberSignInsOf,
+  scanBlockedHint,
   settleConsent,
   signInConsentGiven,
   withAddress,
   withoutConsent,
   type CheckupForm,
 } from '../lib/form';
+import { SignInRow } from '../components/SignInRow';
 import { formatWhen } from '../lib/format';
 import { hasNonDefaultOptions } from '../lib/onboarding';
 import { Link, PATHS } from '../lib/router';
@@ -216,12 +219,19 @@ export function NewCheckupScreen({
 
   // Typed sign-in details (not on the shared copy) replace the Access choice with a consent notice.
   const consentFlow = !shared && hasSignInDetails(form);
-  const consentMissing = consentFlow && !signInConsentGiven(form);
+  const blockedHint = scanBlockedHint(form);
+  const headerErrors = headerErrorsOf(form);
   const needsProdConfirmation =
     !consentFlow && !!kind && !kind.natural && form.markedTestCopy && !hasStagingIndicator && !confirmedProd;
   // No key doesn't stop a scan: fixed rules write the plan, and the AI can be connected any time.
   // (Once the AI setup has been read, so the plan knows which way to go.)
-  const canStart = ai !== null && check.state === 'ok' && !starting && !needsProdConfirmation && !consentMissing;
+  const canStart =
+    ai !== null &&
+    check.state === 'ok' &&
+    !starting &&
+    !needsProdConfirmation &&
+    !blockedHint &&
+    headerErrors.length === 0;
   const start = () => {
     if (check.state !== 'ok' || !kind || !canStart) return;
     onStart({
@@ -519,6 +529,11 @@ export function NewCheckupScreen({
                   value={form.customHeaders}
                   onChange={(e) => onFormChange((f) => ({ ...f, customHeaders: e.target.value }))}
                 />
+                {headerErrors.map((err, idx) => (
+                  <p key={idx} role="alert" className="mt-1 text-xs text-fail">
+                    {err}
+                  </p>
+                ))}
               </div>
             </div>
 
@@ -706,14 +721,25 @@ export function NewCheckupScreen({
         {startError && <ErrorMessage>{startError}</ErrorMessage>}
 
         <div className="mt-8 flex flex-wrap items-center gap-x-4 gap-y-2">
-          <button type="submit" className="btn-primary px-8" disabled={starting} aria-describedby="start-hint">
+          <button
+            type="submit"
+            className="btn-primary px-8"
+            disabled={starting || !canStart}
+            aria-describedby={blockedHint ? 'scan-blocked-hint' : 'start-hint'}
+          >
             {starting ? <Spinner label="Starting…" /> : 'Scan the site'}
           </button>
-          <p id="start-hint" className="text-sm text-ink-soft">
-            {ai && !keyReady
-              ? 'No AI key yet, so fixed rules will write the plan. Nothing is tested until you approve it.'
-              : 'Nothing is tested until you approve the plan.'}
-          </p>
+          {blockedHint ? (
+            <p id="scan-blocked-hint" role="alert" className="text-sm font-semibold text-warn">
+              {blockedHint}
+            </p>
+          ) : (
+            <p id="start-hint" className="text-sm text-ink-soft">
+              {ai && !keyReady
+                ? 'No AI key yet, so fixed rules will write the plan. Nothing is tested until you approve it.'
+                : 'Nothing is tested until you approve the plan.'}
+            </p>
+          )}
         </div>
       </form>
 
@@ -801,7 +827,7 @@ function MaterialField({
           <input
             type="file"
             accept=".md,.markdown,.txt"
-            className="hidden"
+            className="sr-only"
             aria-label={`Add a file to ${label}`}
             onChange={async (e) => {
               const input = e.currentTarget;
@@ -814,8 +840,12 @@ function MaterialField({
                 return;
               }
               setFileError(null);
-              const text = await file.text();
-              onChange(value.trim() ? `${value.trim()}\n\n${text}` : text);
+              try {
+                const text = await file.text();
+                onChange(value.trim() ? `${value.trim()}\n\n${text}` : text);
+              } catch {
+                setFileError('Could not read the file.');
+              }
             }}
           />
         </label>
@@ -866,7 +896,7 @@ function ReferenceDocuments({
             type="file"
             multiple
             accept=".md,.markdown,.txt,.docx"
-            className="hidden"
+            className="sr-only"
             aria-label="Add documents (.md, .txt or .docx)"
             onChange={async (e) => {
               const input = e.currentTarget;
@@ -1134,53 +1164,14 @@ function SignInsSection({
           </label>
         )}
         {form.signIns.map((s, i) => (
-          <fieldset key={i} className="grid gap-3 rounded-md border border-rule p-3 sm:grid-cols-2">
-            <legend className="px-1 text-sm font-bold">Sign-in {i + 1}</legend>
-            <label className="text-sm">
-              <span className="mb-1 block font-bold">Role name</span>
-              <input
-                className="field py-2 text-sm"
-                value={s.role}
-                placeholder={i === 0 ? 'member' : 'admin'}
-                onChange={(e) => set(i, { role: e.target.value })}
-              />
-            </label>
-            <label className="text-sm">
-              <span className="mb-1 block font-bold">Sign-in page (optional)</span>
-              <input
-                className="field py-2 text-sm"
-                value={s.loginPath}
-                placeholder="/login"
-                onChange={(e) => set(i, { loginPath: e.target.value })}
-              />
-            </label>
-            <label className="text-sm">
-              <span className="mb-1 block font-bold">Email or username</span>
-              <input
-                className="field py-2 text-sm"
-                autoComplete="off"
-                value={s.username}
-                onChange={(e) => set(i, { username: e.target.value })}
-              />
-            </label>
-            <label className="text-sm">
-              <span className="mb-1 block font-bold">Password</span>
-              <input
-                className="field py-2 text-sm"
-                type="password"
-                autoComplete="off"
-                value={s.password}
-                onChange={(e) => set(i, { password: e.target.value })}
-              />
-            </label>
-            <button
-              type="button"
-              className="btn-link justify-self-start text-sm"
-              onClick={() => onFormChange((f) => ({ ...f, signIns: f.signIns.filter((_, n) => n !== i) }))}
-            >
-              Remove this sign-in
-            </button>
-          </fieldset>
+          <SignInRow
+            key={i}
+            value={s}
+            legend={`Sign-in ${i + 1}`}
+            rolePlaceholder={i === 0 ? 'member' : 'admin'}
+            onChange={(patch) => set(i, patch)}
+            onRemove={() => onFormChange((f) => ({ ...f, signIns: f.signIns.filter((_, n) => n !== i) }))}
+          />
         ))}
         <button
           type="button"
@@ -1259,7 +1250,7 @@ function ImportRoles({ onFormChange }: { onFormChange: (update: (form: CheckupFo
           <input
             type="file"
             accept=".csv,.txt"
-            className="hidden"
+            className="sr-only"
             aria-label="Pick a role list file (.csv or .txt)"
             onChange={async (e) => {
               const input = e.currentTarget;
@@ -1287,7 +1278,7 @@ function ImportRoles({ onFormChange }: { onFormChange: (update: (form: CheckupFo
         </button>
       </div>
       {note && (
-        <p role="status" className="text-sm">
+        <p role="alert" className="text-sm">
           {note}
         </p>
       )}
@@ -1427,28 +1418,33 @@ function SavedSessions({
           <input
             type="file"
             accept=".json,application/json"
-            className="hidden"
+            className="sr-only"
             aria-label="Add a saved session file"
             onChange={async (e) => {
               const input = e.currentTarget;
               const file = input.files?.[0];
               input.value = '';
               if (!file) return;
-              const result = parseSessionFile(file.name, file.size, await file.text());
-              if (!result.ok) {
-                setError(result.message);
-                return;
+              try {
+                const text = await file.text();
+                const result = parseSessionFile(file.name, file.size, text);
+                if (!result.ok) {
+                  setError(result.message);
+                  return;
+                }
+                setError(null);
+                const name = role.trim();
+                onFormChange((f) => ({
+                  ...f,
+                  savedSessions: [
+                    ...f.savedSessions.filter((s) => s.role !== name),
+                    { role: name, fileName: file.name, state: result.state },
+                  ],
+                }));
+                setRole('');
+              } catch {
+                setError('The file couldn’t be read. Try again.');
               }
-              setError(null);
-              const name = role.trim();
-              onFormChange((f) => ({
-                ...f,
-                savedSessions: [
-                  ...f.savedSessions.filter((s) => s.role !== name),
-                  { role: name, fileName: file.name, state: result.state },
-                ],
-              }));
-              setRole('');
             }}
           />
         </label>

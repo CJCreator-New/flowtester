@@ -1,5 +1,6 @@
-import type { RunCap } from '@qa/types';
+import type { RoleCredential, RunCap } from '@qa/types';
 import type { StorageStateData } from '@qa/types/src/evidence-finding.js';
+import { parseHeaderText } from '@qa/types/src/input-rules.js';
 import { capFromInputs } from './cap';
 import { toContextDocuments, type ReferenceFile } from './context';
 
@@ -86,6 +87,9 @@ export interface SignInEntry {
   username: string;
   password: string;
   loginPath: string;
+  usernameSelector?: string;
+  passwordSelector?: string;
+  submitSelector?: string;
 }
 
 /** Pages a scan explores unless the person asks for another number. */
@@ -98,7 +102,12 @@ export function clampMaxPages(typed: string): number {
   return Number.isFinite(n) && typed.trim() !== '' ? Math.min(MAX_PAGES_LIMIT, Math.max(1, n)) : DEFAULT_MAX_PAGES;
 }
 
-export const EMPTY_SIGN_IN: SignInEntry = { role: '', username: '', password: '', loginPath: '' };
+export const EMPTY_SIGN_IN: SignInEntry = {
+  role: '',
+  username: '',
+  password: '',
+  loginPath: '',
+};
 
 export const EMPTY_FORM: CheckupForm = {
   address: '',
@@ -132,16 +141,15 @@ export const EMPTY_FORM: CheckupForm = {
 /** Parses multi-line "Header: Value" text into a Record<string, string>. */
 export function parseCustomHeaders(headersText: string): Record<string, string> | undefined {
   if (!headersText || !headersText.trim()) return undefined;
-  const out: Record<string, string> = {};
-  for (const line of headersText.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const idx = trimmed.indexOf(':');
-    if (idx > 0) {
-      out[trimmed.slice(0, idx).trim()] = trimmed.slice(idx + 1).trim();
-    }
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
+  const { headers, errors } = parseHeaderText(headersText);
+  if (errors.length > 0) return undefined;
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+/** Returns validation error messages for the custom headers text, with line numbers and never echoing values. */
+export function headerErrorsOf(form: Pick<CheckupForm, 'customHeaders'>): string[] {
+  if (!form.customHeaders || !form.customHeaders.trim()) return [];
+  return parseHeaderText(form.customHeaders).errors;
 }
 
 /** The Product Context files as the run body takes them; undefined when none were added. */
@@ -181,15 +189,32 @@ export function testCapOf(form: Pick<CheckupForm, 'testCap'>): number | undefine
 /** The sign-ins filled in, as the runner takes them: a role name is made up when none was given. */
 export function rolesOf(
   form: Pick<CheckupForm, 'signIns'>
-): Array<{ role: string; username: string; password: string; loginPath?: string }> {
+): RoleCredential[] {
   return form.signIns
     .filter((s) => s.username.trim() && s.password)
-    .map((s, i) => ({
-      role: s.role.trim().toLowerCase() || (i === 0 ? 'member' : `member-${i + 1}`),
-      username: s.username.trim(),
-      password: s.password,
-      loginPath: s.loginPath.trim() || undefined,
-    }));
+    .map((s, i) => {
+      const entry: RoleCredential = {
+        role: s.role.trim().toLowerCase() || (i === 0 ? 'member' : `member-${i + 1}`),
+        username: s.username.trim(),
+        password: s.password,
+      };
+      if (s.loginPath && s.loginPath.trim()) entry.loginPath = s.loginPath.trim();
+      if (s.usernameSelector && s.usernameSelector.trim()) entry.usernameSelector = s.usernameSelector.trim();
+      if (s.passwordSelector && s.passwordSelector.trim()) entry.passwordSelector = s.passwordSelector.trim();
+      if (s.submitSelector && s.submitSelector.trim()) entry.submitSelector = s.submitSelector.trim();
+      return entry;
+    });
+}
+
+/**
+ * Hint shown when sign-in details are typed but consent is unticked, blocking start.
+ * Undefined when details are missing or consent is given.
+ */
+export function scanBlockedHint(form: Pick<CheckupForm, 'signIns' | 'signInConsent'>): string | undefined {
+  if (hasSignInDetails(form) && !form.signInConsent) {
+    return "Tick 'I accept this' to scan with sign-in";
+  }
+  return undefined;
 }
 
 /**
@@ -234,9 +259,18 @@ export function withoutConsent(form: CheckupForm): CheckupForm {
 /** Shown when a plan saved with sign-in consent is approved after the details were forgotten (a restart). */
 export const SIGN_IN_AGAIN_TEXT = 'Type the sign-in details again to approve this plan.';
 
-/** The one sign-in typed again at approval, or none while a field is empty. Consent stays the saved plan's. */
-export function approveRolesOf(username: string, password: string): Array<{ role: string; username: string; password: string }> {
-  return username.trim() && password ? [{ role: 'member', username: username.trim(), password }] : [];
+/** The sign-ins typed again at approval: one per role in pending, or member if none specified. */
+export function approveRolesOf(
+  username: string,
+  password: string,
+  pending?: string[]
+): RoleCredential[] {
+  if (!username.trim() || !password) return [];
+  const u = username.trim();
+  if (pending && pending.length > 0) {
+    return pending.map((role) => ({ role, username: u, password }));
+  }
+  return [{ role: 'member', username: u, password }];
 }
 
 /** Consent never outlives the details it was given for. */
