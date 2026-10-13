@@ -54,7 +54,7 @@
       "filesReadOnly": [
         "packages/core/src/**"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-103",

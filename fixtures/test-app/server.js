@@ -4,10 +4,28 @@ import { fileURLToPath } from 'url';
 
 const port = process.env.PORT || 3050;
 
+let labStats = {
+  signIns: 0,
+  headerHits: {},
+};
+
+let labExpiringState = {
+  maxRequests: 3,
+  currentRequests: 0,
+  invalidated: false,
+};
+
+let sessionsInvalidated = false;
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', `http://localhost:${port}`);
   // Name the port this socket is on (not PORT), so robots/sitemap/llms point at the running fixture.
   const origin = `http://localhost:${req.socket.localPort}`;
+
+  if (req.headers['x-qa-bypass-token']) {
+    const p = url.pathname;
+    labStats.headerHits[p] = (labStats.headerHits[p] || 0) + 1;
+  }
 
   // API endpoints
   if (url.pathname === '/api/failing-endpoint') {
@@ -57,7 +75,8 @@ const server = http.createServer((req, res) => {
   }
 
   // A real signed-in area: POST sign-in sets a session cookie; /account pages need it.
-  const session = (req.headers.cookie || '').match(/fixture_session=(admin|manager|viewer)/)?.[1];
+  const rawSession = (req.headers.cookie || '').match(/fixture_session=(admin|manager|viewer)/)?.[1];
+  const session = sessionsInvalidated ? null : rawSession;
   const html = (
     title,
     body,
@@ -88,6 +107,7 @@ const server = http.createServer((req, res) => {
       const form = new URLSearchParams(body);
       const account = ACCOUNTS[form.get('email') || ''];
       if (account && account[0] === form.get('password')) {
+        labStats.signIns += 1;
         res.writeHead(302, { 'Set-Cookie': `fixture_session=${account[1]}; Path=/; HttpOnly`, Location: '/account' });
         res.end();
       } else {
@@ -97,6 +117,280 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (url.pathname === '/signin') return html('Sign in', `<h1>Sign in</h1>${SIGN_IN_FORM}`);
+
+  // --- /lab/* routes for auth and crawler failure modes (T-102) ---
+  if (url.pathname === '/lab/stats' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(labStats));
+    return;
+  }
+
+  if (url.pathname === '/lab/reset' && req.method === 'POST') {
+    labStats.signIns = 0;
+    labStats.headerHits = {};
+    labExpiringState.maxRequests = 3;
+    labExpiringState.currentRequests = 0;
+    labExpiringState.invalidated = false;
+    sessionsInvalidated = false;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (url.pathname === '/lab/headers' && req.method === 'GET') {
+    const hasToken = req.headers['x-qa-bypass-token'] ? 'present' : 'absent';
+    const ua = req.headers['user-agent'] || '';
+    const hasCookie = req.headers['cookie'] ? 'present' : 'absent';
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        'x-qa-bypass-token': hasToken,
+        'user-agent': ua,
+        cookie: hasCookie,
+      })
+    );
+    return;
+  }
+
+  if (url.pathname === '/lab/spa-late') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>SPA Late Hydration</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body>
+      <h1>SPA Late Hydration</h1>
+      <div id="root"></div>
+      <script>
+        setTimeout(function() {
+          var root = document.getElementById('root');
+          if (root) {
+            var t = 'a';
+            root.innerHTML = '<' + t + ' href="/lab/spa-late/a">Page A</' + t + '> <' + t + ' href="/lab/spa-late/b">Page B</' + t + '>';
+          }
+        }, 1500);
+      </script>
+    </body></html>`);
+    return;
+  }
+
+  if (url.pathname === '/lab/spa-late/a') {
+    html('SPA Late A', '<h1>SPA Late A</h1><p>Late hydrated page A</p><a href="/lab/spa-late">Back</a>');
+    return;
+  }
+
+  if (url.pathname === '/lab/spa-late/b') {
+    html('SPA Late B', '<h1>SPA Late B</h1><p>Late hydrated page B</p><a href="/lab/spa-late">Back</a>');
+    return;
+  }
+
+  if (url.pathname === '/lab/spa-login' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>SPA Login</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body>
+      <h1>SPA Login</h1>
+      <div id="login-container"></div>
+      <script>
+        setTimeout(function() {
+          var c = document.getElementById('login-container');
+          if (c) {
+            c.innerHTML = '<form method="post" action="/lab/spa-login">' +
+              '<label for="signin-email">Email</label><input id="signin-email" name="email" type="email">' +
+              '<label for="signin-password">Password</label><input id="signin-password" name="password" type="password">' +
+              '<button type="submit" data-testid="signin-btn">Sign in</button>' +
+              '</form>';
+          }
+        }, 1200);
+      </script>
+    </body></html>`);
+    return;
+  }
+
+  if (url.pathname === '/lab/spa-login' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      const form = new URLSearchParams(body);
+      const account = ACCOUNTS[form.get('email') || ''];
+      if (account && account[0] === form.get('password')) {
+        labStats.signIns += 1;
+        res.writeHead(302, { 'Set-Cookie': `fixture_session=${account[1]}; Path=/; HttpOnly`, Location: '/account' });
+        res.end();
+      } else {
+        html('SPA Sign in', `<h1>SPA Sign in</h1><p role="alert">Wrong email or password</p>${SIGN_IN_FORM}`);
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/lab/expiring/start' && req.method === 'POST') {
+    const n = parseInt(url.searchParams.get('n') || '3', 10);
+    labExpiringState.maxRequests = n;
+    labExpiringState.currentRequests = 0;
+    labExpiringState.invalidated = false;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, n }));
+    return;
+  }
+
+  if (url.pathname === '/lab/expire-session' && req.method === 'POST') {
+    sessionsInvalidated = true;
+    labExpiringState.invalidated = true;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, expired: true }));
+    return;
+  }
+
+  if (url.pathname === '/lab/expiring' || (url.pathname.startsWith('/lab/expiring/') && url.pathname !== '/lab/expiring/start')) {
+    if (!session || sessionsInvalidated || labExpiringState.invalidated) {
+      res.writeHead(302, { Location: '/signin' });
+      res.end();
+      return;
+    }
+    labExpiringState.currentRequests += 1;
+    if (labExpiringState.currentRequests > labExpiringState.maxRequests) {
+      labExpiringState.invalidated = true;
+      res.writeHead(302, { Location: '/signin' });
+      res.end();
+      return;
+    }
+    html('Expiring Protected Page', `<h1>Protected Area</h1><p>Request ${labExpiringState.currentRequests} of ${labExpiringState.maxRequests}</p>`);
+    return;
+  }
+
+  if (url.pathname === '/lab/expiring-spa') {
+    const isInvalid = !session || sessionsInvalidated || labExpiringState.invalidated;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Expiring SPA</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body>
+      <h1>Expiring SPA</h1>
+      <p>Status: ${isInvalid ? 'invalid' : 'valid'}</p>
+      ${isInvalid ? `<script>setTimeout(function() { location.replace('/signin'); }, 300);</script>` : ''}
+    </body></html>`);
+    return;
+  }
+
+  if (url.pathname.startsWith('/lab/trap/')) {
+    const n = parseInt(url.pathname.replace('/lab/trap/', ''), 10) || 0;
+    html(`Trap Page ${n}`, `<h1>Trap Page ${n}</h1><p>Infinite trap chain</p><a href="/lab/trap/${n + 1}">Next trap</a>`);
+    return;
+  }
+
+  if (url.pathname === '/lab/calendar') {
+    const month = url.searchParams.get('month') || '2026-10';
+    const parts = month.split('-').map(Number);
+    let y = parts[0] || 2026;
+    let m = parts[1] || 10;
+    const prevM = m === 1 ? 12 : m - 1;
+    const prevY = m === 1 ? y - 1 : y;
+    const nextM = m === 12 ? 1 : m + 1;
+    const nextY = m === 12 ? y + 1 : y;
+    const prevStr = `${prevY}-${String(prevM).padStart(2, '0')}`;
+    const nextStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
+    html(`Calendar ${month}`, `<h1>Calendar ${month}</h1><p>Monthly calendar view</p><a href="/lab/calendar?month=${prevStr}">Previous Month</a> <a href="/lab/calendar?month=${nextStr}">Next Month</a>`);
+    return;
+  }
+
+  if (url.pathname === '/lab/hash') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Hash Router</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body>
+      <h1 id="heading">Section One</h1>
+      <nav><a href="#/one">One</a> <a href="#/two">Two</a></nav>
+      <script>
+        function updateHeading() {
+          var h = document.getElementById('heading');
+          if (location.hash === '#/two') {
+            h.textContent = 'Section Two';
+          } else {
+            h.textContent = 'Section One';
+          }
+        }
+        window.addEventListener('hashchange', updateHeading);
+        updateHeading();
+      </script>
+    </body></html>`);
+    return;
+  }
+
+  if (url.pathname === '/lab/onclick') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>OnClick Navigation</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body>
+      <h1>OnClick Navigation</h1>
+      <div role="link" data-href="/lab/onclick/target" onclick="location.href='/lab/onclick/target'">Target 1 Div</div>
+      <button onclick="location.href='/lab/onclick/target2'">Target 2 Button</button>
+    </body></html>`);
+    return;
+  }
+  if (url.pathname === '/lab/onclick/target') {
+    html('OnClick Target 1', '<h1>OnClick Target 1</h1><a href="/lab/onclick">Back</a>');
+    return;
+  }
+  if (url.pathname === '/lab/onclick/target2') {
+    html('OnClick Target 2', '<h1>OnClick Target 2</h1><a href="/lab/onclick">Back</a>');
+    return;
+  }
+
+  if (url.pathname === '/lab/overlay') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Overlay Banner</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body>
+      <div id="overlay" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:9999;">
+        <h2>Cookie Consent</h2>
+        <p>Please accept cookies to continue.</p>
+        <button id="accept" onclick="document.getElementById('overlay').remove()">Accept</button>
+      </div>
+      <h1>Overlay Page</h1>
+      <a href="/lab/overlay/inner">Inner Link</a>
+    </body></html>`);
+    return;
+  }
+  if (url.pathname === '/lab/overlay/inner') {
+    html('Overlay Inner', '<h1>Overlay Inner</h1><a href="/lab/overlay">Back</a>');
+    return;
+  }
+
+  if (url.pathname === '/lab/redirect-chain') {
+    res.writeHead(302, { Location: '/lab/redirect-chain/2' });
+    res.end();
+    return;
+  }
+  if (url.pathname === '/lab/redirect-chain/2') {
+    res.writeHead(302, { Location: '/lab/redirect-chain/final' });
+    res.end();
+    return;
+  }
+  if (url.pathname === '/lab/redirect-chain/final') {
+    html('Redirect Final', '<h1>Redirect Final</h1><p>Reached after 2 hops.</p>');
+    return;
+  }
+
+  if (url.pathname === '/lab/always-500') {
+    res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Internal Server Error</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body><h1>Server Error 500</h1></body></html>');
+    return;
+  }
+
+  if (url.pathname === '/lab/forbidden') {
+    res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Forbidden</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body><h1>Forbidden 403</h1></body></html>');
+    return;
+  }
+
+  if (url.pathname === '/lab/index' || url.pathname === '/lab') {
+    html(
+      'Lab Failure Modes',
+      `<h1>Lab Failure Modes</h1>
+      <ul>
+        <li><a href="/lab/spa-late">SPA Late</a></li>
+        <li><a href="/lab/spa-login">SPA Login</a></li>
+        <li><a href="/lab/expiring">Expiring Session</a></li>
+        <li><a href="/lab/expiring-spa">Expiring SPA</a></li>
+        <li><a href="/lab/trap/1">Trap Chain</a></li>
+        <li><a href="/lab/calendar?month=2026-10">Calendar</a></li>
+        <li><a href="/lab/hash">Hash Route</a></li>
+        <li><a href="/lab/onclick">OnClick</a></li>
+        <li><a href="/lab/overlay">Overlay</a></li>
+        <li><a href="/lab/redirect-chain">Redirect Chain</a></li>
+        <li><a href="/lab/always-500">Always 500</a></li>
+        <li><a href="/lab/forbidden">Forbidden</a></li>
+        <li><a href="/lab/headers">Headers</a></li>
+      </ul>`
+    );
+    return;
+  }
 
   // Sign-in variants for the sign-in robustness tests. Linked from nowhere, so crawls never see them.
   const readJson = (cb) => {
@@ -698,7 +992,8 @@ const server = http.createServer((req, res) => {
   res.end('Not Found');
 });
 
-if (process.env.NODE_ENV !== 'test') {
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
   server.listen(port, () => {
     console.log(`Fixture server running at http://localhost:${port}`);
   });
