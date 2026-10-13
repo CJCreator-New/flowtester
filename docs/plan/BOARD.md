@@ -8,7 +8,7 @@ All tickets start `todo`. Update the Status column when a ticket is picked up (`
 | 0 | T-102 | Fixture routes that reproduce auth and crawl failure modes | M | none | G-012, G-028 | done |
 | 0 | T-103 | Browser context options, origin-scoped headers, narrower browser restart | M | none | G-004, G-016, G-039 | done |
 | 0 | T-106 | Tooling alignment: one Playwright version, typecheck tests, Node pin | M | none | G-025, G-026, G-047 | done |
-| 1 | T-104 | Runner input validation: roles, login path, header rules | S | T-101 | G-018, G-022, G-023 | todo |
+| 1 | T-104 | Runner input validation: roles, login path, header rules | S | T-101 | G-018, G-022, G-023 | done |
 | 1 | T-105 | Redacted debug logger and CLI debug switch | S | T-101 | G-003, G-006, G-018 | todo |
 | 1 | T-107 | Shared navigation helper: settle, status, redirects, retry | M | T-101 | G-030, G-001, G-005, G-007, G-008, G-009 | todo |
 | 1 | T-108 | Wizard sign-in form: selectors, login URL, header validation, re-approval roles, a11y | M | T-101 | G-017, G-018, G-033, G-013 | todo |

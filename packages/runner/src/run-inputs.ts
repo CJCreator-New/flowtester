@@ -1,6 +1,13 @@
 import { isSupportedContextName } from '@qa/core';
-import { INTENTS } from '@qa/types';
-import type { PlanIntent, RunCap, StorageStateData } from '@qa/types';
+import {
+  INTENTS,
+  ROLE_NAME_PATTERN,
+  HEADER_NAME_PATTERN,
+  isSafeHeaderValue,
+  parseHeaderText,
+  MAX_CUSTOM_HEADERS,
+} from '@qa/types';
+import type { PlanIntent, RoleCredential, RunCap, StorageStateData } from '@qa/types';
 
 /** Most Product Context documents one Check-up takes, and the largest one. */
 export const MAX_CONTEXT_DOCUMENTS = 10;
@@ -187,41 +194,167 @@ export function checkCrawlDelayMs(input: unknown): number | undefined {
   return Math.max(0, Math.min(2000, Math.floor(n)));
 }
 
+/** Max roles allowed in a single Check-up run. */
+export const MAX_ROLES = 10;
+/** Max characters allowed in any string field of a role credential. */
+export const MAX_ROLE_FIELD_CHARS = 500;
+
 /**
  * Custom headers to bypass bots/Cloudflare or pass test auth tokens (e.g. X-QA-Bypass-Token).
  * Input may be Record<string, string> or raw strings "Header: Value\nOther: Val".
  */
 export function checkCustomHeaders(input: unknown): Checked<Record<string, string> | undefined> {
   if (input === undefined || input === null || input === '') return { ok: true, value: undefined };
-  const out: Record<string, string> = {};
 
   if (typeof input === 'string') {
-    const lines = input.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    for (const line of lines) {
-      const idx = line.indexOf(':');
-      if (idx <= 0) {
-        return bad('ERR_INVALID_HEADERS', `Invalid header line "${line}". Expected "Header-Name: value".`);
-      }
-      const key = line.slice(0, idx).trim();
-      const val = line.slice(idx + 1).trim();
-      if (!key) return bad('ERR_INVALID_HEADERS', 'Header name cannot be empty.');
-      out[key] = val;
+    const { headers, errors } = parseHeaderText(input);
+    if (errors.length > 0) {
+      return bad('ERR_INVALID_HEADERS', errors.join('; '));
     }
-    return { ok: true, value: Object.keys(out).length > 0 ? out : undefined };
+    return { ok: true, value: Object.keys(headers).length > 0 ? headers : undefined };
   }
 
   if (typeof input !== 'object' || Array.isArray(input)) {
     return bad('ERR_INVALID_HEADERS', 'customHeaders must be a key-value object of strings.');
   }
 
-  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
-    if (typeof k !== 'string' || !k.trim()) {
-      return bad('ERR_INVALID_HEADERS', 'Header names must be non-empty strings.');
+  const entries = Object.entries(input as Record<string, unknown>);
+  if (entries.length > MAX_CUSTOM_HEADERS) {
+    return bad('ERR_INVALID_HEADERS', `Maximum of ${MAX_CUSTOM_HEADERS} custom headers allowed.`);
+  }
+
+  const out: Record<string, string> = {};
+  for (const [k, v] of entries) {
+    const key = typeof k === 'string' ? k.trim() : '';
+    if (!key || !HEADER_NAME_PATTERN.test(key)) {
+      return bad('ERR_INVALID_HEADERS', 'Header names must be non-empty valid header tokens.');
     }
-    if (typeof v !== 'string') {
-      return bad('ERR_INVALID_HEADERS', `Header "${k}" must have a string value.`);
+    if (typeof v !== 'string' || !isSafeHeaderValue(v)) {
+      return bad('ERR_INVALID_HEADERS', `Header "${key}" must have a safe string value.`);
     }
-    out[k.trim()] = v;
+    out[key] = v;
   }
   return { ok: true, value: Object.keys(out).length > 0 ? out : undefined };
 }
+
+/**
+ * Validates sign-in credentials for explorer roles.
+ * Up to 10 roles, valid role names, no duplicate role names, all strings under 500 chars.
+ * Never echoes passwords or tokens in error messages.
+ */
+export function checkRoles(input: unknown): Checked<RoleCredential[] | undefined> {
+  if (input === undefined || input === null) return { ok: true, value: undefined };
+  if (!Array.isArray(input)) return bad('ERR_INVALID_ROLES', 'The sign-in details are not valid.');
+  if (input.length === 0) return { ok: true, value: undefined };
+  if (input.length > MAX_ROLES) return bad('ERR_INVALID_ROLES', 'The sign-in details are not valid.');
+
+  const seenRoles = new Set<string>();
+  const out: RoleCredential[] = [];
+
+  const allowedStringKeys = [
+    'role',
+    'username',
+    'password',
+    'token',
+    'loginPath',
+    'usernameSelector',
+    'passwordSelector',
+    'submitSelector',
+    'postLoginSelector',
+    'postLoginUrl',
+  ];
+
+  for (const item of input) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return bad('ERR_INVALID_ROLES', 'The sign-in details are not valid.');
+    }
+    const r = item as Record<string, unknown>;
+    if (typeof r.role !== 'string' || !ROLE_NAME_PATTERN.test(r.role)) {
+      return bad('ERR_INVALID_ROLES', 'The sign-in details are not valid.');
+    }
+    if (seenRoles.has(r.role)) {
+      return bad('ERR_INVALID_ROLES', 'The sign-in details are not valid.');
+    }
+    seenRoles.add(r.role);
+
+    if (typeof r.username !== 'string') {
+      return bad('ERR_INVALID_ROLES', 'The sign-in details are not valid.');
+    }
+
+    for (const [k, v] of Object.entries(r)) {
+      if (!allowedStringKeys.includes(k)) continue;
+      if (v !== undefined && v !== null) {
+        if (typeof v !== 'string' || v.length > MAX_ROLE_FIELD_CHARS) {
+          return bad('ERR_INVALID_ROLES', 'The sign-in details are not valid.');
+        }
+      }
+    }
+
+    const cred: RoleCredential = {
+      role: r.role,
+      username: r.username,
+    };
+    if (typeof r.password === 'string') cred.password = r.password;
+    if (typeof r.token === 'string') cred.token = r.token;
+    if (typeof r.loginPath === 'string') cred.loginPath = r.loginPath;
+    if (typeof r.usernameSelector === 'string') cred.usernameSelector = r.usernameSelector;
+    if (typeof r.passwordSelector === 'string') cred.passwordSelector = r.passwordSelector;
+    if (typeof r.submitSelector === 'string') cred.submitSelector = r.submitSelector;
+    if (typeof r.postLoginSelector === 'string') cred.postLoginSelector = r.postLoginSelector;
+    if (typeof r.postLoginUrl === 'string') cred.postLoginUrl = r.postLoginUrl;
+
+    out.push(cred);
+  }
+
+  return { ok: true, value: out.length > 0 ? out : undefined };
+}
+
+/**
+ * Validates a role's sign-in path or URL against the target URL.
+ * Accepts a relative path starting with a single '/' or an absolute HTTP/HTTPS URL
+ * matching the target host (apex/www considered equal).
+ * Rejects protocol-relative paths ('//evil.com') and cross-host URLs.
+ * Returns normalized path + search.
+ */
+export function checkLoginPath(value: unknown, targetUrl: string): Checked<string | undefined> {
+  if (value === undefined || value === null || value === '') return { ok: true, value: undefined };
+  if (typeof value !== 'string') return bad('ERR_INVALID_LOGIN_PATH', 'The login path is not valid.');
+  const val = value.trim();
+  if (!val) return { ok: true, value: undefined };
+
+  let targetHost = '';
+  try {
+    const t = new URL(targetUrl);
+    targetHost = t.hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return bad('ERR_INVALID_LOGIN_PATH', 'The login path is not valid.');
+  }
+
+  if (val.startsWith('//')) {
+    return bad('ERR_INVALID_LOGIN_PATH', 'The login path is not valid.');
+  }
+
+  if (val.startsWith('/')) {
+    try {
+      const u = new URL(val, 'https://example.com');
+      return { ok: true, value: u.pathname + u.search };
+    } catch {
+      return bad('ERR_INVALID_LOGIN_PATH', 'The login path is not valid.');
+    }
+  }
+
+  try {
+    const u = new URL(val);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      return bad('ERR_INVALID_LOGIN_PATH', 'The login path is not valid.');
+    }
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    if (host !== targetHost) {
+      return bad('ERR_INVALID_LOGIN_PATH', 'The login path is not valid.');
+    }
+    return { ok: true, value: u.pathname + u.search };
+  } catch {
+    return bad('ERR_INVALID_LOGIN_PATH', 'The login path is not valid.');
+  }
+}
+
