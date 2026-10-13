@@ -1,10 +1,23 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { ProductProfile, DiscoveryDraft, DiscoveredFlow, AmbiguityQuestion, PageInventoryItem, StorageStateData, SignInFailureReason, RunCap } from '@qa/types';
+import type {
+  ProductProfile,
+  DiscoveryDraft,
+  DiscoveredFlow,
+  AmbiguityQuestion,
+  PageInventoryItem,
+  StorageStateData,
+  SignInFailureReason,
+  RunCap,
+  RouteTelemetry,
+  SkippedPageInfo,
+  PageCoverage,
+} from '@qa/types';
 import { signInReasonText } from '@qa/types';
 import { PlanValidator } from './plan-validator.js';
 import { BrowserManager, BREAKPOINT_VIEWPORTS } from '../browser.js';
-import { PreFlightChecker, SignInFailedError } from '../preflight.js';
+import { PreFlightChecker, SignInFailedError, type PreFlightResult } from '../preflight.js';
+import { debugLog } from '../debug-log.js';
 import { DeterministicSpider, DEFAULT_MAX_PAGES, type SpiderResult } from './deterministic-spider.js';
 import { buildSiteGraph, pathOf } from '../plan/site-graph.js';
 import { sampleLayoutGroups } from '../plan/sampling.js';
@@ -56,6 +69,14 @@ export interface DiscoveryOptions {
   crawlDelayMs?: number;
   /** Custom HTTP headers sent with every request (e.g. X-QA-Bypass-Token). */
   customHeaders?: Record<string, string>;
+  /** Custom User-Agent header */
+  userAgent?: string;
+  /** Basic auth credential string ('user:pass') for tunneling */
+  tunnelAuth?: string;
+  /** Hostnames allowed to receive custom headers (default: same-origin only) */
+  headerHosts?: string[];
+  /** Epoch ms deadline shared across crawls */
+  deadlineAt?: number;
   /**
    * The AI key's free requests today, when the AI service says: planning stops asking the AI
    * past `left`, and the rest is planned by fixed rules.
@@ -97,9 +118,23 @@ export interface DiscoveryOptions {
   sequentialPlanning?: boolean;
 }
 
+export interface DiscoveryOutcome {
+  draft: DiscoveryDraft;
+  preflight?: PreFlightResult;
+}
+
 /** How a scan is going. */
 export type DiscoveryProgress =
-  | { stage: 'crawling'; pagesFound: number; urlPath: string; who: string; plannedSoFar?: number }
+  | {
+      stage: 'crawling';
+      pagesFound: number;
+      urlPath: string;
+      who: string;
+      plannedSoFar?: number;
+      signedInAs?: string;
+      signInFailedFor?: string[];
+      skipped?: number;
+    }
   | { stage: 'narrow-screens' }
   | {
       stage: 'planning';
@@ -205,17 +240,39 @@ function describeExploration(
   }
   // Pages found by any crawl: reached ones are the site map's pages; the rest keep the first reason given.
   const reachedPaths = new Set(merged.pages.map((p) => new URL(p.urlPath, 'http://x').pathname));
-  const skippedPages = new Map<string, NonNullable<SpiderResult['skipped']>[number]>();
+  const skippedPages = new Map<string, SkippedPageInfo>();
   for (const { result } of crawls) {
     for (const s of result.skipped || []) {
       const urlPath = new URL(s.urlPath, 'http://x').pathname;
-      if (!reachedPaths.has(urlPath) && !skippedPages.has(urlPath)) skippedPages.set(urlPath, { urlPath, why: s.why });
+      if (!reachedPaths.has(urlPath) && !skippedPages.has(urlPath)) {
+        skippedPages.set(urlPath, {
+          urlPath,
+          why: s.why,
+          status: s.status,
+          finalPath: s.finalPath,
+          detail: s.detail,
+        });
+      }
     }
   }
-  const pageCoverage = {
+
+  const allRoutes: RouteTelemetry[] = [];
+  for (const { result } of crawls) {
+    for (const r of result.routes || []) {
+      allRoutes.push({
+        ...r,
+        redirectChain: r.redirectChain ? r.redirectChain.slice(0, 5) : undefined,
+      });
+      if (allRoutes.length >= 500) break;
+    }
+    if (allRoutes.length >= 500) break;
+  }
+
+  const pageCoverage: PageCoverage = {
     found: reachedPaths.size + skippedPages.size,
     reached: reachedPaths.size,
     skipped: [...skippedPages.values()],
+    routes: allRoutes.length > 0 ? allRoutes : undefined,
   };
   return {
     signedInAs,
@@ -232,16 +289,33 @@ export class DiscoveryAgent {
   private browserManager = new BrowserManager();
   private contextParser = new ContextParser();
 
+  static async discover(options: DiscoveryOptions): Promise<DiscoveryDraft> {
+    return new DiscoveryAgent().discover(options);
+  }
+
+  static async discoverWithSession(options: DiscoveryOptions): Promise<DiscoveryOutcome> {
+    return new DiscoveryAgent().discoverWithSession(options);
+  }
+
   async discover(options: DiscoveryOptions): Promise<DiscoveryDraft> {
     try {
-      return await this.discoverSite(options);
+      const outcome = await this.discoverSite(options);
+      return outcome.draft;
     } finally {
       // Also when the scan is stopped or fails part-way: no browser is left running.
       await this.browserManager.close().catch(() => {});
     }
   }
 
-  private async discoverSite(options: DiscoveryOptions): Promise<DiscoveryDraft> {
+  async discoverWithSession(options: DiscoveryOptions): Promise<DiscoveryOutcome> {
+    try {
+      return await this.discoverSite(options);
+    } finally {
+      await this.browserManager.close().catch(() => {});
+    }
+  }
+
+  private async discoverSite(options: DiscoveryOptions): Promise<DiscoveryOutcome> {
     const outputDir = options.outputDir || path.join(process.cwd(), '.qa-report');
     await fs.mkdir(outputDir, { recursive: true });
     const signal = options.signal;
@@ -262,12 +336,26 @@ export class DiscoveryAgent {
     // Signing in with the roles' own details is allowed on any site; it happens here, before the guard.
     const preflight =
       roles.length > 0
-        ? await new PreFlightChecker().runPreFlight(options.targetUrl, options.profile, undefined, {
+        ? await new PreFlightChecker().runPreFlight(options.targetUrl, options.profile, options.tunnelAuth, {
             browserManager: this.browserManager,
             authDir: options.authDir || path.join(outputDir, 'auth'),
             suppliedSessions: options.suppliedSessions,
+            customHeaders: options.customHeaders,
+            userAgent: options.userAgent,
+            headerHosts: options.headerHosts,
           })
         : undefined;
+
+    for (const role of roles) {
+      const diag = preflight?.roleDiagnostics?.[role.role];
+      debugLog('auth', `role diagnostics for ${role.role}`, {
+        role: role.role,
+        ok: diag?.ok,
+        failedStep: diag?.failedStep,
+        attempts: diag?.attempts,
+        landedPath: diag?.landedPath,
+      });
+    }
     stopIfAborted(signal);
     if (options.requireSignIn && preflight) {
       // Fail closed: a role is signed in only if it has a session. An unreachable home page has no
@@ -333,12 +421,18 @@ export class DiscoveryAgent {
     // A site we don't own: honour its robots.txt and pause between pages. A live site: send nothing.
     const targetOrigin = new URL(options.targetUrl);
     const ownMachine = isPrivateHost(targetOrigin.hostname);
+    const defaultBudgetMinutes = process.env.QA_DISCOVERY_MAX_MINUTES
+      ? Number(process.env.QA_DISCOVERY_MAX_MINUTES)
+      : 20;
+    const deadlineAt = options.deadlineAt ?? (Date.now() + defaultBudgetMinutes * 60 * 1000);
+
     const crawlOptions: CrawlOptions = {
       robots: ownMachine ? undefined : await RobotsPolicy.fetch(targetOrigin.origin, CRAWLER_TOKEN),
       pageDelayMs: options.crawlDelayMs !== undefined ? options.crawlDelayMs : (ownMachine ? 0 : PUBLIC_SITE_PAGE_DELAY_MS),
       concurrency: options.crawlConcurrency,
       customHeaders: options.customHeaders,
       screenshotDir: path.join(outputDir, 'plan-pages'),
+      deadlineAt,
       // Stopping to plan what's found ends the crawl the same way as stopping outright.
       signal:
         options.finishSignal && signal
@@ -350,6 +444,9 @@ export class DiscoveryAgent {
         baseUrl: options.targetUrl,
         storageState,
         customHeaders: options.customHeaders,
+        userAgent: options.userAgent,
+        tunnelAuth: options.tunnelAuth,
+        headerHosts: options.headerHosts,
       });
       if (options.readOnly) await blockChanges(context);
       return context;
@@ -358,6 +455,10 @@ export class DiscoveryAgent {
     console.log(`[DiscoveryAgent] Crawling routes and interactive forms on ${options.targetUrl}...`);
     // Pages found so far across every explorer, for the progress screen.
     let pagesFound = 0;
+    const signInFailed: string[] = [];
+    const signInFailures: Record<string, SignInFailureReason> = {};
+    const droppedSessionRoles: string[] = [];
+
     const onPage = (who: string) => (page: PageInventoryItem, _n: number, forms: SpiderResult['forms'] = []) => {
       pipeline?.push(page, who, forms);
       options.onProgress?.({
@@ -366,27 +467,36 @@ export class DiscoveryAgent {
         urlPath: page.urlPath,
         who,
         plannedSoFar: pipeline?.plannedSoFar,
+        signedInAs: who !== 'visitor' ? who : undefined,
+        signInFailedFor: signInFailed.length > 0 ? signInFailed : undefined,
       });
     };
     // Pages the person added by address last time: no link leads there, so they're visited directly.
     const addedBefore = Object.entries(options.remembered?.pages || {})
       .filter(([, page]) => page.added)
       .map(([urlPath]) => urlPath);
+
+    const totalMaxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
+    const visitorSpider = new DeterministicSpider(
+      options.profile?.forbiddenActions || [],
+      totalMaxPages
+    );
     const visitorContext = await newContext();
     crawls.push({
       who: 'visitor',
-      result: await spider.crawl(visitorContext, options.targetUrl, {
+      result: await visitorSpider.crawl(visitorContext, options.targetUrl, {
         ...crawlOptions,
         startPaths: addedBefore,
         screenshotPrefix: 'visitor',
         onPage: onPage('visitor'),
+        role: 'visitor',
+        isSignedIn: false,
+        deadlineAt,
       }),
     });
     await visitorContext.close();
     stopIfAborted(signal);
 
-    const signInFailed: string[] = [];
-    const signInFailures: Record<string, SignInFailureReason> = {};
     for (const role of roles) {
       const storageState = preflight?.roleStorageStates?.[role.role];
       if (!storageState) {
@@ -399,21 +509,46 @@ export class DiscoveryAgent {
         `[DiscoveryAgent] Exploring signed in as "${role.role}"${landing ? ` from ${redactor.text(landing)}` : ''}...`
       );
       const roleContext = await newContext(storageState);
+      const roleMaxPages = Math.min(totalMaxPages, Math.max(20, Math.floor(totalMaxPages / 2)));
+      const roleSpider = new DeterministicSpider(
+        options.profile?.forbiddenActions || [],
+        roleMaxPages
+      );
+      const roleResult = await roleSpider.crawl(roleContext, options.targetUrl, {
+        ...crawlOptions,
+        startPaths: [...(landing ? [landing] : []), ...addedBefore],
+        screenshotPrefix: `role-${crawls.length}`,
+        onPage: onPage(role.role),
+        role: role.role,
+        isSignedIn: true,
+        knownLoginPaths: [role.loginPath || '/login'],
+        deadlineAt,
+      });
       crawls.push({
         who: role.role,
-        result: await spider.crawl(roleContext, options.targetUrl, {
-          ...crawlOptions,
-          startPaths: landing ? [landing] : [],
-          screenshotPrefix: `role-${crawls.length}`,
-          onPage: onPage(role.role),
-        }),
+        result: roleResult,
       });
       await roleContext.close();
       stopIfAborted(signal);
+
+      if (roleResult.sessionLost || (roleResult.signInWalls && roleResult.signInWalls.length >= 3)) {
+        if (options.requireSignIn) {
+          await this.browserManager.close().catch(() => {});
+          throw new SignInFailedError('session-expired', role.role);
+        }
+        signInFailures[role.role] = 'session-expired';
+        droppedSessionRoles.push(role.role);
+      }
     }
 
     const spiderResult = mergeCrawls(crawls);
     const exploration = describeExploration(crawls, spiderResult, signInFailed, signInFailures);
+    for (const roleName of droppedSessionRoles) {
+      const dropNote = `${roleName}'s sign-in stopped working part-way; pages after that were not explored`;
+      if (!exploration.notes.includes(dropNote)) {
+        exploration.notes.push(dropNote);
+      }
+    }
     if (options.finishSignal?.aborted) {
       exploration.notes.push(
         `You stopped the scan after ${spiderResult.pages.length} ${spiderResult.pages.length === 1 ? 'page' : 'pages'}, so pages it hadn’t reached yet aren’t in the plan.`
@@ -433,6 +568,10 @@ export class DiscoveryAgent {
             baseUrl: options.targetUrl,
             viewport: BREAKPOINT_VIEWPORTS[size],
             storageState: signedIn ? preflight?.roleStorageStates?.[signedIn] : undefined,
+            customHeaders: options.customHeaders,
+            userAgent: options.userAgent,
+            tunnelAuth: options.tunnelAuth,
+            headerHosts: options.headerHosts,
           });
           if (options.readOnly) await blockChanges(context);
           return context;
@@ -703,6 +842,6 @@ export class DiscoveryAgent {
     await fs.writeFile(draftPath, JSON.stringify(safeDraft, null, 2), 'utf8');
     console.log(`[DiscoveryAgent] Discovery draft saved to ${draftPath}`);
 
-    return safeDraft;
+    return { draft: safeDraft, preflight };
   }
 }

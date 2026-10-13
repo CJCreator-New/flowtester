@@ -416,7 +416,7 @@
         "packages/core/src/discovery/deterministic-spider.ts",
         "packages/core/src/browser.ts"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-114",
