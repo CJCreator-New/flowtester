@@ -48,6 +48,8 @@ export default [
       'no-useless-escape': 'warn',
       // Redaction and sanitising regexes match control characters on purpose.
       'no-control-regex': 'warn',
+      // Regexes strip BOM or match unconventional whitespace intentionally.
+      'no-irregular-whitespace': ['warn', { skipRegExps: true, skipStrings: true }],
     },
   },
   {
@@ -71,5 +73,18 @@ export default [
     // Spec files build loose fixtures; typing them as any is fine.
     files: ['**/tests/**'],
     rules: { '@typescript-eslint/no-explicit-any': 'off' },
+  },
+  {
+    files: ['packages/*/src/**/*.{ts,tsx}'],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'warn',
+      '@typescript-eslint/no-misused-promises': 'warn',
+    },
   },
 ];

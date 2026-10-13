@@ -1,6 +1,6 @@
-// Fails when the Playwright version in pnpm-lock.yaml differs from the tag of the runner Docker image.
+// Fails when the Playwright version in pnpm-lock.yaml or package manifests differs from the tag of the runner Docker image.
 // Pure string parsing: no network, no pnpm. Usage: node scripts/check-playwright-version.mjs
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -18,7 +18,42 @@ export function parseLockfileVersions(text) {
   return [...found].sort();
 }
 
-export function checkVersions({ docker, locked }) {
+/** Finds Playwright versions or overrides in root and workspace package.json files. */
+export function parseManifestVersions(root) {
+  const manifests = [];
+  const rootPkgPath = path.join(root, 'package.json');
+  if (existsSync(rootPkgPath)) {
+    manifests.push({ relPath: 'package.json', path: rootPkgPath });
+  }
+
+  const packagesDir = path.join(root, 'packages');
+  if (existsSync(packagesDir)) {
+    for (const name of readdirSync(packagesDir)) {
+      const pkgJsonPath = path.join(packagesDir, name, 'package.json');
+      if (existsSync(pkgJsonPath)) {
+        manifests.push({ relPath: `packages/${name}/package.json`, path: pkgJsonPath });
+      }
+    }
+  }
+
+  const results = [];
+  for (const m of manifests) {
+    try {
+      const data = JSON.parse(readFileSync(m.path, 'utf8'));
+      const deps = data.dependencies?.playwright;
+      const devDeps = data.devDependencies?.playwright;
+      const override = data.pnpm?.overrides?.playwright;
+      if (deps) results.push({ file: m.relPath, field: 'dependencies.playwright', version: deps });
+      if (devDeps) results.push({ file: m.relPath, field: 'devDependencies.playwright', version: devDeps });
+      if (override) results.push({ file: m.relPath, field: 'pnpm.overrides.playwright', version: override });
+    } catch {
+      // ignore parse error if any
+    }
+  }
+  return results;
+}
+
+export function checkVersions({ docker, locked, manifests = [] }) {
   if (!docker) {
     return {
       ok: false,
@@ -35,7 +70,15 @@ export function checkVersions({ docker, locked }) {
       message: `Playwright version mismatch: packages/runner/Dockerfile is ${docker}, pnpm-lock.yaml resolves ${locked.join(', ')}. Bump them together (docs/DEPLOYMENT.md#docker).`,
     };
   }
-  return { ok: true, message: `Playwright ${docker} matches the Docker image tag.` };
+  const mismatchedManifests = manifests.filter((m) => m.version !== docker);
+  if (mismatchedManifests.length > 0) {
+    const details = mismatchedManifests.map((m) => `${m.file} (${m.field}=${m.version})`).join(', ');
+    return {
+      ok: false,
+      message: `Playwright version mismatch: packages/runner/Dockerfile is ${docker}, but manifests declare: ${details}.`,
+    };
+  }
+  return { ok: true, message: `Playwright ${docker} matches the Docker image tag, lockfile, and package manifests.` };
 }
 
 export function main(root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')) {
@@ -48,9 +91,11 @@ export function main(root = path.resolve(path.dirname(fileURLToPath(import.meta.
     console.error(`Could not read a file needed for the Playwright version check: ${err.message}`);
     return 1;
   }
+  const manifests = parseManifestVersions(root);
   const result = checkVersions({
     docker: parseDockerfileVersion(dockerfile),
     locked: parseLockfileVersions(lockfile),
+    manifests,
   });
   (result.ok ? console.log : console.error)(result.message);
   return result.ok ? 0 : 1;

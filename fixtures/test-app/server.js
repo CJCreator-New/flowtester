@@ -4,10 +4,18 @@ import { fileURLToPath } from 'url';
 
 const port = process.env.PORT || 3050;
 
-let labStats = {
-  signIns: 0,
-  headerHits: {},
-};
+function getLab() {
+  return (
+    globalThis.__fixtureLab ||
+    (globalThis.__fixtureLab = {
+      posts: 0,
+      deletes: 0,
+      cancelledDeletes: 0,
+      signIns: 0,
+      headerHits: {},
+    })
+  );
+}
 
 let labExpiringState = {
   maxRequests: 3,
@@ -24,7 +32,8 @@ const server = http.createServer((req, res) => {
 
   if (req.headers['x-qa-bypass-token']) {
     const p = url.pathname;
-    labStats.headerHits[p] = (labStats.headerHits[p] || 0) + 1;
+    const lab = getLab();
+    lab.headerHits[p] = (lab.headerHits[p] || 0) + 1;
   }
 
   // API endpoints
@@ -107,7 +116,7 @@ const server = http.createServer((req, res) => {
       const form = new URLSearchParams(body);
       const account = ACCOUNTS[form.get('email') || ''];
       if (account && account[0] === form.get('password')) {
-        labStats.signIns += 1;
+        getLab().signIns += 1;
         res.writeHead(302, { 'Set-Cookie': `fixture_session=${account[1]}; Path=/; HttpOnly`, Location: '/account' });
         res.end();
       } else {
@@ -119,15 +128,13 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/signin') return html('Sign in', `<h1>Sign in</h1>${SIGN_IN_FORM}`);
 
   // --- /lab/* routes for auth and crawler failure modes (T-102) ---
-  if (url.pathname === '/lab/stats' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(labStats));
-    return;
-  }
-
   if (url.pathname === '/lab/reset' && req.method === 'POST') {
-    labStats.signIns = 0;
-    labStats.headerHits = {};
+    const lab = getLab();
+    lab.posts = 0;
+    lab.deletes = 0;
+    lab.cancelledDeletes = 0;
+    lab.signIns = 0;
+    lab.headerHits = {};
     labExpiringState.maxRequests = 3;
     labExpiringState.currentRequests = 0;
     labExpiringState.invalidated = false;
@@ -208,7 +215,7 @@ const server = http.createServer((req, res) => {
       const form = new URLSearchParams(body);
       const account = ACCOUNTS[form.get('email') || ''];
       if (account && account[0] === form.get('password')) {
-        labStats.signIns += 1;
+        getLab().signIns += 1;
         res.writeHead(302, { 'Set-Cookie': `fixture_session=${account[1]}; Path=/; HttpOnly`, Location: '/account' });
         res.end();
       } else {
@@ -560,13 +567,14 @@ const server = http.createServer((req, res) => {
   // /lab/*: pages for the intent/refusal-rule and interactive-state tests. Linked from nowhere (not in nav,
   // sitemap or any page), so crawls and benchmark counts are unchanged.
   if (url.pathname.startsWith('/lab/')) {
-    const lab = globalThis.__fixtureLab || (globalThis.__fixtureLab = { posts: 0, deletes: 0, cancelledDeletes: 0 });
+    const lab = getLab();
     const labPath = url.pathname;
     if (req.method === 'POST') lab.posts++;
     if (req.method === 'DELETE') lab.deletes++;
     if (labPath === '/lab/stats') return json(200, lab);
     if (labPath === '/lab/stats/reset') {
-      lab.posts = lab.deletes = lab.cancelledDeletes = 0;
+      lab.posts = lab.deletes = lab.cancelledDeletes = lab.signIns = 0;
+      lab.headerHits = {};
       return json(200, lab);
     }
     if (labPath === '/lab/cancelled') {

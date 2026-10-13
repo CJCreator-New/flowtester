@@ -4,6 +4,10 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  playwright: 1.63.0
+  playwright-core: 1.63.0
+
 importers:
 
   .:
@@ -53,7 +57,7 @@ importers:
         specifier: ^7.2.0
         version: 7.2.0
       playwright:
-        specifier: ^1.49.1
+        specifier: 1.63.0
         version: 1.63.0
       pngjs:
         specifier: ^7.0.0
@@ -87,7 +91,7 @@ importers:
         specifier: 1.12.3
         version: 1.12.3
       playwright:
-        specifier: ^1.49.1
+        specifier: 1.63.0
         version: 1.63.0
       pngjs:
         specifier: ^7.0.0
@@ -165,7 +169,7 @@ importers:
         specifier: ^10.4.20
         version: 10.6.1(postcss@8.5.28)
       playwright:
-        specifier: ^1.63.0
+        specifier: 1.63.0
         version: 1.63.0
       postcss:
         specifier: ^8.4.49
@@ -193,7 +197,7 @@ packages:
   '@axe-core/playwright@4.13.0':
     resolution: {integrity: sha512-6YLx+kxXu5GJceG4ozFg+33a2EMTdjYwWGloJ3sb9Kta5pp+ZNS53uxGVog5JetIY8s++P5UrtX+cri+u0VAVg==}
     peerDependencies:
-      playwright-core: '>= 1.0.0'
+      playwright-core: 1.63.0
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
