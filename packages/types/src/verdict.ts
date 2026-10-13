@@ -82,7 +82,7 @@ export function releaseVerdict(
   for (const p of active) counts[p.severity]++;
 
   const maxBlockers = gate?.maxBlockers ?? 0;
-  const maxMajors = gate?.maxMajors;
+  const maxMajors = gate ? gate.maxMajors : 0;
   const maxMinors = gate?.maxMinors;
 
   const blockersBreached = counts.Blocker > maxBlockers;
@@ -105,8 +105,8 @@ export function releaseVerdict(
     const gradeRanks: Record<AspectGrade, number> = { A: 4, B: 3, C: 2, D: 1, F: 0 };
     const minRank = gate.minAreaGrade ? gradeRanks[gate.minAreaGrade] : undefined;
 
-    for (const [name, scoreInfo] of Object.entries(aspects) as Array<[AspectType, typeof aspects[AspectType]]>) {
-      if (scoreInfo.checked === false) continue;
+    for (const [name, scoreInfo] of Object.entries(aspects || {}) as Array<[AspectType, typeof aspects[AspectType]]>) {
+      if (!scoreInfo || scoreInfo.checked === false) continue;
       if (gate.advisoryAreas?.includes(name)) continue;
 
       if (gate.minAreaScore !== undefined && scoreInfo.score < gate.minAreaScore) {
@@ -117,7 +117,7 @@ export function releaseVerdict(
       }
     }
 
-    if (gate.strictAccessibility && aspects.Accessible?.checked !== false) {
+    if (gate.strictAccessibility && aspects?.Accessible && aspects.Accessible.checked !== false) {
       if (aspects.Accessible.grade !== 'A' || aspects.Accessible.score < 90) {
         breaches.push(`Accessible area must achieve Grade A under strict accessibility gating`);
       }

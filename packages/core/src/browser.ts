@@ -190,9 +190,16 @@ export class BrowserManager {
   }
 
   async close(): Promise<void> {
+    const closes: Promise<void>[] = [];
     for (const b of this.browsers.values()) {
-      await b.close().catch(() => {});
+      closes.push(
+        Promise.race([
+          b.close().catch(() => {}),
+          new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+        ])
+      );
     }
+    await Promise.all(closes);
     this.browsers.clear();
     this.browser = null;
   }

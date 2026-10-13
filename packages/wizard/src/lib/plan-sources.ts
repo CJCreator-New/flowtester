@@ -77,10 +77,9 @@ export function notFoundByDocument(
   return [...groups].map(([document, items]) => ({ document, items }));
 }
 
-/** "4 of 6 documented requirements reached in live app", or null when no document was added. */
 export function documentedLine(documented: { reached: number; total: number } | undefined): string | null {
   if (!documented || documented.total <= 0) return null;
-  return `${documented.reached} of ${documented.total} documented requirements reached in live app`;
+  return `${documented.reached} of ${documented.total} documented items reached`;
 }
 
 /** The plan is partly written during the scan: say so plainly. */

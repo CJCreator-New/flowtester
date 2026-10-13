@@ -431,6 +431,12 @@ export interface TriggerRunBody {
   aiCap?: RunCap;
   /** Most Tests the Plan runs before Rejects and Limits are trimmed (1 to 100000); the default when absent. */
   testCap?: number;
+  /** Crawl concurrency (workers count, 1 to 5; default 2 per FR-1.7). */
+  crawlConcurrency?: number;
+  /** Delay pacing between page requests in ms (default 100ms per FR-1.7). */
+  crawlDelayMs?: number;
+  /** Custom HTTP headers sent with every crawler and test request (e.g. bypass headers). */
+  customHeaders?: Record<string, string> | string;
 }
 
 /** Plans saved before Intent carry the old Denial kind; read them as `intent: 'denied'`. */
@@ -3131,7 +3137,10 @@ export class RunnerServer {
             : undefined,
         crawlConcurrency: checkCrawlConcurrency(body.crawlConcurrency),
         crawlDelayMs: checkCrawlDelayMs(body.crawlDelayMs),
-        customHeaders: checkCustomHeaders(body.customHeaders).ok ? checkCustomHeaders(body.customHeaders).value : undefined,
+        customHeaders: (() => {
+          const ch = checkCustomHeaders(body.customHeaders);
+          return ch.ok ? ch.value : undefined;
+        })(),
         aiBudget,
         aiModels: { model: ai.models?.text, fallbacks: ai.fallbacks },
         onProgress: (progress) => {
