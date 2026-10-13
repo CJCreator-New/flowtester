@@ -135,8 +135,8 @@ describe('Runner endpoints for the wizard', () => {
 
     it('writes productContext to a file and hands its path to discovery', async () => {
       const discover = vi
-        .spyOn(DiscoveryAgent.prototype, 'discover')
-        .mockImplementation(async (o) => emptyDraft(o.targetUrl));
+        .spyOn(DiscoveryAgent.prototype, 'discoverWithSession')
+        .mockImplementation(async (o) => ({ draft: emptyDraft(o.targetUrl), preflight: undefined }));
       const context = '# Checkout\n- Coupon codes are case-insensitive\n\n# Sign in\nUsers sign in with email.';
 
       const res = await post('/api/runner/run', {
@@ -156,8 +156,8 @@ describe('Runner endpoints for the wizard', () => {
 
     it('passes no context file when productContext is omitted', async () => {
       const discover = vi
-        .spyOn(DiscoveryAgent.prototype, 'discover')
-        .mockImplementation(async (o) => emptyDraft(o.targetUrl));
+        .spyOn(DiscoveryAgent.prototype, 'discoverWithSession')
+        .mockImplementation(async (o) => ({ draft: emptyDraft(o.targetUrl), preflight: undefined }));
 
       await post('/api/runner/run', { targetUrl: `${siteUrl}/clean/`, useAI: true, aiProvider: 'mock' });
       await waitForIdle(runnerUrl);
@@ -308,7 +308,7 @@ describe('Runner endpoints for the wizard', () => {
 
   describe('Task 5.2: safe-public runs', () => {
     it('scans read-only: no discovery, no orchestrator, no mutating requests', async () => {
-      const discover = vi.spyOn(DiscoveryAgent.prototype, 'discover');
+      const discover = vi.spyOn(DiscoveryAgent.prototype, 'discoverWithSession');
       const orchestrate = vi.spyOn(FlowTestOrchestrator.prototype, 'run');
       site.requests.length = 0;
 

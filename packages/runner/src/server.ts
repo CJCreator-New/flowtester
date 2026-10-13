@@ -59,6 +59,8 @@ import {
   SignInFailedError,
   PlanValidator,
   Redactor,
+  redactUrl,
+  type PreFlightResult,
   replaceCredentialsWithPlaceholders,
   applySafeAnswers,
   isTestHost,
@@ -144,7 +146,7 @@ import {
   type BetaLimits,
 } from './beta.js';
 import { testCopyFor } from './host-policy.js';
-import { checkAiCap, checkContextDocuments, checkContextUrl, checkIntentsOff, checkSavedSessions, checkTestCap, checkCrawlConcurrency, checkCrawlDelayMs, checkCustomHeaders } from './run-inputs.js';
+import { checkAiCap, checkContextDocuments, checkContextUrl, checkIntentsOff, checkSavedSessions, checkTestCap, checkCrawlConcurrency, checkCrawlDelayMs, checkCustomHeaders, checkRoles, checkLoginPath } from './run-inputs.js';
 
 function isInside(dir: string, file: string): boolean {
   const rel = path.relative(dir, file);
@@ -177,8 +179,66 @@ async function exists(file: string): Promise<boolean> {
 /** The largest JSON request accepted (characters). Plans are the biggest, and stay far below this. */
 const MAX_BODY_CHARS = 5_000_000;
 
-/** Check-ups kept per site; older ones are deleted after each run. Their grade history is kept. */
-const RUNS_KEPT_PER_SITE = 10;
+/**
+ * Redacts secrets from error messages: passwords, tokens, email usernames, custom header values,
+ * tunnel authorization, and session cookies. Also strips URL query strings so query secrets never leak.
+ */
+export function redactedMessage(
+  err: unknown,
+  extra?: {
+    roles?: Array<Partial<RoleCredential>>;
+    customHeaders?: Record<string, string>;
+    tunnelAuth?: string;
+    cookies?: Array<{ name?: string; value?: string }>;
+    targetUrl?: string;
+  }
+): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const secrets: Array<Partial<RoleCredential>> = [...(extra?.roles || [])];
+
+  if (extra?.customHeaders) {
+    for (const val of Object.values(extra.customHeaders)) {
+      if (typeof val === 'string' && val.length >= 3) {
+        secrets.push({ token: val });
+      }
+    }
+  }
+
+  if (extra?.tunnelAuth && extra.tunnelAuth.length >= 3) {
+    secrets.push({ token: extra.tunnelAuth });
+  }
+
+  if (extra?.cookies) {
+    for (const c of extra.cookies) {
+      if (typeof c.name === 'string' && c.name.length >= 3) {
+        secrets.push({ token: c.name });
+      }
+      if (typeof c.value === 'string' && c.value.length >= 3) {
+        secrets.push({ token: c.value });
+      }
+    }
+  }
+
+  if (extra?.targetUrl) {
+    try {
+      const u = new URL(extra.targetUrl);
+      for (const val of u.searchParams.values()) {
+        if (typeof val === 'string' && val.length >= 3) {
+          secrets.push({ token: val });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const redactor = new Redactor(secrets);
+  let out = redactor.text(raw);
+  out = redactUrl(out);
+  // Strip any URL query strings to ensure no query strings leak in error messages
+  out = out.replace(/(https?:\/\/[^\s"'<>)]+)\?[^\s"'<>)]*/gi, '$1');
+  return out;
+}
 
 /** "30 September 2026", for sentences in the report. */
 function formatDay(iso: string): string {
@@ -285,6 +345,7 @@ const DOWNLOADABLE_REPORT_FILES: Record<string, string> = {
   'issues.md': 'text/markdown; charset=utf-8',
   'issues.html': 'text/html; charset=utf-8',
 };
+const RUNS_KEPT_PER_SITE = 10;
 
 export interface RunnerServerOptions {
   port?: number;
@@ -437,6 +498,12 @@ export interface TriggerRunBody {
   crawlDelayMs?: number;
   /** Custom HTTP headers sent with every crawler and test request (e.g. bypass headers). */
   customHeaders?: Record<string, string> | string;
+  /** Custom user-agent string. */
+  userAgent?: string;
+  /** Tunnel authentication secret. */
+  tunnelAuth?: string;
+  /** Extra hosts that may receive secret headers (Domain Allowlist). */
+  headerHosts?: string[];
 }
 
 /** Plans saved before Intent carry the old Denial kind; read them as `intent: 'denied'`. */
@@ -507,6 +574,18 @@ interface StoredPlanRecord {
     designNotes?: string;
     /** Path to product context file on disk if written. */
     contextFilePath?: string;
+    /** Custom HTTP headers sent with requests. Kept in memory only. */
+    customHeaders?: Record<string, string>;
+    /** Names of custom headers configured during discovery (kept on disk so approval can ask for them). */
+    customHeaderNames?: string[];
+    /** Custom user-agent string. */
+    userAgent?: string;
+    /** Tunnel authentication secret. Kept in memory only. */
+    tunnelAuth?: string;
+    /** Extra hosts allowed for secret headers. */
+    headerHosts?: string[];
+    /** Pre-flight check outcome reused across stages. Kept in memory only. */
+    preflight?: PreFlightResult;
   };
 }
 
@@ -671,6 +750,10 @@ export class RunnerServer {
   private runGeneration = 0;
   /** Where sign-in sessions are saved: beside the runs, never inside one, and never served. */
   private authDir: string;
+  private currentCustomHeaders?: Record<string, string>;
+  private currentTunnelAuth?: string;
+  private currentHeaderHosts?: string[];
+  private currentUserAgent?: string;
   /** The working folder that held the data before `.qa-data` existed, when the default data folder is used. */
   private legacyDataDir?: string;
   /** A plan update running in the background (re-planning, adding pages): one at a time. */
@@ -687,6 +770,29 @@ export class RunnerServer {
   private recentApprovals = new Map<string, { timestamp: number; runId: string }>();
   private baselineDir: string;
   private scheduler: SchedulerManager;
+
+  public runAuthDir(runId: string): string {
+    return path.join(this.authDir, runId);
+  }
+
+  public async cleanAuthDir(runId: string): Promise<void> {
+    try {
+      await fs.rm(this.runAuthDir(runId), { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+
+  private redactedMessage(err: unknown, extraRoles?: Array<Partial<RoleCredential>>): string {
+    const headers = this.currentCustomHeaders || this.currentPlanRecord?.context?.customHeaders;
+    const tunnel = this.currentTunnelAuth || this.currentPlanRecord?.context?.tunnelAuth;
+    return redactedMessage(err, {
+      roles: extraRoles,
+      customHeaders: headers,
+      tunnelAuth: tunnel,
+      targetUrl: this.currentTargetUrl || this.currentPlanRecord?.context?.targetUrl || undefined,
+    });
+  }
 
   constructor(options: RunnerServerOptions = {}) {
     this.port = options.port || 3001;
@@ -1245,7 +1351,7 @@ export class RunnerServer {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found' }));
         } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = this.redactedMessage(err);
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: msg }));
         }
@@ -1474,7 +1580,7 @@ export class RunnerServer {
       const summary: DocumentSummary = summarizeDocument(text);
       this.sendJson(res, 200, { text, warnings, summary });
     } catch (err) {
-      refuse(err instanceof Error && err.message ? err.message : `${name} could not be read.`);
+      refuse(this.redactedMessage(err) || `${name} could not be read.`);
     }
   }
 
@@ -1718,7 +1824,13 @@ export class RunnerServer {
     const browser = new BrowserManager();
     let result: { ok: boolean; landingPath?: string; reason?: SignInFailureReason };
     try {
-      const context = await browser.createContext({ baseUrl: target });
+      const context = await browser.createContext({
+        baseUrl: target,
+        customHeaders: this.currentCustomHeaders,
+        userAgent: this.currentUserAgent,
+        tunnelAuth: this.currentTunnelAuth,
+        headerHosts: this.currentHeaderHosts,
+      });
       result = await new PreFlightChecker().signIn(context, target, credential);
     } catch {
       result = { ok: false, reason: 'unreachable' };
@@ -2178,7 +2290,7 @@ export class RunnerServer {
       } catch (err) {
         console.warn(
           `[Release check-up] Couldn’t move ${name} into the data folder:`,
-          err instanceof Error ? err.message : err
+          this.redactedMessage(err)
         );
       }
     }
@@ -2580,7 +2692,7 @@ export class RunnerServer {
           });
         this.sendJson(res, 200, { ok, ms, model: answer.model ?? model, reason, usage: answer.usage });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = this.redactedMessage(err);
         this.sendJson(res, 200, {
           ok: false,
           ms: Date.now() - started,
@@ -2665,12 +2777,12 @@ export class RunnerServer {
       } catch (err) {
         if (err instanceof OpenRouterAuthError) {
           if (header?.startsWith('Bearer ') || !apiKey) {
-            this.sendJson(res, 401, { error: err.message });
+            this.sendJson(res, 401, { error: this.redactedMessage(err) });
           } else {
             this.sendJson(res, 200, {
               models: [],
               authError: true,
-              error: err.message,
+              error: this.redactedMessage(err),
               recommendedModel: null,
               recommendedVisionModel: null,
             });
@@ -2747,6 +2859,22 @@ export class RunnerServer {
         return;
       }
     }
+    if (body.roles) {
+      const checkedRoles = checkRoles(body.roles);
+      if (!checkedRoles.ok) {
+        this.sendJson(res, 400, { error: checkedRoles.problem.error, code: checkedRoles.problem.code });
+        return;
+      }
+      for (const role of body.roles) {
+        if (role.loginPath) {
+          const checkedLogin = checkLoginPath(role.loginPath, body.targetUrl);
+          if (!checkedLogin.ok) {
+            this.sendJson(res, 400, { error: checkedLogin.problem.error, code: checkedLogin.problem.code });
+            return;
+          }
+        }
+      }
+    }
     if (this.beta && body.useAI && body.aiProvider === 'mock') {
       this.sendJson(res, 400, {
         error: 'The test AI is not available here.',
@@ -2814,6 +2942,11 @@ export class RunnerServer {
     }
     this.currentRunId = runId;
     this.currentTargetUrl = body.targetUrl;
+    const customHeadersChecked = checkCustomHeaders(body.customHeaders);
+    this.currentCustomHeaders = customHeadersChecked.ok ? customHeadersChecked.value : undefined;
+    this.currentTunnelAuth = body.tunnelAuth;
+    this.currentUserAgent = body.userAgent;
+    this.currentHeaderHosts = body.headerHosts;
     this.runEvents = [];
     const generation = ++this.runGeneration;
     // Saved sessions go to memory and nowhere else; the body is not kept past this point.
@@ -2837,7 +2970,7 @@ export class RunnerServer {
       // Stopped or replaced: whatever stopped it has already said so.
       if (generation !== this.runGeneration || isAbortError(err)) return;
       this.savedSessions.delete(runId);
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = this.redactedMessage(err, body.roles);
       const code = (err as { code?: string } | undefined)?.code || 'ERR_DISCOVERY_FAILED';
       this.lastRunError = msg;
       this.lastErrorCode = code;
@@ -3039,6 +3172,10 @@ export class RunnerServer {
         visibility,
         aiCap: aiCap.ok ? aiCap.value : undefined,
         testCap: checkTestCap(body.testCap),
+        customHeaders: this.currentCustomHeaders,
+        userAgent: body.userAgent,
+        tunnelAuth: body.tunnelAuth,
+        headerHosts: body.headerHosts,
       };
 
       if (body.specTestCases && body.specTestCases.length > 0) {
@@ -3071,6 +3208,8 @@ export class RunnerServer {
 
       // Everything this run writes lives in its own folder.
       await fs.mkdir(runDir, { recursive: true });
+      const runAuthDir = this.runAuthDir(runId);
+      await fs.mkdir(runAuthDir, { recursive: true, mode: 0o700 });
 
       // Product Context: the files sent, then the docs-URL pages. A fetch problem becomes a note.
       const docsNotes: string[] = [];
@@ -3116,7 +3255,7 @@ export class RunnerServer {
 
       this.phase = 'scanning';
       this.broadcastRunnerEvent({ type: 'DISCOVERY_STARTED', runId, timestamp: Date.now() });
-      const draft = await new DiscoveryAgent().discover({
+      const outcome = await new DiscoveryAgent().discoverWithSession({
         targetUrl,
         productId,
         profile,
@@ -3125,7 +3264,7 @@ export class RunnerServer {
         suppliedSessions: this.savedSessions.get(runId),
         aiPacing: aiBudget?.pacing,
         outputDir: runDir,
-        authDir: this.authDir,
+        authDir: runAuthDir,
         signal,
         finishSignal: this.finishController?.signal,
         aiProvider: ai.provider,
@@ -3137,10 +3276,10 @@ export class RunnerServer {
             : undefined,
         crawlConcurrency: checkCrawlConcurrency(body.crawlConcurrency),
         crawlDelayMs: checkCrawlDelayMs(body.crawlDelayMs),
-        customHeaders: (() => {
-          const ch = checkCustomHeaders(body.customHeaders);
-          return ch.ok ? ch.value : undefined;
-        })(),
+        customHeaders: this.currentCustomHeaders,
+        userAgent: body.userAgent,
+        tunnelAuth: body.tunnelAuth,
+        headerHosts: body.headerHosts,
         aiBudget,
         aiModels: { model: ai.models?.text, fallbacks: ai.fallbacks },
         onProgress: (progress) => {
@@ -3151,6 +3290,8 @@ export class RunnerServer {
         remembered: body.replanAll ? undefined : memory?.plan,
       });
       if (!current()) return;
+      const draft = outcome.draft;
+      context.preflight = outcome.preflight;
       await this.recordModelOutcomes(draft.plan?.budget?.models);
       const sinceLastRun = applySiteMemory(draft, memory);
       context.draft = draft;
@@ -3231,6 +3372,10 @@ export class RunnerServer {
         this.isRunning = false;
       }
       throw err;
+    } finally {
+      if (this.phase !== 'awaiting-review') {
+        await this.cleanAuthDir(runId);
+      }
     }
   }
 
@@ -3542,6 +3687,8 @@ export class RunnerServer {
 
     const runDir = this.runDir(context.runId);
     await fs.mkdir(runDir, { recursive: true });
+    const runAuthDir = this.runAuthDir(context.runId);
+    await fs.mkdir(runAuthDir, { recursive: true, mode: 0o700 });
     const orchestrator = new FlowTestOrchestrator();
     let report: ReleaseReport;
     try {
@@ -3553,7 +3700,12 @@ export class RunnerServer {
         headless: context.headless ?? true,
         // The run's own folder; sign-in sessions and the suppressions stay beside the runs.
         outputDir: runDir,
-        authDir: this.authDir,
+        authDir: runAuthDir,
+        customHeaders: context.customHeaders || this.currentCustomHeaders,
+        userAgent: context.userAgent || this.currentUserAgent,
+        tunnelAuth: context.tunnelAuth || this.currentTunnelAuth,
+        headerHosts: context.headerHosts || this.currentHeaderHosts,
+        preflight: context.preflight,
         stateDir: this.outputDir,
         evidenceUrlPrefix: `/api/evidence/runs/${context.runId}/`,
         dataDir: this.dataDir,
@@ -3589,7 +3741,7 @@ export class RunnerServer {
         throw err;
       }
       // Failed part-way: the plan stays, so it can be approved again once the site is working.
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = this.redactedMessage(err);
       await this.savePlan(record).catch(() => {});
       this.phase = 'awaiting-review';
       this.isRunning = true;
@@ -3657,9 +3809,26 @@ export class RunnerServer {
       }
     }
 
+    // Redact any credentials, header tokens, or tunnel secrets in run artifacts.
+    const creds = context.profile?.roles || [];
+    const activeHeaders = context.customHeaders || this.currentCustomHeaders;
+    const headerSecrets: Array<Partial<RoleCredential>> = [];
+    if (activeHeaders) {
+      for (const val of Object.values(activeHeaders)) {
+        if (typeof val === 'string' && val.length >= 3) {
+          headerSecrets.push({ token: val });
+        }
+      }
+    }
+    const activeTunnel = context.tunnelAuth || this.currentTunnelAuth;
+    if (activeTunnel && activeTunnel.length >= 3) {
+      headerSecrets.push({ token: activeTunnel });
+    }
+    await new Redactor([...creds, ...headerSecrets]).files(runDir);
+
     // Kept for Past check-ups, with its files, before the run is reported as done.
     await this.keepRun(report, record.plan.targetUrl || context.targetUrl, context.siteHost).catch((err) =>
-      console.warn('[Release check-up] Couldn’t keep the run’s report:', err instanceof Error ? err.message : err)
+      console.warn('[Release check-up] Couldn’t keep the run’s report:', this.redactedMessage(err))
     );
     this.lastReport = report;
     this.savedSessions.delete(context.runId);
@@ -3799,7 +3968,7 @@ export class RunnerServer {
    * restart the approval has to send them again.
    */
   private planForDisk(record: StoredPlanRecord): StoredPlanRecord {
-    const { profile, ai, ...context } = record.context;
+    const { profile, ai, customHeaders, tunnelAuth, preflight, ...context } = record.context;
     const roles = profile?.roles || [];
     const notSaved = [...new Set([...(context.signInNotSaved || []), ...roles.map((r) => r.role)])];
     // Saved sessions are never written either: the file only says which roles need theirs sent again.
@@ -3812,11 +3981,27 @@ export class RunnerServer {
         return typeof value === 'string' && value.length >= 8 ? [{ token: value }] : [];
       })
     );
-    return new Redactor([...roles, ...sessionSecrets]).deep({
+    const headerNames = Object.keys(customHeaders || this.currentCustomHeaders || {});
+    const customHeaderNames = [...new Set([...(context.customHeaderNames || []), ...headerNames])];
+    const headerSecrets: Array<Partial<RoleCredential>> = [];
+    const activeHeaders = customHeaders || this.currentCustomHeaders;
+    if (activeHeaders) {
+      for (const val of Object.values(activeHeaders)) {
+        if (typeof val === 'string' && val.length >= 3) {
+          headerSecrets.push({ token: val });
+        }
+      }
+    }
+    const activeTunnel = tunnelAuth || this.currentTunnelAuth;
+    if (activeTunnel && activeTunnel.length >= 3) {
+      headerSecrets.push({ token: activeTunnel });
+    }
+    return new Redactor([...roles, ...sessionSecrets, ...headerSecrets]).deep({
       plan: record.plan,
       context: {
         ...context,
         sessionNotSaved: sessionNotSaved.length > 0 ? sessionNotSaved : undefined,
+        customHeaderNames: customHeaderNames.length > 0 ? customHeaderNames : undefined,
         profile: profile && {
           ...profile,
           roles: roles.map(({ role, loginPath }) => ({ role, username: '', loginPath })),
@@ -3831,9 +4016,12 @@ export class RunnerServer {
   /** Forgets the paused plan; with a runId, only while it is still that run's plan (a newer run may have replaced it). */
   private async clearPlan(runId?: string): Promise<void> {
     // The run's saved sessions go with its plan (a plan kept aside for later keeps its own).
-    if (runId) this.savedSessions.delete(runId);
-    else if (this.currentPlanRecord && ![...this.parkedPlans.values()].includes(this.currentPlanRecord)) {
+    if (runId) {
+      this.savedSessions.delete(runId);
+      await this.cleanAuthDir(runId);
+    } else if (this.currentPlanRecord && ![...this.parkedPlans.values()].includes(this.currentPlanRecord)) {
       this.savedSessions.delete(this.currentPlanRecord.plan.runId);
+      await this.cleanAuthDir(this.currentPlanRecord.plan.runId);
     }
     if (runId && this.currentPlanRecord && this.currentPlanRecord.plan.runId !== runId) return;
     this.currentPlanRecord = null;
@@ -4196,7 +4384,7 @@ export class RunnerServer {
           type: 'PLAN_UPDATE_FAILED',
           runId,
           what,
-          error: err instanceof Error ? err.message : String(err),
+          error: this.redactedMessage(err),
           timestamp: Date.now(),
         });
       } finally {
@@ -4387,10 +4575,20 @@ export class RunnerServer {
       const browser = new BrowserManager();
       let found: Awaited<ReturnType<RunnerServer['crawlMore']>>;
       try {
-        const signedIn = await new PreFlightChecker().runPreFlight(rec.context.targetUrl, profile, undefined, {
-          browserManager: browser,
-          authDir: this.authDir,
-        });
+        const runAuthDir = this.runAuthDir(rec.context.runId);
+        await fs.mkdir(runAuthDir, { recursive: true, mode: 0o700 });
+        const signedIn = await new PreFlightChecker().runPreFlight(
+          rec.context.targetUrl,
+          profile,
+          rec.context.tunnelAuth || this.currentTunnelAuth,
+          {
+            browserManager: browser,
+            authDir: runAuthDir,
+            customHeaders: rec.context.customHeaders || this.currentCustomHeaders,
+            userAgent: rec.context.userAgent || this.currentUserAgent,
+            headerHosts: rec.context.headerHosts || this.currentHeaderHosts,
+          }
+        );
         const storageState = signedIn.roleStorageStates?.[role];
         if (!storageState)
           throw new Error(`Signing in as “${role}” didn’t work. Check the username, password and sign-in page.`);
@@ -4460,7 +4658,14 @@ export class RunnerServer {
     const ownMachine = isPrivateHost(origin.hostname);
     const who = options.who ?? 'visitor';
     try {
-      const context = await browser.createContext({ baseUrl: target, storageState: options.storageState });
+      const context = await browser.createContext({
+        baseUrl: target,
+        storageState: options.storageState,
+        customHeaders: record.context.customHeaders || this.currentCustomHeaders,
+        userAgent: record.context.userAgent || this.currentUserAgent,
+        tunnelAuth: record.context.tunnelAuth || this.currentTunnelAuth,
+        headerHosts: record.context.headerHosts || this.currentHeaderHosts,
+      });
       if (record.context.readOnly) await blockChanges(context);
       const result = await new DeterministicSpider(
         record.context.profile?.forbiddenActions || [],
@@ -4584,13 +4789,43 @@ export class RunnerServer {
       return;
     }
 
-    const body: { breakpoints?: string[]; roles?: RoleCredential[]; savedSessions?: unknown } = await this.readJsonBody<{
+    const body: {
       breakpoints?: string[];
       roles?: RoleCredential[];
       savedSessions?: unknown;
+      customHeaders?: unknown;
+    } = await this.readJsonBody<{
+      breakpoints?: string[];
+      roles?: RoleCredential[];
+      savedSessions?: unknown;
+      customHeaders?: unknown;
     }>(req).catch(() => ({}));
     if (body?.breakpoints) {
       record.context.breakpoints = body.breakpoints as Breakpoint[];
+    }
+
+    // Custom headers are never saved to disk either: a plan read back after restart needs them again.
+    if (body?.customHeaders !== undefined) {
+      const checked = checkCustomHeaders(body.customHeaders);
+      if (!checked.ok) {
+        this.sendJson(res, 400, { error: checked.problem.error, code: checked.problem.code });
+        return;
+      }
+      if (checked.value) {
+        record.context.customHeaders = { ...(record.context.customHeaders || {}), ...checked.value };
+        this.currentCustomHeaders = { ...(this.currentCustomHeaders || {}), ...checked.value };
+      }
+    }
+    const headersMissing = (record.context.customHeaderNames || []).filter(
+      (h) => !record.context.customHeaders?.[h] && !this.currentCustomHeaders?.[h]
+    );
+    if (headersMissing.length > 0) {
+      this.sendJson(res, 409, {
+        error: `Release check-up restarted since this plan was made, and custom headers are never saved to disk. Send them again for: ${headersMissing.join(', ')}.`,
+        code: 'ERR_HEADERS_NOT_SAVED',
+        needsHeaders: headersMissing,
+      });
+      return;
     }
 
     // Saved sessions are never saved to disk either: a plan read back after a restart needs them again.
@@ -4717,7 +4952,7 @@ export class RunnerServer {
     this.executeTesting(record, specTestCases, notRun, generation).catch((err: unknown) => {
       // Stopped or replaced: whatever stopped it has already said so.
       if (generation !== this.runGeneration || isAbortError(err)) return;
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = this.redactedMessage(err);
       this.lastRunError = msg;
       this.lastErrorCode = 'ERR_TEST_EXECUTION_FAILED';
       this.phase = 'failed';
@@ -4802,7 +5037,7 @@ export class RunnerServer {
 
       this.sendJson(res, 200, items);
     } catch (err: unknown) {
-      this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      this.sendJson(res, 500, { error: this.redactedMessage(err) });
     }
   }
 
@@ -4823,7 +5058,7 @@ export class RunnerServer {
       }
       this.sendJson(res, 200, { ok: true, id: body.id });
     } catch (err: unknown) {
-      this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      this.sendJson(res, 500, { error: this.redactedMessage(err) });
     }
   }
 
@@ -4943,7 +5178,7 @@ export class RunnerServer {
       } catch (err) {
         job.status = 'failed';
         job.stage = 'Stopped';
-        job.error = `The comparison couldn’t finish: ${err instanceof Error ? err.message : String(err)}`;
+        job.error = `The comparison couldn’t finish: ${this.redactedMessage(err)}`;
       } finally {
         this.benchmarkBusy = false;
         await store.save(job).catch(() => undefined);
@@ -5021,7 +5256,7 @@ export class RunnerServer {
       });
       this.sendJson(res, 201, schedule);
     } catch (err: unknown) {
-      this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      this.sendJson(res, 500, { error: this.redactedMessage(err) });
     }
   }
 
@@ -5083,7 +5318,7 @@ export class RunnerServer {
       await fs.writeFile(filePath, JSON.stringify(records, null, 2), 'utf8');
       this.sendJson(res, 200, { ok: true, override: newRecord });
     } catch (err: unknown) {
-      this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      this.sendJson(res, 500, { error: this.redactedMessage(err) });
     }
   }
 
@@ -5098,7 +5333,7 @@ export class RunnerServer {
         this.sendJson(res, 200, []);
       }
     } catch (err: unknown) {
-      this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      this.sendJson(res, 500, { error: this.redactedMessage(err) });
     }
   }
 
