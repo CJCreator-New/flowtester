@@ -60,7 +60,8 @@ import { PastCheckupsScreen } from './screens/PastCheckupsScreen';
 import { PlanReviewScreen, type PlanNotice, type PlanUpdateState } from './screens/PlanReviewScreen';
 import { ReportScreen } from './screens/ReportScreen';
 import { VisibilityScreen } from './screens/VisibilityScreen';
-import { ScanningScreen, type ScanProgress } from './screens/ScanningScreen';
+import { ScanningScreen, isScanProgress, type ScanProgress } from './screens/ScanningScreen';
+import { headersNotice } from './lib/coverage-text';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { TestingScreen } from './screens/TestingScreen';
 import { VisualBaselinesScreen } from './screens/VisualBaselinesScreen';
@@ -138,8 +139,9 @@ export default function App() {
   const [planNotice, setPlanNotice] = useState<PlanNotice | null>(null);
   const [planUpdate, setPlanUpdate] = useState<PlanUpdateState>({ running: false });
   const [approveError, setApproveError] = useState<string | null>(null);
-  const [approveNeedsSignIn, setApproveNeedsSignIn] = useState(false);
+  const [approveNeedsSignIn, setApproveNeedsSignIn] = useState<boolean | string[]>(false);
   const [approving, setApproving] = useState(false);
+  const lastHeaders = useRef<string>('');
   const [scan, setScan] = useState<ScanProgress | null>(null);
   const [feed, setFeed] = useState<FeedState>(() => initialFeed('product'));
   const [starting, setStarting] = useState(false);
@@ -232,7 +234,8 @@ export default function App() {
           return;
 
         case 'DISCOVERY_PROGRESS': {
-          const p = event as unknown as ScanProgress;
+          if (!isScanProgress(event)) return;
+          const p = event;
           if (p.stage === 'planning') planningStartedAt.current ??= at;
           // Time left, from how long the AI requests so far took.
           const elapsed = planningStartedAt.current ? (at - planningStartedAt.current) / 1000 : 0;
@@ -417,6 +420,7 @@ export default function App() {
   };
 
   const startFromForm = (facts: StartFacts) => {
+    lastHeaders.current = form.customHeaders || '';
     const roles = rolesOf(form);
     void start({
       targetUrl: facts.url,
@@ -454,6 +458,7 @@ export default function App() {
 
   /** Scans again and reuses the approved plan: testing starts at once if nothing changed. */
   const testAgain = async (runId: string, fallbackUrl: string) => {
+    lastHeaders.current = form.customHeaders || '';
     const targetUrl = await typedAddressOf(runId, fallbackUrl);
     const remembered = await rememberedFor(targetUrl);
     setForm((f) => ({
@@ -517,7 +522,7 @@ export default function App() {
   const resumePlan = async (planHost: string) => {
     setStartError(null);
     try {
-      const resumed = await resumeWaitingPlan(planHost);
+      const resumed = await resumeWaitingPlan(planHost, lastHeaders.current || undefined);
       epoch.current++;
       resetRun();
       setStatus((s) =>
@@ -535,6 +540,10 @@ export default function App() {
       refreshRecent();
       navigate(PATHS.plan);
     } catch (err) {
+      if (err instanceof RunnerError && err.code === 'ERR_HEADERS_NOT_SAVED' && err.needsHeaders && err.needsHeaders.length > 0) {
+        setStartError(headersNotice(err.needsHeaders));
+        return;
+      }
       setStartError(err instanceof RunnerError ? err.message : 'That plan couldn’t be opened. Try again.');
     }
   };
@@ -621,7 +630,10 @@ export default function App() {
     setApproving(true);
     const asked = epoch.current;
     try {
-      await approvePlan(roles && roles.length > 0 ? { roles } : undefined);
+      await approvePlan({
+        roles: roles && roles.length > 0 ? roles : undefined,
+        customHeaders: lastHeaders.current || undefined,
+      });
       // Testing can fail before this answer arrives (the site is down): then the plan is back already.
       if (asked !== epoch.current) return;
       epoch.current++;
@@ -631,8 +643,12 @@ export default function App() {
       navigate(PATHS.testing);
     } catch (err) {
       if (err instanceof RunnerError && err.code === 'ERR_SIGN_IN_REQUIRED') {
-        setApproveNeedsSignIn(true);
+        setApproveNeedsSignIn(err.needsSignIn && err.needsSignIn.length > 0 ? err.needsSignIn : true);
         setApproveError(SIGN_IN_AGAIN_TEXT);
+        return;
+      }
+      if (err instanceof RunnerError && err.code === 'ERR_HEADERS_NOT_SAVED' && err.needsHeaders && err.needsHeaders.length > 0) {
+        setApproveError(headersNotice(err.needsHeaders));
         return;
       }
       setApproveError(err instanceof RunnerError ? err.message : 'The plan couldn’t be approved. Try again.');

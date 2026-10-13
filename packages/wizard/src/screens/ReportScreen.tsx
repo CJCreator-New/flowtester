@@ -13,6 +13,7 @@ import {
 import { DeveloperDetails } from '../components/DeveloperDetails';
 import { SiteMap } from '../components/SiteMap';
 import { ErrorMessage, FocusHeading, Notice, Spinner } from '../components/text';
+import { skipReasonText } from '../lib/coverage-text';
 import { count, formatDay, formatDuration, formatWhen, scrollBehavior } from '../lib/format';
 import { gradeClasses } from '../lib/grades';
 import { Link, PATHS } from '../lib/router';
@@ -307,6 +308,10 @@ export function Report({
       )}
 
       <VisualReview report={report} onReportChanged={onReportChanged} />
+
+      <PageCoverageSection report={report} />
+
+      <RolesNotTestedSection report={report} />
 
       <SourcesSummary report={report} />
 
@@ -1067,11 +1072,77 @@ const BUCKET_BORDER: Record<Bucket, string> = {
 };
 
 /**
- * What the documents added to this report: roles that were not tested and why, and how many
- * documented items the scan reached (the rest are listed as not found in the app).
+ * Crawl coverage: reached vs found pages and a collapsible list of skipped pages with plain reasons.
+ */
+function PageCoverageSection({ report }: { report: ReleaseReport }) {
+  const coverage = report.pageCoverage;
+  if (!coverage) return null;
+
+  const skipped = coverage.skipped ?? [];
+  return (
+    <section aria-labelledby="coverage-title" className="space-y-4 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
+        <h2 id="coverage-title" className="text-xl font-bold">
+          Crawl coverage
+        </h2>
+        <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">
+          Pages reached {coverage.reached} of {coverage.found}
+        </span>
+      </div>
+      <p className="text-sm text-ink-soft">
+        Pages reached {coverage.reached} of {coverage.found}
+      </p>
+      {skipped.length > 0 && (
+        <details className="space-y-2">
+          <summary className="cursor-pointer text-sm font-bold text-ink hover:underline">
+            Skipped pages ({skipped.length})
+          </summary>
+          <ul className="mt-2 divide-y divide-rule/60 text-sm">
+            {skipped.map((item, idx) => (
+              <li key={idx} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <span className="font-mono text-xs text-ink">{item.urlPath}</span>
+                <span className="text-ink-soft">
+                  {skipReasonText(item.why)}
+                  {item.status ? ` (HTTP ${item.status})` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Roles that were not tested and why, rendered with their own prominent heading.
+ */
+function RolesNotTestedSection({ report }: { report: ReleaseReport }) {
+  const roles = report.rolesNotTested ?? [];
+  if (roles.length === 0) return null;
+
+  return (
+    <section aria-labelledby="roles-not-tested-title" className="space-y-3 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm">
+      <h2 id="roles-not-tested-title" className="text-xl font-bold">
+        Roles not tested, and why
+        <span className="sr-only">Roles not tested and why</span>
+      </h2>
+      <ul className="list-disc space-y-1 pl-5 text-sm text-ink">
+        {roles.map((r) => (
+          <li key={r.role}>
+            <strong>{r.role}:</strong> <span className="text-ink-soft">{r.text}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * What the documents added to this report: how many documented items the scan reached
+ * (the rest are listed as not found in the app).
  */
 function SourcesSummary({ report }: { report: ReleaseReport }) {
-  const roles = report.rolesNotTested ?? [];
   const line = documentedLine(report.documentedItems);
   const notFound = report.documentedItems?.notFound ?? [];
   const [activeOverride, setActiveOverride] = useState<string | null>(null);
@@ -1083,7 +1154,7 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
   const [overrideSuccess, setOverrideSuccess] = useState<Record<string, boolean>>({});
   const [overrideError, setOverrideError] = useState<string | null>(null);
 
-  if (roles.length === 0 && !line) return null;
+  if (!line && notFound.length === 0) return null;
 
   const handleSaveOverride = async (reqId: string) => {
     setSavingOverride(true);
@@ -1249,20 +1320,6 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
         </div>
       )}
 
-      {roles.length > 0 && (
-        <div className="pt-2">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">
-            Roles not tested and why
-          </h3>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-ink">
-            {roles.map((r) => (
-              <li key={r.role}>
-                <strong>{r.role}:</strong> <span className="text-ink-soft">{r.text}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </section>
   );
 }

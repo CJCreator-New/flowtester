@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { FocusHeading } from '../components/text';
 import { RunFailure } from '../components/RunStates';
 import { timeLeft } from '../lib/translate';
+import { stalledForSeconds, statusText } from '../lib/coverage-text';
 
 /** How the scan is going, from the QA Tool's progress events. */
 export interface ScanProgress {
@@ -26,6 +27,19 @@ export interface ScanProgress {
   attempt?: number;
   /** When the request on its way was sent (ms). */
   askingSince?: number;
+  /** Role currently signed in as during crawl. */
+  signedInAs?: string;
+  /** Roles for which sign-in failed during crawl. */
+  signInFailedFor?: string[];
+  /** Pages skipped during crawl. */
+  skipped?: number;
+}
+
+/** Type guard narrowing unknown event payloads to ScanProgress without unsafe casting. */
+export function isScanProgress(value: unknown): value is ScanProgress {
+  if (!value || typeof value !== 'object') return false;
+  const stage = (value as { stage?: unknown }).stage;
+  return stage === 'crawling' || stage === 'narrow-screens' || stage === 'planning';
 }
 
 /** Seconds since a moment, ticking once a second while shown. */
@@ -55,6 +69,7 @@ export function ScanningScreen({
   failure,
   hasMaterials,
   onStop,
+  stalledSeconds,
 }: {
   host: string;
   progress: ScanProgress | null;
@@ -63,6 +78,8 @@ export function ScanningScreen({
   /** Specs, design notes or journeys were added. */
   hasMaterials: boolean;
   onStop: () => void;
+  /** Precomputed stall time in seconds (for tests or override). */
+  stalledSeconds?: number;
 }) {
   const stageIndex = progress ? STAGES.findIndex((s) => s.id === progress.stage) : -1;
   const planning =
@@ -71,6 +88,23 @@ export function ScanningScreen({
       : null;
   const left = timeLeft(progress?.secondsLeft);
   const waited = useSecondsSince(progress?.asking ? progress.askingSince : undefined);
+
+  const [history, setHistory] = useState<Array<{ at: number; pagesFound: number }>>([]);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (progress?.pagesFound !== undefined) {
+      setHistory((h) => [...h, { at: Date.now(), pagesFound: progress.pagesFound! }]);
+    }
+  }, [progress?.pagesFound]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const stall = stalledSeconds ?? (history.length > 0 ? stalledForSeconds(history, now) : 0);
+  const showStallWarning = stall >= 20 || (stalledSeconds !== undefined && stalledSeconds > 0);
 
   return (
     <div className="mx-auto max-w-[44rem] px-4 py-10 sm:px-6 sm:py-14">
@@ -124,7 +158,13 @@ export function ScanningScreen({
           </ol>
 
           <section aria-label="Scan progress" className="rounded-lg border-2 border-edge bg-surface p-5">
-            <p role="status" className="font-bold text-ink">
+            {/* Polite screen reader live region announcing stage transitions only */}
+            <div role="status" aria-live="polite" className="sr-only">
+              {statusText(progress)}
+            </div>
+
+            {/* Non-live visible progress indicator */}
+            <p className="font-bold text-ink">
               {!progress
                 ? 'Opening the site…'
                 : progress.stage === 'crawling'
@@ -139,6 +179,24 @@ export function ScanningScreen({
               )}
               {left && !progress?.asking && <span className="font-normal text-ink-soft"> · {left}</span>}
             </p>
+
+            {progress?.signedInAs && (
+              <p className="mt-2 text-sm text-ink-soft">
+                Signed in as <strong className="text-ink">{progress.signedInAs}</strong>
+              </p>
+            )}
+
+            {progress?.signInFailedFor && progress.signInFailedFor.length > 0 && (
+              <div role="alert" className="mt-2 rounded-md border border-fail bg-fail-tint p-2 text-sm text-fail">
+                {progress.signInFailedFor.map((r) => `Sign-in failed for ${r}`).join('. ')}
+              </div>
+            )}
+
+            {showStallWarning && (
+              <div role="status" className="mt-3 rounded-md border border-warn bg-warn-tint p-3 text-sm text-warn-dark">
+                No new pages for {stall} seconds
+              </div>
+            )}
 
             {planning ? (
               <div
@@ -165,6 +223,12 @@ export function ScanningScreen({
                 <dt className="text-ink-soft">Pages found</dt>
                 <dd className="font-mono text-xl font-bold text-ink">{progress?.pagesFound ?? 0}</dd>
               </div>
+              {progress?.skipped !== undefined && progress.skipped > 0 && (
+                <div>
+                  <dt className="text-ink-soft">Skipped</dt>
+                  <dd className="font-mono text-xl font-bold text-ink">{progress.skipped}</dd>
+                </div>
+              )}
               {!!progress?.plannedSoFar && (
                 <div>
                   <dt className="text-ink-soft">Planned while scanning</dt>

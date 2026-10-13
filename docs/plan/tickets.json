@@ -266,7 +266,7 @@
         "packages/core/src/discovery/discovery-agent.ts",
         "packages/wizard/src/components/plan/PlanDocument.tsx"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-110",
