@@ -449,7 +449,7 @@
         "packages/core/src/browser.ts",
         "packages/checkers/src/permission-matrix.ts"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-115",

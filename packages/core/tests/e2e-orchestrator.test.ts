@@ -66,9 +66,9 @@ describe('FlowTestOrchestrator E2E', () => {
       roles: [
         {
           role: 'manager',
-          username: 'admin@example.com',
-          password: 'secret',
-          loginPath: '/login',
+          username: 'manager@example.com',
+          password: 'manager-password',
+          loginPath: '/signin',
         },
       ],
     };

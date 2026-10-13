@@ -21,7 +21,9 @@ import { normalizeRoute, signInReasonText } from '@qa/types';
 import { BrowserManager, BREAKPOINT_VIEWPORTS, locateElement, type BrowserEngine } from './browser.js';
 import { EvidenceCollector } from './evidence.js';
 import { captureVisualShot, readBaselineMode, writeVisualBaseline } from './visual-capture.js';
-import { PreFlightChecker, SignInFailedError } from './preflight.js';
+import { PreFlightChecker, SignInFailedError, type PreFlightResult } from './preflight.js';
+import { navigate, looksLikeLogin } from './navigate.js';
+import { debugLog } from './debug-log.js';
 import { SourceLocator } from './source-locator.js';
 import { ReproScriptGenerator } from './repro-generator.js';
 import { ReportGenerator, withPortablePaths } from './reporter.js';
@@ -258,6 +260,10 @@ export interface RunOptions {
   customHeaders?: Record<string, string>;
   /** Custom user-agent string. */
   userAgent?: string;
+  /** Pre-flight sign-in result from discovery (T-113); never persisted */
+  preflight?: PreFlightResult;
+  /** Hostnames to which customHeaders should be scoped (T-103) */
+  headerHosts?: string[];
   headless?: boolean;
   tunnelAuth?: string;
   outputDir?: string;
@@ -367,11 +373,115 @@ export class FlowTestOrchestrator {
 
     onEvent({ type: 'PREFLIGHT_STARTED', roles: (options.profile?.roles || []).map((r) => r.role) });
     console.log(`[QA Orchestrator] Running Pre-flight health check on ${options.targetUrl}...`);
-    const preflight = await this.preflightChecker.runPreFlight(options.targetUrl, options.profile, options.tunnelAuth, {
-      browserManager: this.browserManager,
-      authDir,
-      suppliedSessions: options.suppliedSessions,
-    });
+
+    let preflight: PreFlightResult;
+    const neededRoles = options.profile?.roles || [];
+    const hasPreflight = !!options.preflight;
+    const allRolesPresent =
+      hasPreflight &&
+      neededRoles.every((r) => options.preflight?.roleStorageStates?.[r.role]);
+
+    if (hasPreflight && allRolesPresent) {
+      // Validate with a cheap check per role
+      const failedRoles: typeof neededRoles = [];
+      for (const roleCred of neededRoles) {
+        const state = options.preflight?.roleStorageStates?.[roleCred.role];
+        if (!state) {
+          failedRoles.push(roleCred);
+          continue;
+        }
+        let context: BrowserContext | undefined;
+        let roleOk = false;
+        try {
+          context = await this.browserManager.createContext({
+            engine: options.browserEngine ?? 'chromium',
+            headless: options.headless ?? true,
+            baseUrl: options.targetUrl,
+            storageState: state,
+            customHeaders: options.customHeaders,
+            userAgent: options.userAgent,
+            tunnelAuth: options.tunnelAuth,
+            headerHosts: options.headerHosts,
+          });
+          const page = await context.newPage();
+          const landingPath = options.preflight!.roleLandingPaths?.[roleCred.role] || '/';
+          const testUrl = new URL(landingPath, options.targetUrl).toString();
+          const loginPath = roleCred.loginPath || '/login';
+          const navRes = await navigate(page, testUrl, { timeoutMs: 15000 });
+          const isLogin = await looksLikeLogin(page, [loginPath]);
+          if (navRes.ok && navRes.status !== 401 && !isLogin) {
+            roleOk = true;
+          }
+        } catch {
+          roleOk = false;
+        } finally {
+          await context?.close().catch(() => {});
+        }
+        if (!roleOk) {
+          failedRoles.push(roleCred);
+        }
+      }
+
+      if (failedRoles.length === 0) {
+        preflight = options.preflight!;
+      } else {
+        const partialProfile: ProductProfile = {
+          ...options.profile!,
+          roles: failedRoles,
+        };
+        const reloginPreflight = await this.preflightChecker.runPreFlight(
+          options.targetUrl,
+          partialProfile,
+          options.tunnelAuth,
+          {
+            browserManager: this.browserManager,
+            authDir,
+            suppliedSessions: options.suppliedSessions,
+            customHeaders: options.customHeaders,
+            userAgent: options.userAgent,
+            headerHosts: options.headerHosts,
+          }
+        );
+        preflight = {
+          ...options.preflight!,
+          ok: options.preflight!.ok && reloginPreflight.ok,
+          roleAuthResults: {
+            ...options.preflight!.roleAuthResults,
+            ...reloginPreflight.roleAuthResults,
+          },
+          roleStorageStates: {
+            ...options.preflight!.roleStorageStates,
+            ...reloginPreflight.roleStorageStates,
+          },
+          roleLandingPaths: {
+            ...options.preflight!.roleLandingPaths,
+            ...reloginPreflight.roleLandingPaths,
+          },
+          roleFailures: {
+            ...options.preflight!.roleFailures,
+            ...reloginPreflight.roleFailures,
+          },
+          roleDiagnostics: {
+            ...options.preflight!.roleDiagnostics,
+            ...reloginPreflight.roleDiagnostics,
+          },
+        };
+      }
+    } else {
+      preflight = await this.preflightChecker.runPreFlight(
+        options.targetUrl,
+        options.profile,
+        options.tunnelAuth,
+        {
+          browserManager: this.browserManager,
+          authDir,
+          suppliedSessions: options.suppliedSessions,
+          customHeaders: options.customHeaders,
+          userAgent: options.userAgent,
+          headerHosts: options.headerHosts,
+        }
+      );
+    }
 
     if (!preflight.ok) {
       throw new Error(`Pre-flight check failed: ${preflight.error}`);
@@ -404,6 +514,11 @@ export class FlowTestOrchestrator {
       throw new SignInFailedError(rolesNotTested[0].reason, rolesNotTested[0].role);
     }
     const notTestedRoles = new Set(rolesNotTested.map((r) => r.role));
+    const sessionLostRoles = new Set<string>();
+    const roleStates = new Map<string, { reloginUsed: boolean; lost: boolean }>();
+    for (const r of options.profile?.roles || []) {
+      roleStates.set(r.role, { reloginUsed: false, lost: false });
+    }
 
     // Initialize Permission Matrix Checker if available in profile
     let permChecker: PermissionMatrixChecker | undefined;
@@ -481,6 +596,21 @@ export class FlowTestOrchestrator {
         });
         continue;
       }
+      if (sessionLostRoles.has(testCase.role)) {
+        for (const bp of sizesFor(testCase)) {
+          results.push({
+            testCaseId: testCase.id,
+            flowId: testCase.flowId,
+            role: testCase.role,
+            status: 'Skipped',
+            durationMs: 0,
+            findings: [],
+            stepEvidence: [],
+            skipReason: 'Signed out part-way: the session stopped working',
+          });
+        }
+        continue;
+      }
       const searchSize = sizes.includes('1440px') ? '1440px' : sizes[sizes.length - 1];
       for (const bp of sizesFor(testCase)) {
         await stopHere();
@@ -525,6 +655,10 @@ export class FlowTestOrchestrator {
         const runToken = options.readOnly ? undefined : EntityNamespacer.runToken(runId, testCase.id, bp);
         const sendGuard = options.readOnly ? undefined : SendGuard.forUrl(options.targetUrl);
 
+        let startPageNavResult: Awaited<ReturnType<typeof navigate>> | undefined;
+        let startPageBounced = false;
+        let pointSkippedReason: string | undefined;
+
         try {
           // Steps run in a fresh browser context. One that fails is thrown away and run once more
           // from a clean start, so a passing second attempt shows as flaky instead of failing.
@@ -553,6 +687,7 @@ export class FlowTestOrchestrator {
               recordVideoDir: recordVideo ? testCaseEvidenceDir : undefined,
               customHeaders: options.customHeaders,
               userAgent: options.userAgent,
+              headerHosts: options.headerHosts,
             }));
 
             // On a live site nothing that could change data leaves the browser.
@@ -567,7 +702,71 @@ export class FlowTestOrchestrator {
             });
 
             const startUrl = new URL(testCase.startPage, options.targetUrl).toString();
-            await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            const navRes = await navigate(page, startUrl, {
+              timeoutMs: 15000,
+              who: testCase.role,
+            });
+            startPageNavResult = navRes;
+
+            const credential = options.profile?.roles?.find((r) => r.role === testCase.role);
+            const isRoleSignedIn = !!credential && roleStorageStates[testCase.role] !== undefined;
+
+            if (isRoleSignedIn) {
+              const loginPath = credential.loginPath || '/login';
+              const isLogin = await looksLikeLogin(page, [loginPath]);
+              const isBounced = navRes.status === 401 || isLogin;
+              startPageBounced = isBounced;
+
+              if (isBounced) {
+                const roleState = roleStates.get(testCase.role) || { reloginUsed: false, lost: false };
+                const canRelogin = process.env.QA_RELOGIN !== '0' && !roleState.reloginUsed;
+
+                if (canRelogin) {
+                  roleState.reloginUsed = true;
+                  roleStates.set(testCase.role, roleState);
+                  debugLog('auth', 'session lost, attempting re-login', { role: testCase.role });
+
+                  const reloginContext = await this.browserManager.createContext({
+                    engine: options.browserEngine ?? 'chromium',
+                    headless: options.headless ?? true,
+                    tunnelAuth: options.tunnelAuth,
+                    baseUrl: options.targetUrl,
+                    customHeaders: options.customHeaders,
+                    userAgent: options.userAgent,
+                    headerHosts: options.headerHosts,
+                  });
+                  const slug = credential.role.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40);
+                  const statePath = path.join(authDir, `${slug}.json`);
+                  const reloginRes = await this.preflightChecker.signIn(
+                    reloginContext,
+                    options.targetUrl,
+                    credential,
+                    statePath
+                  );
+                  await reloginContext.close().catch(() => {});
+
+                  if (reloginRes.ok) {
+                    roleStorageStates[testCase.role] = statePath;
+                    throw new StepsFailed('Session refreshed, retrying point');
+                  }
+                }
+
+                sessionLostRoles.add(testCase.role);
+                roleState.lost = true;
+                roleStates.set(testCase.role, roleState);
+
+                const lostNote = `The session for "${testCase.role}" stopped working part-way through testing.`;
+                if (!notes.includes(lostNote)) notes.push(lostNote);
+
+                if (options.requireSignIn) {
+                  await this.browserManager.close().catch(() => {});
+                  throw new SignInFailedError('session-expired', testCase.role);
+                }
+
+                pointSkippedReason = 'Signed out part-way: the session stopped working';
+                return;
+              }
+            }
 
             // Execute each step with up to 2 retries
             for (let i = 0; i < testCase.steps.length; i++) {
@@ -784,6 +983,21 @@ export class FlowTestOrchestrator {
           }
           if (attemptResult.outcome === 'FLAKY_PASSED') flakyRetry = attemptResult.telemetry;
 
+          if (pointSkippedReason) {
+            results.push({
+              testCaseId: testCase.id,
+              flowId: testCase.flowId,
+              role: testCase.role,
+              status: 'Skipped',
+              durationMs: Date.now() - pointStartTime,
+              findings: [],
+              stepEvidence: [],
+              skipReason: pointSkippedReason,
+              breakpoint: bp,
+            });
+            continue;
+          }
+
           // Evaluate Checkers
           const stepEvidenceList = evidenceCollector.getStepEvidenceList();
           // Requests our own guard stopped are the tool's doing, not the site's.
@@ -899,13 +1113,14 @@ export class FlowTestOrchestrator {
 
           // 4. Permission Matrix Check
           const permFindings: Finding[] = [];
-          if (permChecker) {
+          if (permChecker && startPageNavResult?.status !== undefined) {
             const currentPath = new URL(page.url(), options.targetUrl).pathname;
             const permFinding = permChecker.checkAccess({
               target: currentPath,
               role: testCase.role,
               breakpoint: bp,
-              statusCode: 200,
+              statusCode: startPageNavResult.status,
+              redirectedToLogin: startPageBounced,
               testCaseId: testCase.id,
             });
             if (permFinding) {
@@ -1096,7 +1311,7 @@ export class FlowTestOrchestrator {
           };
         } catch (fatalErr: unknown) {
           // Stopping isn't a failure of the site: nothing is recorded, and the run ends.
-          if (isAbortError(fatalErr)) throw fatalErr;
+          if (isAbortError(fatalErr) || fatalErr instanceof SignInFailedError) throw fatalErr;
           testPointPassed = false;
           const msg = (fatalErr instanceof Error ? fatalErr.message : String(fatalErr)).replace(/\x1b\[[0-9;]*m/g, '');
           // A test that couldn't run at all still says why: a failure with no finding explains nothing.
@@ -1232,7 +1447,7 @@ export class FlowTestOrchestrator {
         flowId: r.flowId,
         name,
         status: r.status,
-        description: r.skipReason || tc?.expectations.text?.description || tc?.expectations.url?.description || name,
+        description: r.skipReason || tc?.expectations?.text?.description || tc?.expectations?.url?.description || name,
         evidencePath: lastStep?.screenshotPath,
       });
     }
