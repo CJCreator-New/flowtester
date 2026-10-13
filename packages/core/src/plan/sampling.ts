@@ -1,4 +1,4 @@
-import type { PageCoverage, PageInventoryItem, PlanLayoutGroup } from '@qa/types';
+import type { PlanPageCoverage, PageInventoryItem, PlanLayoutGroup } from '@qa/types';
 import { pathOf } from './site-graph.js';
 
 /** Sample Pages tested on behalf of a Layout Group. */
@@ -21,7 +21,7 @@ export function itemShape(pathname: string): string {
 /** What the tracker says about a page the moment it arrives. */
 export interface GroupArrival {
   /** 'tested' for a fixed address; 'sample' for members 1-3 of a templated group; 'covered' from the 4th. */
-  coverage: PageCoverage;
+  coverage: PlanPageCoverage;
   /** The group's key while the crawl runs (final ids come from `finish()`). Absent for a fixed address. */
   layoutGroup?: string;
   /** For a covered page: the first three members, which stand in for it. */
@@ -78,7 +78,7 @@ export class GroupTracker {
 }
 
 export interface PageCoverageInfo {
-  coverage: PageCoverage;
+  coverage: PlanPageCoverage;
   coveredBy?: string[];
   layoutGroup?: string;
 }

@@ -1,6 +1,7 @@
 import type { TestCaseStep, RuleOrigin, TestCaseExpectations, ValidationRule } from './test-case.js';
 import type { FallbackReason, PageLink, NarrowMenu, DraftPlan, DocSource, PlanIntent } from './plan.js';
 import type { SignInFailureReason } from './signin.js';
+import type { PageCoverage } from './route-telemetry.js';
 
 export interface SensitiveAction {
   type: 'deletion' | 'payment' | 'external_communication' | 'admin_setting';
@@ -154,11 +155,7 @@ export interface DiscoveryDraft {
     /** Pages that asked for a sign-in nobody could get past. */
     notReached: string[];
     /** Pages found, how many were reached, and why the rest were skipped. */
-    pageCoverage?: {
-      found: number;
-      reached: number;
-      skipped: Array<{ urlPath: string; why: 'page-limit' | 'did-not-load' | 'robots' | 'sign-in' }>;
-    };
+    pageCoverage?: PageCoverage;
     /** Plain sentences for the report, e.g. "Pages behind the sign-in were not reached." */
     notes: string[];
   };

@@ -129,6 +129,13 @@ const SKIP_WHY: Record<NonNullable<ReleaseReport['pageCoverage']>['skipped'][num
   'did-not-load': 'did not load',
   robots: 'blocked by robots rules',
   'sign-in': 'behind a sign-in',
+  'http-error': 'the site answered with an error',
+  timeout: 'took too long to load',
+  'off-site-redirect': 'sent to another site',
+  'time-limit': 'stopped to avoid an endless crawl',
+  'trap-limit': 'stopped to avoid an endless crawl',
+  'session-lost': 'signed out part-way',
+  duplicate: 'same page as another',
 };
 
 /** Plain-text coverage: the summary line, then one entry per skipped page. Empty when the run has no coverage. */

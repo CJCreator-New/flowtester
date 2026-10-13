@@ -4,6 +4,7 @@ import type { MarketingReview, SiteAspectGrades, RankedRecommendation, SiteHisto
 import type { AIStage } from './ai.js';
 import type { RetryTelemetryEntry } from './hub.js';
 import type { AIStageUsage, DocSource, SpecGapCode } from './plan.js';
+import type { PageCoverage } from './route-telemetry.js';
 
 export interface TestPointResult {
   testCaseId: string;
@@ -83,11 +84,7 @@ export interface ReleaseReport {
     notFound: Array<{ docSource: DocSource; reason: string; code?: SpecGapCode; override?: boolean }>;
   };
   /** Pages found while exploring, how many were reached, and why the rest were skipped. */
-  pageCoverage?: {
-    found: number;
-    reached: number;
-    skipped: Array<{ urlPath: string; why: 'page-limit' | 'did-not-load' | 'robots' | 'sign-in' }>;
-  };
+  pageCoverage?: PageCoverage;
   runId: string;
   productId: string;
   targetUrl: string;

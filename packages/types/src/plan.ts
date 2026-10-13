@@ -104,7 +104,7 @@ export interface NarrowMenu {
  * How a page is covered: tested on its own, tested as one of its Layout Group's Sample Pages,
  * covered by those samples, or promoted by the person to be tested on its own.
  */
-export type PageCoverage = 'tested' | 'sample' | 'covered' | 'promoted';
+export type PlanPageCoverage = 'tested' | 'sample' | 'covered' | 'promoted';
 
 /** One test the AI planned on a page, besides the visit that runs the graded checks. */
 export interface PlanPageTest {
@@ -145,7 +145,7 @@ export interface PlanPage {
   urlPath: string;
   title: string;
   layoutGroup?: string;
-  coverage: PageCoverage;
+  coverage: PlanPageCoverage;
   /** The Sample Pages that stand for a covered page. */
   coveredBy?: string[];
   /** Who reaches it: 'visitor' and/or role names. */

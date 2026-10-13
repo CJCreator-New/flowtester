@@ -126,6 +126,10 @@ export interface RoleCredential {
   usernameSelector?: string;
   passwordSelector?: string;
   submitSelector?: string;
+  /** A selector that exists only when signed in */
+  postLoginSelector?: string;
+  /** A path the page should land on after sign-in (relative to the target) */
+  postLoginUrl?: string;
 }
 
 export interface ProductProfile {

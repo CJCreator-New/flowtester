@@ -1,0 +1,631 @@
+{
+  "goal": "Reliable authentication flow and crawler/spider",
+  "generated": "2026-10-13",
+  "tickets": [
+    {
+      "id": "T-101",
+      "title": "Shared contracts: route telemetry, sign-in step, input rules, shared coverage type",
+      "type": "refactor",
+      "size": "S",
+      "wave": 0,
+      "dependsOn": [],
+      "gaps": [
+        "G-003",
+        "G-006",
+        "G-018",
+        "G-049"
+      ],
+      "file": "tickets/T-101-shared-contracts.md",
+      "filesOwned": [
+        "packages/types/src/route-telemetry.ts",
+        "packages/types/src/input-rules.ts",
+        "packages/types/src/signin.ts",
+        "packages/types/src/evidence-finding.ts",
+        "packages/types/src/discovery.ts",
+        "packages/types/src/run-report.ts",
+        "packages/types/src/index.ts",
+        "packages/types/tests/route-telemetry.test.ts",
+        "packages/types/tests/input-rules.test.ts",
+        "packages/core/src/issues-document.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/discovery/deterministic-spider.ts",
+        "packages/runner/src/run-inputs.ts",
+        "packages/wizard/src/lib/form.ts"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "T-102",
+      "title": "Fixture routes that reproduce auth and crawl failure modes",
+      "type": "test",
+      "size": "M",
+      "wave": 0,
+      "dependsOn": [],
+      "gaps": [
+        "G-012",
+        "G-028"
+      ],
+      "file": "tickets/T-102-fixture-failure-modes.md",
+      "filesOwned": [
+        "fixtures/test-app/server.js",
+        "packages/core/tests/fixture-failure-modes.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/**"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-103",
+      "title": "Browser context options, origin-scoped headers, narrower browser restart",
+      "type": "refactor",
+      "size": "M",
+      "wave": 0,
+      "dependsOn": [],
+      "gaps": [
+        "G-004",
+        "G-016",
+        "G-039"
+      ],
+      "file": "tickets/T-103-browser-context-factory.md",
+      "filesOwned": [
+        "packages/core/src/browser.ts",
+        "packages/core/tests/browser-context.test.ts",
+        "packages/core/tests/browser-restart.test.ts",
+        "packages/core/tests/browser-guard.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/preflight.ts",
+        "packages/core/src/discovery/discovery-agent.ts",
+        "packages/core/src/orchestrator.ts",
+        "packages/runner/src/server.ts"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-104",
+      "title": "Runner input validation: roles, login path, header rules",
+      "type": "security",
+      "size": "S",
+      "wave": 1,
+      "dependsOn": [
+        "T-101"
+      ],
+      "gaps": [
+        "G-018",
+        "G-022",
+        "G-023"
+      ],
+      "file": "tickets/T-104-runner-input-validation.md",
+      "filesOwned": [
+        "packages/runner/src/run-inputs.ts",
+        "packages/runner/tests/run-inputs-roles.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/runner/src/server.ts",
+        "packages/types/src/input-rules.ts"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-105",
+      "title": "Redacted debug logger and CLI debug switch",
+      "type": "feature",
+      "size": "S",
+      "wave": 1,
+      "dependsOn": [
+        "T-101"
+      ],
+      "gaps": [
+        "G-003",
+        "G-006",
+        "G-018"
+      ],
+      "file": "tickets/T-105-debug-telemetry-logger.md",
+      "filesOwned": [
+        "packages/core/src/debug-log.ts",
+        "packages/core/tests/debug-log.test.ts",
+        "packages/runner/src/checkup.ts",
+        "packages/runner/tests/checkup-credentials.test.ts",
+        "packages/runner/tests/checkup-debug.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/redact.ts"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-106",
+      "title": "Tooling alignment: one Playwright version, typecheck tests, Node pin",
+      "type": "infra",
+      "size": "M",
+      "wave": 0,
+      "dependsOn": [],
+      "gaps": [
+        "G-025",
+        "G-026",
+        "G-047"
+      ],
+      "file": "tickets/T-106-tooling-alignment.md",
+      "filesOwned": [
+        "package.json",
+        "packages/core/package.json",
+        "packages/checkers/package.json",
+        "packages/wizard/package.json",
+        "packages/runner/package.json",
+        "packages/types/package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "eslint.config.mjs",
+        "tsconfig.base.json",
+        "tsconfig.test.json",
+        ".nvmrc",
+        ".gitattributes",
+        ".prettierrc",
+        ".github/dependabot.yml",
+        "packages/runner/Dockerfile",
+        "scripts/check-playwright-version.mjs"
+      ],
+      "filesReadOnly": [
+        ".github/workflows/*"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-107",
+      "title": "Shared navigation helper: settle, status, redirects, retry",
+      "type": "feature",
+      "size": "M",
+      "wave": 1,
+      "dependsOn": [
+        "T-101"
+      ],
+      "gaps": [
+        "G-030",
+        "G-001",
+        "G-005",
+        "G-007",
+        "G-008",
+        "G-009"
+      ],
+      "file": "tickets/T-107-navigation-helper.md",
+      "filesOwned": [
+        "packages/core/src/navigate.ts",
+        "packages/core/tests/navigate.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/redact.ts",
+        "packages/types/src/route-telemetry.ts",
+        "packages/core/src/debug-log.ts"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-108",
+      "title": "Wizard sign-in form: selectors, login URL, header validation, re-approval roles, a11y",
+      "type": "feature",
+      "size": "M",
+      "wave": 1,
+      "dependsOn": [
+        "T-101"
+      ],
+      "gaps": [
+        "G-017",
+        "G-018",
+        "G-033",
+        "G-013"
+      ],
+      "file": "tickets/T-108-wizard-signin-form.md",
+      "filesOwned": [
+        "packages/wizard/src/lib/form.ts",
+        "packages/wizard/src/api.ts",
+        "packages/wizard/src/screens/NewCheckupScreen.tsx",
+        "packages/wizard/src/screens/SettingsScreen.tsx",
+        "packages/wizard/src/screens/PlanReviewScreen.tsx",
+        "packages/wizard/src/components/plan/PlanDocument.tsx",
+        "packages/wizard/src/components/SignInRow.tsx",
+        "packages/wizard/tests/start-run.test.ts",
+        "packages/wizard/tests/signin-consent.test.ts",
+        "packages/wizard/tests/signin-reason.test.ts",
+        "packages/wizard/tests/signin-form.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/types/src/*",
+        "packages/wizard/src/App.tsx",
+        "packages/runner/src/server.ts",
+        "packages/wizard/src/lib/translate.ts"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-109",
+      "title": "Wizard: show crawl coverage and crawl health",
+      "type": "feature",
+      "size": "M",
+      "wave": 2,
+      "dependsOn": [
+        "T-101",
+        "T-108"
+      ],
+      "gaps": [
+        "G-019",
+        "G-053"
+      ],
+      "file": "tickets/T-109-wizard-coverage-progress.md",
+      "filesOwned": [
+        "packages/wizard/src/screens/ReportScreen.tsx",
+        "packages/wizard/src/screens/ScanningScreen.tsx",
+        "packages/wizard/src/App.tsx",
+        "packages/wizard/src/lib/coverage-text.ts",
+        "packages/wizard/tests/coverage-view.test.tsx",
+        "packages/wizard/tests/scanning-progress.test.tsx"
+      ],
+      "filesReadOnly": [
+        "packages/types/src/*",
+        "packages/core/src/discovery/discovery-agent.ts",
+        "packages/wizard/src/components/plan/PlanDocument.tsx"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-110",
+      "title": "Deterministic sign-in (preflight)",
+      "type": "bug",
+      "size": "L",
+      "wave": 2,
+      "dependsOn": [
+        "T-101",
+        "T-102",
+        "T-103",
+        "T-105",
+        "T-107"
+      ],
+      "gaps": [
+        "G-001",
+        "G-002",
+        "G-003",
+        "G-004",
+        "G-022",
+        "G-023",
+        "G-037",
+        "G-027"
+      ],
+      "file": "tickets/T-110-deterministic-signin.md",
+      "filesOwned": [
+        "packages/core/src/preflight.ts",
+        "packages/core/tests/signin.test.ts",
+        "packages/core/tests/signin-redaction.test.ts",
+        "packages/core/tests/preflight-session.test.ts",
+        "packages/core/tests/require-sign-in.test.ts",
+        "packages/core/tests/signin-determinism.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/navigate.ts",
+        "packages/core/src/debug-log.ts",
+        "packages/core/src/browser.ts",
+        "packages/types/src/signin.ts",
+        "fixtures/test-app/server.js"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-111",
+      "title": "Spider reliability core",
+      "type": "bug",
+      "size": "L",
+      "wave": 2,
+      "dependsOn": [
+        "T-101",
+        "T-102",
+        "T-103",
+        "T-105",
+        "T-107"
+      ],
+      "gaps": [
+        "G-005",
+        "G-006",
+        "G-007",
+        "G-009",
+        "G-015",
+        "G-021",
+        "G-038",
+        "G-040",
+        "G-027"
+      ],
+      "file": "tickets/T-111-spider-reliability-core.md",
+      "filesOwned": [
+        "packages/core/src/discovery/deterministic-spider.ts",
+        "packages/core/tests/spider-concurrency.test.ts",
+        "packages/core/tests/spider-crud.test.ts",
+        "packages/core/tests/spider-form-facts.test.ts",
+        "packages/core/tests/spider-site-edge.test.ts",
+        "packages/core/tests/spider-reliability.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/navigate.ts",
+        "packages/core/src/debug-log.ts",
+        "packages/core/src/browser.ts",
+        "packages/types/src/route-telemetry.ts",
+        "fixtures/test-app/server.js"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-112",
+      "title": "Spider link discovery and trap protection",
+      "type": "feature",
+      "size": "M",
+      "wave": 3,
+      "dependsOn": [
+        "T-102",
+        "T-111"
+      ],
+      "gaps": [
+        "G-010",
+        "G-020",
+        "G-031"
+      ],
+      "file": "tickets/T-112-spider-discovery-and-traps.md",
+      "filesOwned": [
+        "packages/core/src/discovery/deterministic-spider.ts",
+        "packages/core/src/discovery/frontier.ts",
+        "packages/core/src/discovery/overlay.ts",
+        "packages/core/tests/frontier.test.ts",
+        "packages/core/tests/spider-links-and-traps.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/discovery/element-inventory.ts",
+        "packages/core/src/discovery/interactive-states.ts",
+        "packages/core/src/discovery/guard.ts",
+        "fixtures/test-app/server.js",
+        "packages/core/src/competitive/robots.ts"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-113",
+      "title": "Discovery agent: headers everywhere, one sign-in, session-drop reporting, telemetry",
+      "type": "bug",
+      "size": "M",
+      "wave": 4,
+      "dependsOn": [
+        "T-102",
+        "T-103",
+        "T-105",
+        "T-110",
+        "T-111",
+        "T-112"
+      ],
+      "gaps": [
+        "G-004",
+        "G-014",
+        "G-006",
+        "G-007",
+        "G-010"
+      ],
+      "file": "tickets/T-113-discovery-agent-handoff.md",
+      "filesOwned": [
+        "packages/core/src/discovery/discovery-agent.ts",
+        "packages/core/tests/signed-in-discovery.test.ts",
+        "packages/core/tests/pipelined-discovery.test.ts",
+        "packages/core/tests/discovery-agent-headers.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/preflight.ts",
+        "packages/core/src/discovery/deterministic-spider.ts",
+        "packages/core/src/browser.ts"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-114",
+      "title": "Orchestrator: reuse sign-in, detect session loss, real status for Permission Matrix",
+      "type": "bug",
+      "size": "M",
+      "wave": 3,
+      "dependsOn": [
+        "T-102",
+        "T-103",
+        "T-107",
+        "T-110"
+      ],
+      "gaps": [
+        "G-008",
+        "G-011",
+        "G-014",
+        "G-004"
+      ],
+      "file": "tickets/T-114-orchestrator-session-awareness.md",
+      "filesOwned": [
+        "packages/core/src/orchestrator.ts",
+        "packages/core/tests/e2e-orchestrator.test.ts",
+        "packages/core/tests/role-failure-run.test.ts",
+        "packages/core/tests/orchestrator-session.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/preflight.ts",
+        "packages/core/src/navigate.ts",
+        "packages/core/src/browser.ts",
+        "packages/checkers/src/permission-matrix.ts"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-115",
+      "title": "Runner integration: headers to every stage, reuse sign-in, per-run auth dir, redacted errors",
+      "type": "bug",
+      "size": "L",
+      "wave": 5,
+      "dependsOn": [
+        "T-103",
+        "T-104",
+        "T-105",
+        "T-110",
+        "T-113",
+        "T-114"
+      ],
+      "gaps": [
+        "G-004",
+        "G-014",
+        "G-022",
+        "G-036"
+      ],
+      "file": "tickets/T-115-server-integration.md",
+      "filesOwned": [
+        "packages/runner/src/server.ts",
+        "packages/runner/tests/url-first.test.ts",
+        "packages/runner/tests/signin-endpoint.test.ts",
+        "packages/runner/tests/credentials-crawl.test.ts",
+        "packages/runner/tests/headers-propagation.test.ts",
+        "packages/runner/tests/error-redaction.test.ts",
+        "packages/runner/tests/wizard-endpoints.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/runner/src/run-inputs.ts",
+        "packages/core/src/**",
+        "fixtures/test-app/server.js"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-116",
+      "title": "Persistence integrity and re-approval",
+      "type": "bug",
+      "size": "M",
+      "wave": 6,
+      "dependsOn": [
+        "T-108",
+        "T-115"
+      ],
+      "gaps": [
+        "G-013",
+        "G-017",
+        "G-024",
+        "G-048"
+      ],
+      "file": "tickets/T-116-server-persistence-and-reapproval.md",
+      "filesOwned": [
+        "packages/runner/src/server.ts",
+        "packages/core/src/site-memory.ts",
+        "packages/core/src/atomic-write.ts",
+        "packages/runner/tests/reapproval-roles.test.ts",
+        "packages/runner/tests/remembered-signins.test.ts",
+        "packages/core/tests/atomic-write.test.ts",
+        "packages/core/tests/site-memory-versioning.test.ts",
+        "packages/core/src/index.ts",
+        "packages/runner/tests/runner-server.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/wizard/src/lib/form.ts",
+        "packages/runner/src/run-inputs.ts"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-117",
+      "title": "End-to-end proof on the fixture",
+      "type": "test",
+      "size": "M",
+      "wave": 6,
+      "dependsOn": [
+        "T-102",
+        "T-112",
+        "T-113",
+        "T-114",
+        "T-115"
+      ],
+      "gaps": [
+        "G-012",
+        "G-028",
+        "G-027"
+      ],
+      "file": "tickets/T-117-auth-crawl-integration-tests.md",
+      "filesOwned": [
+        "packages/core/tests/auth-crawl-e2e.test.ts",
+        "packages/runner/tests/auth-crawl-run.test.ts",
+        "packages/core/tests/missing-element.test.ts",
+        "packages/core/tests/opening-missing.test.ts",
+        "packages/core/tests/page-coverage.test.ts",
+        "packages/core/tests/narrow-look.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/*/src/**",
+        "fixtures/test-app/server.js"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-118",
+      "title": "CI gates: login+crawl on PRs, nightly wizard-e2e, release and deploy parity",
+      "type": "infra",
+      "size": "S",
+      "wave": 7,
+      "dependsOn": [
+        "T-106",
+        "T-117"
+      ],
+      "gaps": [
+        "G-029",
+        "G-025",
+        "G-026"
+      ],
+      "file": "tickets/T-118-ci-gates.md",
+      "filesOwned": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/deploy.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/e2e-nightly.yml"
+      ],
+      "filesReadOnly": [
+        "scripts/*",
+        "package.json",
+        "packages/**"
+      ],
+      "status": "todo"
+    },
+    {
+      "id": "T-119",
+      "title": "Docs and ADR 0026",
+      "type": "docs",
+      "size": "M",
+      "wave": 7,
+      "dependsOn": [
+        "T-104",
+        "T-105",
+        "T-107",
+        "T-110",
+        "T-112",
+        "T-113",
+        "T-114",
+        "T-115",
+        "T-116"
+      ],
+      "gaps": [
+        "G-032"
+      ],
+      "file": "tickets/T-119-docs-and-adr.md",
+      "filesOwned": [
+        "CLAUDE.md",
+        "README.md",
+        "SECURITY.md",
+        ".env.example",
+        "docs/README.md",
+        "docs/CONFIGURATION.md",
+        "docs/API.md",
+        "docs/ARCHITECTURE.md",
+        "docs/TESTING.md",
+        "docs/PRD.md",
+        "docs/GAP_ANALYSIS.md",
+        "docs/adr/*.md",
+        "packages/wizard/DESIGN.md",
+        "docs/tickets/T-05-docs-and-dead-code-cleanup.md"
+      ],
+      "filesReadOnly": [
+        "packages/**/src",
+        "docs/plan/**"
+      ],
+      "status": "todo"
+    }
+  ]
+}
