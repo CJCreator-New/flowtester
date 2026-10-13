@@ -263,6 +263,153 @@ const server = http.createServer((req, res) => {
   }
   // Slow-crawl pages: /slow/1../slow/N answer after ?delay ms (default 1500, at most 10000) and link to the next
   // one. Linked from nowhere else, so the normal crawls and the benchmark never see them.
+  // /lab/*: pages for the intent/refusal-rule and interactive-state tests. Linked from nowhere (not in nav,
+  // sitemap or any page), so crawls and benchmark counts are unchanged.
+  if (url.pathname.startsWith('/lab/')) {
+    const lab = globalThis.__fixtureLab || (globalThis.__fixtureLab = { posts: 0, deletes: 0, cancelledDeletes: 0 });
+    const labPath = url.pathname;
+    if (req.method === 'POST') lab.posts++;
+    if (req.method === 'DELETE') lab.deletes++;
+    if (labPath === '/lab/stats') return json(200, lab);
+    if (labPath === '/lab/stats/reset') {
+      lab.posts = lab.deletes = lab.cancelledDeletes = 0;
+      return json(200, lab);
+    }
+    if (labPath === '/lab/cancelled') {
+      lab.cancelledDeletes++;
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    const labPage = (title, body, status = 200) => html(title, `<h1>${title}</h1>${body}`, status);
+    const drain = (cb) => {
+      let raw = '';
+      req.on('data', (chunk) => (raw += chunk));
+      req.on('end', () => cb(new URLSearchParams(raw)));
+    };
+    const emailOk = (v) => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(v || '');
+
+    if (labPath === '/lab/done') return labPage('Done', '<p>Saved. Thank you.</p>');
+
+    if (labPath === '/lab/signup') {
+      const server = url.searchParams.get('mode') === 'server';
+      if (req.method === 'POST') {
+        return drain((f) => {
+          if (!f.get('name') || !emailOk(f.get('email')) || !/^[A-Z]{3}-\d{3}$/.test(f.get('code') || '')) {
+            return labPage('Sign up', signupForm(server, '<p role="alert">Enter a name, a valid email and a code like ABC-123.</p>'));
+          }
+          res.writeHead(302, { Location: '/lab/done' });
+          res.end();
+        });
+      }
+      return labPage('Sign up', signupForm(server, ''));
+    }
+
+    if (labPath === '/lab/lenient') {
+      if (req.method === 'POST') {
+        return drain(() => {
+          res.writeHead(302, { Location: '/lab/done' });
+          res.end();
+        });
+      }
+      return labPage(
+        'Lenient',
+        `<form method="post" action="/lab/lenient"><label for="l-name">Name</label><input id="l-name" name="name">
+        <label for="l-email">Email</label><input id="l-email" name="email"><button type="submit">Save</button></form>`
+      );
+    }
+
+    if (labPath === '/lab/toast') {
+      const form = (note) => `${note}<form method="post" action="/lab/toast" novalidate><label for="t-email">Email</label>
+        <input id="t-email" name="email"><button type="submit">Save</button></form>`;
+      if (req.method === 'POST') {
+        return drain((f) =>
+          emailOk(f.get('email'))
+            ? (res.writeHead(302, { Location: '/lab/done' }), res.end())
+            : labPage('Toast', form('<div class="toast">That email does not look right.</div>'))
+        );
+      }
+      return labPage('Toast', form(''));
+    }
+
+    if (labPath === '/lab/tabs') {
+      return labPage(
+        'Tabs',
+        `<div role="tablist"><button role="tab" id="tab-a" aria-selected="true" aria-controls="panel-a">Overview</button>
+        <button role="tab" id="tab-b" aria-selected="false" aria-controls="panel-b">Contact</button></div>
+        <div role="tabpanel" id="panel-a"><p>Overview text.</p></div>
+        <div role="tabpanel" id="panel-b" hidden>
+          <form method="post" action="/lab/lenient"><label for="tb-email">Email</label><input id="tb-email" name="email" type="email" required>
+          <button type="submit">Send</button></form></div>
+        <details><summary>More options</summary>
+          <form method="post" action="/lab/lenient"><label for="ac-note">Note</label><input id="ac-note" name="note" required>
+          <button type="submit">Save note</button></form></details>
+        <button id="open-drawer" aria-expanded="false" aria-controls="drawer">Open settings</button>
+        <aside id="drawer" hidden><form method="post" action="/lab/lenient"><label for="dr-name">Display name</label>
+          <input id="dr-name" name="name" required><button type="submit">Save settings</button></form></aside>
+        <script>
+          const tabs = [...document.querySelectorAll('[role=tab]')];
+          tabs.forEach((t) => t.addEventListener('click', () => {
+            tabs.forEach((o) => { o.setAttribute('aria-selected', String(o === t)); document.getElementById(o.getAttribute('aria-controls')).hidden = o !== t; });
+          }));
+          document.getElementById('open-drawer').addEventListener('click', (e) => {
+            document.getElementById('drawer').hidden = false; e.currentTarget.setAttribute('aria-expanded', 'true');
+          });
+        </script>`
+      );
+    }
+
+    if (labPath === '/lab/modal') {
+      return labPage(
+        'Modal',
+        `<button id="open-modal">New message</button>
+        <dialog id="msg"><form method="post" action="/lab/lenient"><label for="m-subject">Subject</label>
+          <input id="m-subject" name="subject" required><button type="submit">Send message</button></form>
+          <button type="button" id="close-modal">Close</button></dialog>
+        <script>
+          const d = document.getElementById('msg');
+          document.getElementById('open-modal').addEventListener('click', () => d.showModal());
+          document.getElementById('close-modal').addEventListener('click', () => d.close());
+        </script>`
+      );
+    }
+
+    if (labPath === '/lab/crud') {
+      return labPage(
+        'Items',
+        `<button id="add-item">Add item</button>
+        <form id="item-form" method="post" action="/lab/lenient" hidden><label for="i-name">Item name</label>
+          <input id="i-name" name="name" required><button type="submit">Save item</button></form>
+        <table><thead><tr><th>Name</th><th>Actions</th></tr></thead><tbody>
+          <tr><td>Widget</td><td><button class="edit">Edit</button> <button class="delete">Delete</button></td></tr>
+          <tr><td>Gadget</td><td><button class="edit">Edit</button> <button class="delete">Delete</button></td></tr>
+        </tbody></table>
+        <script>
+          const f = document.getElementById('item-form');
+          document.getElementById('add-item').addEventListener('click', () => { f.hidden = false; });
+          document.querySelectorAll('.edit').forEach((b) => b.addEventListener('click', () => {
+            f.hidden = false; document.getElementById('i-name').value = b.closest('tr').firstElementChild.textContent;
+          }));
+          document.querySelectorAll('.delete').forEach((b) => b.addEventListener('click', () => {
+            if (!confirm('Delete this item?')) { fetch('/lab/cancelled'); return; }
+            fetch('/lab/items/1', { method: 'DELETE' }).then(() => b.closest('tr').remove());
+          }));
+        </script>`
+      );
+    }
+
+    if (labPath.startsWith('/lab/items/') && req.method === 'DELETE') return json(200, { deleted: true });
+
+    function signupForm(server, note) {
+      return `${note}<form method="post" action="/lab/signup${server ? '?mode=server' : ''}"${server ? ' novalidate' : ''}>
+        <label for="s-name">Name</label><input id="s-name" name="name" required>
+        <label for="s-email">Email</label><input id="s-email" name="email" type="email" required>
+        <label for="s-code">Code</label><input id="s-code" name="code" pattern="[A-Z]{3}-[0-9]{3}" required>
+        <button type="submit">Sign up</button></form>`;
+    }
+    return html('Not found', '<h1>Not found</h1>', 404);
+  }
+
   const slow = url.pathname.match(/^\/slow\/(\d{1,3})$/);
   if (slow) {
     const n = Number(slow[1]);

@@ -3,23 +3,23 @@ import { calculateSiteAspectGrades, scoreToGrade } from '../src/scoring.js';
 import type { Finding } from '@qa/types';
 
 describe('A–F Aspect Grading (scoring.ts)', () => {
-  it('converts scores to grades correctly', () => {
+  it('converts scores to grades correctly per PRD FR-8.1', () => {
     expect(scoreToGrade(95)).toBe('A');
     expect(scoreToGrade(90)).toBe('A');
     expect(scoreToGrade(85)).toBe('B');
-    expect(scoreToGrade(80)).toBe('B');
-    expect(scoreToGrade(75)).toBe('C');
-    expect(scoreToGrade(70)).toBe('C');
-    expect(scoreToGrade(65)).toBe('D');
-    expect(scoreToGrade(60)).toBe('D');
-    expect(scoreToGrade(55)).toBe('F');
+    expect(scoreToGrade(75)).toBe('B');
+    expect(scoreToGrade(74)).toBe('C');
+    expect(scoreToGrade(60)).toBe('C');
+    expect(scoreToGrade(55)).toBe('D');
+    expect(scoreToGrade(40)).toBe('D');
+    expect(scoreToGrade(35)).toBe('F');
   });
 
   it('caps score and grade at D or F when Blockers exist', () => {
     // 1 blocker caps at D
     expect(scoreToGrade(90, 1)).toBe('D');
-    // 2 blockers caps at F
-    expect(scoreToGrade(90, 2)).toBe('F');
+    // blocker when score < 40 is F
+    expect(scoreToGrade(35, 1)).toBe('F');
   });
 
   it('awards Grade A across all aspects when there are no defects', () => {
@@ -36,7 +36,7 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
 
   it('deducts points deterministically based on severity and page spread', () => {
     const sampleFindings: Finding[] = [
-      // 1 Major in Works (bug-detection) on 1 page = -15 * 1.0 = -15 -> score 85 (Grade B)
+      // 1 Major in Works (bug-detection) on 1 page = -20 * 1.0 = -20 -> score 80 (Grade B)
       {
         id: 'F-BUG-1',
         title: 'Unhandled error in console',
@@ -90,7 +90,7 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
     // Deterministic check: exact match across runs
     expect(grades1).toEqual(grades2);
 
-    expect(grades1.aspects.Works.score).toBe(85);
+    expect(grades1.aspects.Works.score).toBe(80);
     expect(grades1.aspects.Works.grade).toBe('B');
     expect(grades1.aspects.Works.findings).toContain('F-BUG-1');
 
@@ -176,7 +176,7 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
     expect(['C', 'D', 'F']).toContain(grades.overallGrade);
   });
 
-  it('lets the AI’s visual review take an area down to a C at most, however many opinions it has', () => {
+  it('keeps AI visual review non-graded as advisory commentary', () => {
     const opinions: Finding[] = Array.from({ length: 30 }, (_, n) => ({
       id: 'AI-' + n,
       severity: 'Minor',
@@ -189,7 +189,52 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
       resolution: '',
     }));
     const looks = calculateSiteAspectGrades(opinions).aspects['Looks and reads well'];
-    expect(looks.score).toBe(75);
-    expect(looks.grade).toBe('C');
+    expect(looks.score).toBe(100);
+    expect(looks.grade).toBe('A');
+  });
+
+  it('applies execution stability penalty (-3 per flaky test) to Works score', () => {
+    const grades = calculateSiteAspectGrades([], { flakyCount: 2 });
+    expect(grades.aspects.Works.score).toBe(94);
+    expect(grades.aspects.Works.grade).toBe('A');
+  });
+
+  it('assigns Grade F to Works when an unhandled first-party 500 occurs', () => {
+    const findings: Finding[] = [
+      {
+        id: 'F-HTTP-1',
+        title: 'HTTP 500 on POST /api/invoices',
+        severity: 'Blocker',
+        checker: 'bug-detection',
+        thirdParty: false,
+        where: { urlPath: '/invoices', role: 'visitor', breakpoint: '1440px' },
+        expectedVsActual: { expected: '', actual: '' },
+        stepsToReproduce: [],
+        evidence: {},
+        resolution: '',
+      },
+    ];
+    const grades = calculateSiteAspectGrades(findings);
+    expect(grades.aspects.Works.grade).toBe('F');
+  });
+
+  it('does not assign automatic Grade F for third-party failures', () => {
+    const findings: Finding[] = [
+      {
+        id: 'F-HTTP-TP',
+        title: 'Third-party request failed: HTTP 500 on GET https://analytics.example.com/beacon',
+        severity: 'Minor',
+        checker: 'bug-detection',
+        thirdParty: true,
+        where: { urlPath: '/home', role: 'visitor', breakpoint: '1440px' },
+        expectedVsActual: { expected: '', actual: '' },
+        stepsToReproduce: [],
+        evidence: {},
+        resolution: '',
+      },
+    ];
+    const grades = calculateSiteAspectGrades(findings);
+    expect(grades.aspects.Works.score).toBe(95);
+    expect(grades.aspects.Works.grade).toBe('A');
   });
 });

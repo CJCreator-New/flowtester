@@ -1,6 +1,6 @@
 # 0020: Sources, Role Binding, Needs-Your-Judgement Findings and Pipelined Planning
 
-Status: Accepted 2026-10-09.
+Status: Accepted 2026-10-09. Amended by [0023](0023-word-in-scope-and-structured-spec-parsing.md): Word (.docx) is now in scope; PDF stays out.
 
 Amends [0009](0009-ai-plans-every-plan-item.md) (sequencing, batching, cost). Builds on [0003](0003-deterministic-safety-filters-for-ai-discovery.md), [0014](0014-verified-domains-and-safe-host-classification.md), [0017](0017-findings-contract.md) and [0018](0018-claim-wording.md).
 

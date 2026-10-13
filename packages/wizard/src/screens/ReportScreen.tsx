@@ -6,6 +6,7 @@ import {
   finishAiReview,
   getRun,
   getStoredReleaseGates,
+  recordSpecOverride,
   RunnerError,
   triageProblem,
 } from '../api';
@@ -147,8 +148,8 @@ export function Report({
   const tokens = Object.entries(report.aiUsage || {});
   const evaluatedGate = useMemo(() => {
     const gate = getStoredReleaseGates();
-    return releaseVerdict(report.findings || [], gate);
-  }, [report.findings]);
+    return releaseVerdict(report.findings || [], gate, report.grades);
+  }, [report.findings, report.grades]);
 
   useEffect(() => {
     const handleHash = () => {
@@ -1073,27 +1074,187 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
   const roles = report.rolesNotTested ?? [];
   const line = documentedLine(report.documentedItems);
   const notFound = report.documentedItems?.notFound ?? [];
+  const [activeOverride, setActiveOverride] = useState<string | null>(null);
+  const [overrideReason, setOverrideReason] = useState('');
+  const [overrideStatus, setOverrideStatus] = useState<'updated' | 'retired' | 'postponed'>('updated');
+  const [overrideSelector, setOverrideSelector] = useState('');
+  const [overrideUrlPath, setOverrideUrlPath] = useState('');
+  const [savingOverride, setSavingOverride] = useState(false);
+  const [overrideSuccess, setOverrideSuccess] = useState<Record<string, boolean>>({});
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+
   if (roles.length === 0 && !line) return null;
+
+  const handleSaveOverride = async (reqId: string) => {
+    setSavingOverride(true);
+    setOverrideError(null);
+    try {
+      await recordSpecOverride({
+        runId: report.runId,
+        requirementId: reqId,
+        reason: overrideReason,
+        status: overrideStatus,
+        newSelector: overrideSelector || undefined,
+        newUrlPath: overrideUrlPath || undefined,
+      });
+      setOverrideSuccess((prev) => ({ ...prev, [reqId]: true }));
+      setActiveOverride(null);
+      setOverrideReason('');
+      setOverrideSelector('');
+      setOverrideUrlPath('');
+    } catch (err: unknown) {
+      setOverrideError(err instanceof Error ? err.message : 'Failed to record override');
+    } finally {
+      setSavingOverride(false);
+    }
+  };
+
   return (
-    <section aria-labelledby="sources-title" className="space-y-3">
-      <h2 id="sources-title" className="text-2xl font-bold">
-        What the documents and sign-ins covered
-      </h2>
-      {line && <p className="text-ink">{line}.</p>}
+    <section aria-labelledby="sources-title" className="space-y-4 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
+        <h2 id="sources-title" className="text-xl font-bold">
+          Living Spec Conformance
+        </h2>
+        {line && (
+          <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">
+            {line}
+          </span>
+        )}
+      </div>
+
       {notFound.length > 0 && (
-        <ul className="list-disc space-y-1 pl-5 text-ink">
-          {notFound.map((item, i) => (
-            <li key={i}>
-              <strong>{item.docSource.section ?? item.docSource.document}</strong> in {item.docSource.document}:{' '}
-              <span className="text-ink-soft">{item.reason}</span>
-            </li>
-          ))}
-        </ul>
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">
+            Unreached Documented Requirements ({notFound.length})
+          </h3>
+          <div className="space-y-3">
+            {notFound.map((item, i) => {
+              const reqId = item.docSource.requirementId || item.docSource.section || item.docSource.document;
+              const isOverridden = overrideSuccess[reqId] || item.override;
+              const isEditing = activeOverride === reqId;
+
+              return (
+                <div
+                  key={i}
+                  className="rounded-lg border border-rule/80 bg-surface p-4 text-sm transition-all"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <strong className="font-semibold text-ink">
+                          {item.docSource.section ?? item.docSource.document}
+                        </strong>
+                        <span className="text-xs text-ink-soft">in {item.docSource.document}</span>
+                        {item.code && (
+                          <span className="rounded bg-rule px-2 py-0.5 font-mono text-[11px] text-ink-soft">
+                            {item.code}
+                          </span>
+                        )}
+                        {isOverridden && (
+                          <span className="rounded bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                            Intentional Deviation (Overridden)
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-ink-soft">{item.reason}</p>
+                    </div>
+
+                    {!isOverridden && !isEditing && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveOverride(reqId);
+                          setOverrideError(null);
+                        }}
+                        className="rounded-md border border-rule px-2.5 py-1 text-xs font-medium text-accent hover:border-accent hover:bg-accent/5"
+                      >
+                        Did this feature change or move? Record Spec Override
+                      </button>
+                    )}
+                  </div>
+
+                  {isEditing && (
+                    <div className="mt-4 rounded-md border border-rule bg-page/50 p-3 space-y-3">
+                      <div className="font-medium text-ink">Record Spec Drift Override</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-xs font-medium text-ink-soft mb-1">Status</label>
+                          <select
+                            value={overrideStatus}
+                            onChange={(e) => setOverrideStatus(e.target.value as any)}
+                            className="w-full rounded border border-rule bg-surface px-2 py-1 text-xs text-ink"
+                          >
+                            <option value="updated">Updated / Moved</option>
+                            <option value="retired">Retired / Removed</option>
+                            <option value="postponed">Postponed</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-ink-soft mb-1">New Route / URL (optional)</label>
+                          <input
+                            type="text"
+                            placeholder="/new-path"
+                            value={overrideUrlPath}
+                            onChange={(e) => setOverrideUrlPath(e.target.value)}
+                            className="w-full rounded border border-rule bg-surface px-2 py-1 text-xs text-ink"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-ink-soft mb-1">New CSS Selector (optional)</label>
+                          <input
+                            type="text"
+                            placeholder="button[data-testid='save']"
+                            value={overrideSelector}
+                            onChange={(e) => setOverrideSelector(e.target.value)}
+                            className="w-full rounded border border-rule bg-surface px-2 py-1 text-xs text-ink"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-ink-soft mb-1">Reason / Notes</label>
+                        <input
+                          type="text"
+                          placeholder="Why this requirement was moved or changed in the app"
+                          value={overrideReason}
+                          onChange={(e) => setOverrideReason(e.target.value)}
+                          className="w-full rounded border border-rule bg-surface px-2 py-1 text-xs text-ink"
+                        />
+                      </div>
+                      {overrideError && (
+                        <p className="text-xs text-danger">{overrideError}</p>
+                      )}
+                      <div className="flex items-center gap-2 justify-end pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setActiveOverride(null)}
+                          className="rounded px-2.5 py-1 text-xs font-medium text-ink-soft hover:bg-rule/40"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingOverride}
+                          onClick={() => handleSaveOverride(reqId)}
+                          className="rounded bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+                        >
+                          {savingOverride ? 'Saving...' : 'Save Override'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
+
       {roles.length > 0 && (
-        <div>
-          <h3 className="text-lg font-bold">Roles not tested and why</h3>
-          <ul className="list-disc space-y-1 pl-5 text-ink">
+        <div className="pt-2">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">
+            Roles not tested and why
+          </h3>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-ink">
             {roles.map((r) => (
               <li key={r.role}>
                 <strong>{r.role}:</strong> <span className="text-ink-soft">{r.text}</span>

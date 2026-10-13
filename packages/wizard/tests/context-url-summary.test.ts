@@ -13,7 +13,7 @@ describe('reference materials', () => {
     );
     expect(rejectReason('spec.docx', 100)).toMatch(/is a Word document/);
     expect(rejectReason('notes', 100)).toMatch(/is not a text file/);
-    expect(rejectReason('big.md', 2 * 1024 * 1024)).toMatch(/larger than 1 MB/);
+    expect(rejectReason('big.md', 2 * 1024 * 1024)).toMatch(/larger than 500 KB/);
     expect(rejectReason('flows.MD', 100)).toBeNull();
     expect(rejectReason('notes.txt', 100)).toBeNull();
   });

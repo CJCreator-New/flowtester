@@ -251,4 +251,45 @@ describe('SecurityChecker', () => {
       }
     });
   });
+
+  describe('CORS misconfiguration audits (FR-6.5)', () => {
+    it('flags wildcard Access-Control-Allow-Origin when credentials are true', () => {
+      const findings = checker.checkCors(
+        {
+          'access-control-allow-origin': '*',
+          'access-control-allow-credentials': 'true',
+        },
+        { role: 'visitor', breakpoint: '1440px', urlPath: '/api/user' }
+      );
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0].severity).toBe('Major');
+      expect(findings[0].title).toBe('Insecure CORS configuration: Wildcard origin with credentials allowed');
+    });
+
+    it('flags "null" Access-Control-Allow-Origin', () => {
+      const findings = checker.checkCors(
+        {
+          'access-control-allow-origin': 'null',
+        },
+        { role: 'visitor', breakpoint: '1440px', urlPath: '/api/profile' }
+      );
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0].severity).toBe('Major');
+      expect(findings[0].title).toBe('Insecure CORS configuration: "null" origin allowed');
+    });
+
+    it('passes safe explicit origin with credentials', () => {
+      const findings = checker.checkCors(
+        {
+          'access-control-allow-origin': 'https://app.example.com',
+          'access-control-allow-credentials': 'true',
+        },
+        { role: 'visitor', breakpoint: '1440px', urlPath: '/api/user' }
+      );
+
+      expect(findings).toHaveLength(0);
+    });
+  });
 });

@@ -97,7 +97,7 @@ export class ReportGenerator {
     lines.push(``);
 
     // Summary banner: the same verdict as the screen and report.html.
-    const verdict = releaseVerdict(findings);
+    const verdict = releaseVerdict(findings, undefined, report.grades);
     lines.push(verdict.ready ? `> [!TIP]` : verdict.counts.Blocker > 0 ? `> [!CAUTION]` : `> [!WARNING]`);
     lines.push(
       `> **${verdict.stamp}**: ${verdict.reason}${

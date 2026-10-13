@@ -83,7 +83,7 @@ const goodBind = JSON.stringify({
 describe('Sources in the planner', () => {
   it('AC1: carries the Source and proposed roles, unconfirmed', async () => {
     const out = await planPagesAndMenus(input(), new Scripted(goodBind));
-    const t = out.pages[0].tests.find((x) => x.kind !== 'denial')!;
+    const t = out.pages[0].tests.find((x) => x.intent !== 'denied')!;
     expect(t.docSource).toEqual({ document: 'spec.md', section: 'Users', requirementId: 'REQ-1' });
     expect(t.proposedRoles).toEqual(['Admin']);
     expect(t.rolesConfirmed).toBe(false);
@@ -91,11 +91,11 @@ describe('Sources in the planner', () => {
 
   it('AC2: an admin-only action gets a Denial item for Viewer under the same Source, asserting hidden', async () => {
     const out = await planPagesAndMenus(input(), new Scripted(goodBind));
-    const denial = out.pages[0].tests.find((x) => x.kind === 'denial')!;
+    const denial = out.pages[0].tests.find((x) => x.intent === 'denied')!;
     expect(denial.role).toBe('Viewer');
     expect(denial.docSource?.requirementId).toBe('REQ-1');
     expect(denial.expectations?.elementState).toEqual({ selector: '[data-testid="create-user"]', visible: false });
-    expect(out.pages[0].tests.filter((x) => x.kind === 'denial')).toHaveLength(1);
+    expect(out.pages[0].tests.filter((x) => x.intent === 'denied')).toHaveLength(1);
   });
 
   it('AC3: a requirement with no matching test is Not found with a reason, not a failure, not a test', async () => {
@@ -120,9 +120,30 @@ describe('Sources in the planner', () => {
     expect(estimatePageRequests(input())).toBe(2);
   });
 
+  it('User Flows reach the AI with persona, steps and assertions (up to 600 chars)', async () => {
+    const long = 'x'.repeat(900);
+    const flow: ParsedRequirementHint = {
+      id: 'REQ-9', name: 'Leave', description: '', rules: [], kind: 'journey', persona: 'Employee',
+      steps: ['open `/requests`', long], assert: ['status "Applied"'],
+    };
+    const ai = new Scripted(goodBind);
+    await planPagesAndMenus(input({ requirements: [...reqs, flow] }), ai);
+    const line = ai.prompts.join('\n').split('\n').find((l) => l.includes('"REQ-9"') && l.includes('detail'))!;
+    const detail = JSON.parse(line).detail as string;
+    expect(detail).toContain('Persona: Employee');
+    expect(detail).toContain('Steps: open `/requests`');
+    expect(detail.length).toBeLessThanOrEqual(600);
+  });
+
+  it('documents with units no longer note that fixed rules cannot match them', async () => {
+    const route: ParsedRequirementHint = { id: 'REQ-8', name: 'Users', description: '', rules: [], kind: 'route', route: '/users', rolesText: 'all' };
+    const out = await planPagesAndMenus(input({ requirements: [route] }), undefined);
+    expect(out.notes.join(' ')).not.toContain('could not be matched');
+  });
+
   it('unusable role answer (invalid JSON) -> every role allowed, no invented Denial', async () => {
     const out = await planPagesAndMenus(input(), new Scripted('not json'));
-    expect(out.pages[0].tests.some((x) => x.kind === 'denial')).toBe(false);
+    expect(out.pages[0].tests.some((x) => x.intent === 'denied')).toBe(false);
     expect(out.pages[0].tests[0].proposedRoles).toEqual(['Admin', 'Viewer']);
     expect(out.notes.join(' ')).toContain('every role is allowed');
   });
@@ -158,7 +179,7 @@ describe('Sources in the planner', () => {
   it('no AI: nothing is listed as Not found and no Denial is invented', async () => {
     const out = await planPagesAndMenus(input(), undefined);
     expect(out.notFound).toBeUndefined();
-    expect(out.pages[0].tests.some((x) => x.kind === 'denial')).toBe(false);
+    expect(out.pages[0].tests.some((x) => x.intent === 'denied')).toBe(false);
   });
 
   it('safety: an AI step on "Delete user" is dropped even when a Denial would follow', async () => {
@@ -171,7 +192,7 @@ describe('Sources in the planner', () => {
     const out = await planPagesAndMenus(input(), ai);
     const tests = out.pages[0].tests;
     expect(tests.some((t) => t.steps.some((st) => st.selector === '[data-testid="delete-user"]'))).toBe(false);
-    expect(tests.some((t) => t.docSource || t.kind === 'denial')).toBe(false);
+    expect(tests.some((t) => t.docSource || t.intent === 'denied')).toBe(false);
   });
 
   it('pure helpers: denial needs an allowed-role test; documentedItems clamps', () => {

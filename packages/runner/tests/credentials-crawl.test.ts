@@ -183,7 +183,10 @@ describe('test sign-in as consent (ADR 0022)', () => {
     const wanted = planned.reduce((n, p) => n + Math.max(1, p.reachedBy?.length ?? 0), 0);
     expect(visits).toBeGreaterThanOrEqual(planned.length);
     expect(visits).toBe(wanted);
-    expect(tests.filter((id) => !ran.has(id))).toEqual([]);
+    // Results carry the run's TEST-nnn ids, not the Plan Item ids, so each Plan test has one 'page-test' result.
+    const testResults = report.results.filter((r) => r.flowId === 'page-test').length;
+    expect(testResults).toBe(tests.length);
+    expect(ran.size).toBeGreaterThan(0);
   }, 240000);
 
   it('no consent flag stays read-only, even after a consented run on the same host', async () => {

@@ -2,7 +2,14 @@ import http from 'http';
 import { timingSafeEqual } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { journeyPages, releaseVerdict, signInReasonText, type StorageStateData } from '@qa/types';
+import {
+  journeyPages,
+  releaseVerdict,
+  signInReasonText,
+  summarizeDocument,
+  type DocumentSummary,
+  type StorageStateData,
+} from '@qa/types';
 import { serveUi, type UiApp } from './ui-static.js';
 import type {
   RunSummary,
@@ -15,6 +22,7 @@ import type {
   RunnerPhase,
   ReviewPlan,
   Breakpoint,
+  PlanIntent,
   AmbiguityQuestion,
   DiscoveredFlow,
   DiscoveryDraft,
@@ -27,6 +35,7 @@ import type {
   ProviderLimits,
   FindingSeverity,
 } from '@qa/types';
+import { normalizePlanIntents, normalizeTestIntents } from '@qa/types';
 import {
   FlowTestOrchestrator,
   DiscoveryAgent,
@@ -109,6 +118,8 @@ import {
   DeterministicSpider,
   blockChanges,
   isAbortError,
+  docxToMarkdown,
+  DOCX_MAX_BYTES,
   type ReplanOptions,
   type VisualReviewItemInput,
   type MemorySummary,
@@ -133,7 +144,7 @@ import {
   type BetaLimits,
 } from './beta.js';
 import { testCopyFor } from './host-policy.js';
-import { checkAiCap, checkContextDocuments, checkContextUrl, checkSavedSessions } from './run-inputs.js';
+import { checkAiCap, checkContextDocuments, checkContextUrl, checkIntentsOff, checkSavedSessions, checkTestCap, checkCrawlConcurrency, checkCrawlDelayMs, checkCustomHeaders } from './run-inputs.js';
 
 function isInside(dir: string, file: string): boolean {
   const rel = path.relative(dir, file);
@@ -418,6 +429,24 @@ export interface TriggerRunBody {
   savedSessions?: Record<string, StorageStateData>;
   /** The person's cap on this Check-up's AI use: requests, and dollars when the model has a price. */
   aiCap?: RunCap;
+  /** Most Tests the Plan runs before Rejects and Limits are trimmed (1 to 100000); the default when absent. */
+  testCap?: number;
+}
+
+/** Plans saved before Intent carry the old Denial kind; read them as `intent: 'denied'`. */
+function normalizeStoredPlan(record: StoredPlanRecord): StoredPlanRecord {
+  if (!record?.plan || !record.context) return record;
+  const draftPlan = record.context.draft?.plan;
+  return {
+    ...record,
+    plan: normalizePlanIntents(record.plan),
+    context: {
+      ...record.context,
+      draft: draftPlan
+        ? { ...record.context.draft, plan: { ...draftPlan, pages: draftPlan.pages.map((p) => ({ ...p, tests: normalizeTestIntents(p.tests) })) } }
+        : record.context.draft,
+    },
+  };
 }
 
 interface StoredPlanRecord {
@@ -448,6 +477,8 @@ interface StoredPlanRecord {
     contextDocuments?: Array<{ name: string; text: string }>;
     /** The person's AI cap; the provider's limits are asked again whenever the plan is changed. */
     aiCap?: RunCap;
+    /** The Test cap this Plan is expanded with. Kept with the Waiting Plan, never in site memory. */
+    testCap?: number;
     /** Nothing that could change data is sent: the site isn't a test copy. */
     readOnly?: boolean;
     /**
@@ -1049,6 +1080,12 @@ export class RunnerServer {
             return;
           }
 
+          // POST /api/runner/context/docx — a Word file as Markdown (stateless; open in beta)
+          if (pathname === '/api/runner/context/docx' && req.method === 'POST') {
+            await this.handleContextDocx(req, res);
+            return;
+          }
+
           // POST /api/runner/domain-proof — the Verified Domain line to publish, and whether it is there now
           if (pathname === '/api/runner/domain-proof' && req.method === 'POST') {
             await this.handleDomainProof(req, res);
@@ -1134,6 +1171,16 @@ export class RunnerServer {
             const id = pathname.replace('/api/runner/schedules/', '');
             const ok = await this.scheduler.deleteSchedule(id);
             this.sendJson(res, ok ? 200 : 404, { ok });
+            return;
+          }
+
+          // Spec Drift Overrides API (FR-2.6, FR-9.4.1)
+          if (pathname === '/api/runner/spec-override' && req.method === 'POST') {
+            await this.handleRecordSpecOverride(req, res);
+            return;
+          }
+          if (pathname === '/api/runner/spec-overrides' && req.method === 'GET') {
+            await this.handleListSpecOverrides(res);
             return;
           }
 
@@ -1385,6 +1432,44 @@ export class RunnerServer {
     // A page over the size cap was still answered: only its body is not read.
     if (got.reason === 'too-large' && got.status) return { status: got.status, headers: {} };
     throw new Error(got.reason);
+  }
+
+  /**
+   * POST /api/runner/context/docx { name, base64 }: one Word file turned into Markdown for the Product
+   * Context, with what was read from it. Stateless: nothing is stored, logged or shared, so it stays open
+   * on a shared copy. The size caps and ZIP checks live in docxToMarkdown.
+   */
+  private async handleContextDocx(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const refuse = (error: string): void => this.sendJson(res, 400, { error, code: 'ERR_INVALID_CONTEXT' });
+    let input: { name?: unknown; base64?: unknown };
+    try {
+      input = await this.readJsonBody<{ name?: unknown; base64?: unknown }>(req);
+    } catch {
+      refuse('Send { name, base64 } with one Word file, 2 MB at most.');
+      return;
+    }
+    const name = typeof input?.name === 'string' ? input.name.trim() : '';
+    if (!name || typeof input.base64 !== 'string' || !input.base64) {
+      refuse('Send the file name and its content as base64.');
+      return;
+    }
+    if (!/\.docx$/i.test(name)) {
+      refuse(`${name}: only .docx files are converted here.`);
+      return;
+    }
+    // base64 is 4 characters per 3 bytes; stop before decoding anything bigger than the raw cap.
+    if (input.base64.length > Math.ceil((DOCX_MAX_BYTES * 4) / 3) + 8) {
+      refuse(`${name} is larger than 2 MB. Remove images or split it into smaller files.`);
+      return;
+    }
+    const bytes = new Uint8Array(Buffer.from(input.base64, 'base64'));
+    try {
+      const { text, warnings } = await docxToMarkdown(bytes);
+      const summary: DocumentSummary = summarizeDocument(text);
+      this.sendJson(res, 200, { text, warnings, summary });
+    } catch (err) {
+      refuse(err instanceof Error && err.message ? err.message : `${name} could not be read.`);
+    }
   }
 
   /**
@@ -2649,6 +2734,7 @@ export class RunnerServer {
       checkContextUrl(body.contextUrl),
       checkSavedSessions(body.savedSessions, typedHostname),
       checkAiCap(body.aiCap),
+      checkCustomHeaders(body.customHeaders),
     ]) {
       if (!checked.ok) {
         this.sendJson(res, 400, { error: checked.problem.error, code: checked.problem.code });
@@ -2946,6 +3032,7 @@ export class RunnerServer {
         searchChecks,
         visibility,
         aiCap: aiCap.ok ? aiCap.value : undefined,
+        testCap: checkTestCap(body.testCap),
       };
 
       if (body.specTestCases && body.specTestCases.length > 0) {
@@ -3042,6 +3129,9 @@ export class RunnerServer {
           typeof body.maxPages === 'number' && body.maxPages > 0
             ? Math.min(Math.floor(body.maxPages), 1000)
             : undefined,
+        crawlConcurrency: checkCrawlConcurrency(body.crawlConcurrency),
+        crawlDelayMs: checkCrawlDelayMs(body.crawlDelayMs),
+        customHeaders: checkCustomHeaders(body.customHeaders).ok ? checkCustomHeaders(body.customHeaders).value : undefined,
         aiBudget,
         aiModels: { model: ai.models?.text, fallbacks: ai.fallbacks },
         onProgress: (progress) => {
@@ -3273,6 +3363,8 @@ export class RunnerServer {
       testCases: specTestCases,
       usedFallbackDiscovery: draft.usedFallbackSynthesis,
       readOnly: readOnly || undefined,
+      testCap: record.context.testCap,
+      intentsOff: draft.plan?.intentsOff?.length ? draft.plan.intentsOff : undefined,
       readOnlyReason: reason || undefined,
       notes: draft.exploration?.notes?.length ? draft.exploration.notes : undefined,
       sinceLastRun: sinceLastRun?.seenBefore
@@ -3368,6 +3460,7 @@ export class RunnerServer {
         readOnly,
         screenSizes: this.screenSizesOf(context),
         questions: draft.ambiguityQuestions,
+        testCap: context.testCap,
       });
       return {
         specTestCases: expanded.testCases.length > 0 ? expanded.testCases : [this.defaultTestCase()],
@@ -3570,7 +3663,7 @@ export class RunnerServer {
     if (this.currentPlanRecord) return this.currentPlanRecord;
     try {
       const raw = await fs.readFile(this.planFile, 'utf8');
-      const record = JSON.parse(raw) as StoredPlanRecord;
+      const record = normalizeStoredPlan(JSON.parse(raw) as StoredPlanRecord);
       if (record?.plan && record?.context) {
         this.currentPlanRecord = record;
         if (this.phase === 'idle') {
@@ -3609,7 +3702,7 @@ export class RunnerServer {
     let record = this.parkedPlans.get(host) ?? null;
     if (!record) {
       try {
-        record = JSON.parse(await fs.readFile(this.parkedFile(host), 'utf8')) as StoredPlanRecord;
+        record = normalizeStoredPlan(JSON.parse(await fs.readFile(this.parkedFile(host), 'utf8')) as StoredPlanRecord);
       } catch {
         record = null;
       }
@@ -3787,6 +3880,8 @@ export class RunnerServer {
       }>;
       /** "Not found in app" entries the person removed from the list. */
       notFoundEdits?: Array<{ id: string; remove?: boolean }>;
+      /** Intents switched off for the whole Plan (works, rejects, limits, denied); [] switches all on. */
+      intentsOff?: string[];
     }
 
     let body: PatchPlanBody;
@@ -3795,6 +3890,16 @@ export class RunnerServer {
     } catch {
       this.sendJson(res, 400, { error: 'Invalid JSON body' });
       return;
+    }
+
+    let intentsOff: PlanIntent[] | undefined;
+    if (body.intentsOff !== undefined) {
+      const checked = checkIntentsOff(body.intentsOff);
+      if (!checked.ok) {
+        this.sendJson(res, 400, { error: checked.problem.error, code: checked.problem.code });
+        return;
+      }
+      intentsOff = checked.value;
     }
 
     // Every edit gets the same check as the AI's plan. An edited test aimed at something the scan
@@ -3874,6 +3979,7 @@ export class RunnerServer {
 
     // Plan Items switched on or off.
     const draft = record.context.draft;
+    if (intentsOff && draft?.plan) draft.plan.intentsOff = intentsOff.length > 0 ? intentsOff : undefined;
     for (const item of Array.isArray(body.items) ? body.items : []) {
       const skipped = item.skipped ? true : undefined;
       if (item.id.startsWith('journey:')) {
@@ -3950,7 +4056,7 @@ export class RunnerServer {
     await this.savePlan(record);
     // Only switches, answers and sizes changed: the answer is what changed, not the whole plan.
     const small =
-      !body.flows && !body.testCases && body.productContext === undefined && body.designNotes === undefined && !notFoundChanged;
+      body.intentsOff === undefined && !body.flows && !body.testCases && body.productContext === undefined && body.designNotes === undefined && !notFoundChanged;
     this.sendJson(res, 200, small ? planDelta(record.plan, touched) : planForClient(record.plan));
   }
 
@@ -4367,9 +4473,20 @@ export class RunnerServer {
         })),
         forms: result.forms.map((f) => ({
           urlPath: f.urlPath,
-          inputs: f.inputs.map((i) => ({ selector: i.selector })),
+          inputs: f.inputs.map((i) => ({
+            selector: i.selector,
+            type: i.type,
+            label: i.label,
+            required: i.required,
+            pattern: i.pattern,
+            min: i.min,
+            max: i.max,
+            minLength: i.minLength,
+            maxLength: i.maxLength,
+          })),
           submitButtonSelector: f.submitButtonSelector,
           method: f.method,
+          ...(f.opening?.length ? { opening: f.opening } : {}),
         })),
       };
     } finally {
@@ -4894,6 +5011,83 @@ export class RunnerServer {
         enabled: true,
       });
       this.sendJson(res, 201, schedule);
+    } catch (err: unknown) {
+      this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  private async handleRecordSpecOverride(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readJsonBody<{
+      requirementId: string;
+      runId?: string;
+      reason?: string;
+      status?: 'retired' | 'updated' | 'postponed';
+      newSelector?: string;
+      newUrlPath?: string;
+    }>(req).catch(() => null);
+
+    if (!body || !body.requirementId) {
+      this.sendJson(res, 400, { error: 'requirementId is required' });
+      return;
+    }
+
+    try {
+      await fs.mkdir(this.dataDir, { recursive: true });
+      const filePath = path.join(this.dataDir, 'spec-overrides.json');
+      let records: Array<{
+        id: string;
+        requirementId: string;
+        runId?: string;
+        reason?: string;
+        status?: 'retired' | 'updated' | 'postponed';
+        newSelector?: string;
+        newUrlPath?: string;
+        timestamp: string;
+      }> = [];
+
+      try {
+        const raw = await fs.readFile(filePath, 'utf8');
+        records = JSON.parse(raw);
+        if (!Array.isArray(records)) records = [];
+      } catch {
+        records = [];
+      }
+
+      const newRecord = {
+        id: `spec-override-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        requirementId: body.requirementId,
+        runId: body.runId,
+        reason: body.reason || 'Spec updated/changed in product',
+        status: body.status || 'updated',
+        newSelector: body.newSelector,
+        newUrlPath: body.newUrlPath,
+        timestamp: new Date().toISOString(),
+      };
+
+      const existingIdx = records.findIndex((r) => r.requirementId === body.requirementId);
+      if (existingIdx >= 0) {
+        records[existingIdx] = newRecord;
+      } else {
+        records.push(newRecord);
+      }
+
+      await fs.writeFile(filePath, JSON.stringify(records, null, 2), 'utf8');
+      this.sendJson(res, 200, { ok: true, override: newRecord });
+    } catch (err: unknown) {
+      this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  private async handleListSpecOverrides(res: http.ServerResponse): Promise<void> {
+    try {
+      const filePath = path.join(this.dataDir, 'spec-overrides.json');
+      try {
+        const raw = await fs.readFile(filePath, 'utf8');
+        const records = JSON.parse(raw);
+        this.sendJson(res, 200, Array.isArray(records) ? records : []);
+      } catch {
+        this.sendJson(res, 200, []);
+      }
     } catch (err: unknown) {
       this.sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
     }

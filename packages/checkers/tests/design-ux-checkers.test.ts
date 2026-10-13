@@ -184,4 +184,47 @@ describe('UXQualityChecker accessibility scan', () => {
       await page.context().close();
     }
   });
+
+  describe('DesignStandardsChecker Design Tokens (FR-6.6)', () => {
+    let browser: Browser;
+    beforeAll(async () => {
+      browser = await chromium.launch();
+    });
+    afterAll(async () => {
+      await browser.close();
+    });
+
+    it('flags typography font-size mismatch against design tokens', async () => {
+      const checker = new DesignStandardsChecker();
+      const page = await (await browser.newContext()).newPage();
+      try {
+        await page.setContent(
+          '<html lang="en"><body>' +
+            '<h1 data-testid="page-title" style="font-size: 32px">Title</h1>' +
+            '<p data-testid="body-text" style="font-size: 21px">Some text with arbitrary font size</p>' +
+            '</body></html>'
+        );
+        const tokens = {
+          fontSize: {
+            base: '16px',
+            lg: '24px',
+          },
+        };
+        const findings = await checker.check(page, tokens, {
+          role: 'visitor',
+          breakpoint: '1440px',
+          urlPath: '/',
+        });
+
+        expect(findings.length).toBeGreaterThan(0);
+        const textMismatch = findings.find((f) => f.where.dataTestId === 'body-text');
+        expect(textMismatch).toBeDefined();
+        expect(textMismatch?.title).toContain('font-size on body-text');
+        expect(textMismatch?.expectedVsActual.expected).toContain('16px');
+        expect(textMismatch?.expectedVsActual.actual).toContain('21px');
+      } finally {
+        await page.context().close();
+      }
+    });
+  });
 });

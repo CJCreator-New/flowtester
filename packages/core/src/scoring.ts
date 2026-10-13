@@ -15,11 +15,13 @@ export { ASPECT_CHECKERS };
 const MAX_OPINION_DEDUCTION = 25;
 
 const SEVERITY_DEDUCTIONS: Record<FindingSeverity, number> = {
-  Blocker: 30,
-  Major: 15,
+  Blocker: 50,
+  Major: 20,
   Minor: 5,
   Suggestion: 2,
 };
+
+const FLAKY_STABILITY_PENALTY = 3;
 
 function getSpreadMultiplier(affectedPagesCount: number): number {
   if (affectedPagesCount <= 1) return 1.0;
@@ -27,14 +29,52 @@ function getSpreadMultiplier(affectedPagesCount: number): number {
   return 1.5;
 }
 
-export function scoreToGrade(score: number, blockerCount: number = 0): AspectGrade {
-  if (blockerCount >= 2 || score < 60) return 'F';
-  if (blockerCount === 1) return score >= 70 ? 'D' : scoreToGrade(score, 0); // single blocker caps at D
+/**
+ * Deterministic Area Grade Scale per PRD FR-8.1:
+ * - A: 90–100 (0 Blockers, 0 Majors)
+ * - B: 75–89 (0 Blockers, <= 1 Major)
+ * - C: 60–74 (0 Blockers)
+ * - D: 40–59 (Critical defects present)
+ * - F: < 40 points, OR >= 1 unhandled first-party HTTP 500 / unhandled runtime crash
+ */
+export function scoreToGrade(
+  score: number,
+  blockerCount: number = 0,
+  majorCount: number = 0,
+  hasFirstPartyCrash: boolean = false
+): AspectGrade {
+  if (hasFirstPartyCrash || score < 40) return 'F';
+  if (blockerCount > 0) {
+    // 0 tolerance for Blockers in Grade A, B, or C; capped at D (or F if < 40)
+    return score >= 40 ? 'D' : 'F';
+  }
+  if (majorCount > 1) {
+    // Grade A requires 0 Majors; Grade B allows <= 1 Major; > 1 Major caps at C
+    if (score >= 60) return 'C';
+    if (score >= 40) return 'D';
+    return 'F';
+  }
+  if (majorCount === 1) {
+    // 1 Major caps at Grade B
+    if (score >= 75) return 'B';
+    if (score >= 60) return 'C';
+    if (score >= 40) return 'D';
+    return 'F';
+  }
+  // 0 Blockers, 0 Majors
   if (score >= 90) return 'A';
-  if (score >= 80) return 'B';
-  if (score >= 70) return 'C';
-  if (score >= 60) return 'D';
+  if (score >= 75) return 'B';
+  if (score >= 60) return 'C';
+  if (score >= 40) return 'D';
   return 'F';
+}
+
+export interface ScoringOptions {
+  checkersRun?: Iterable<CheckerType>;
+  /** False when the home page was never read, so the marketing basics weren't looked at: shown as "Not checked", not 100%. */
+  marketingChecked?: boolean;
+  /** Flaky passed tests count (execution stability penalty: -3 points per occurrence) */
+  flakyCount?: number;
 }
 
 /**
@@ -47,11 +87,7 @@ export function scoreToGrade(score: number, blockerCount: number = 0): AspectGra
  */
 export function calculateSiteAspectGrades(
   findings: Finding[],
-  options: {
-    checkersRun?: Iterable<CheckerType>;
-    /** False when the home page was never read, so the marketing basics weren't looked at: shown as "Not checked", not 100%. */
-    marketingChecked?: boolean;
-  } = {}
+  options: ScoringOptions = {}
 ): SiteAspectGrades {
   const aspects: Record<AspectType, AspectScore> = {
     Works: { grade: 'A', score: 100, findings: [] },
@@ -86,6 +122,7 @@ export function calculateSiteAspectGrades(
 
     let totalDeduction = 0;
     let blockerCount = 0;
+    let majorCount = 0;
     const findingIds: string[] = [];
 
     // Group duplicate findings by title/code to avoid double penalizing the same recurring bug
@@ -104,28 +141,38 @@ export function calculateSiteAspectGrades(
       entry.ids.push(f.id);
       if (f.severity === 'Blocker') {
         blockerCount++;
+      } else if (f.severity === 'Major') {
+        majorCount++;
       }
     }
 
-    // The AI's visual review is an opinion: on its own it can take an area down to a C, not fail it.
-    let opinionDeduction = 0;
+    // AI visual review operates strictly as non-graded advisory commentary per PRD FR-8.1 / ADR 0009
     for (const [, group] of grouped.entries()) {
+      if (group.opinion) continue; // Non-graded advisory commentary
       const baseDeduction = SEVERITY_DEDUCTIONS[group.severity] || 5;
       const multiplier = getSpreadMultiplier(group.pages.size);
-      if (group.opinion) opinionDeduction += baseDeduction * multiplier;
-      else totalDeduction += baseDeduction * multiplier;
-    }
-    totalDeduction += Math.min(opinionDeduction, MAX_OPINION_DEDUCTION);
-
-    let finalScore = Math.max(0, Math.round(100 - totalDeduction));
-    // Blocker caps
-    if (blockerCount === 1 && finalScore > 65) {
-      finalScore = 65;
-    } else if (blockerCount >= 2 && finalScore > 50) {
-      finalScore = 50;
+      totalDeduction += baseDeduction * multiplier;
     }
 
-    const grade = scoreToGrade(finalScore, blockerCount);
+    // Flaky tests stability penalty (-3 per occurrence) applied to Works aspect
+    if (aspect === 'Works' && options.flakyCount && options.flakyCount > 0) {
+      totalDeduction += options.flakyCount * FLAKY_STABILITY_PENALTY;
+    }
+
+    // Unhandled first-party 500s or runtime crash triggers automatic Grade F per PRD FR-8.1
+    const hasFirstPartyCrash =
+      aspect === 'Works' &&
+      aspectFindings.some(
+        (f) =>
+          !f.thirdParty &&
+          (f.title.includes('HTTP 5') ||
+            f.title.includes('500') ||
+            f.title.toLowerCase().includes('uncaught exception') ||
+            f.title.toLowerCase().includes('application crash'))
+      );
+
+    const finalScore = Math.max(0, Math.round(100 - totalDeduction));
+    const grade = scoreToGrade(finalScore, blockerCount, majorCount, hasFirstPartyCrash);
     aspects[aspect] = {
       grade,
       score: finalScore,

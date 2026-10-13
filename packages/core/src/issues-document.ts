@@ -115,7 +115,7 @@ const cell = (s: string) => sanitizeInline(s, 200).replace(/\|/g, '\\|');
 export function documentedItemsLine(d: ReleaseReport['documentedItems']): string | null {
   if (!d) return null;
   const notFound = d.notFound.length;
-  return `${d.reached} of ${d.total} documented items reached${notFound > 0 ? `; ${notFound} not found in the app` : ''}.`;
+  return `${d.reached} of ${d.total} documented requirements reached in live app${notFound > 0 ? `; ${notFound} not found in the app` : ''}.`;
 }
 
 /** The "Roles not tested and why" block, shared by report.md and issues.md. */

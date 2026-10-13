@@ -59,6 +59,18 @@ Verify by hand (deferred to `/verify-all`):
 2. Start a Check-up of `http://localhost:3050` with review on and no AI key.
 3. `curl -o t17.zip http://localhost:3001/api/runner/plan/export`; unzip into a new empty directory.
 4. In that directory: `npm install`, install Chromium for Playwright, then run its `test` script. Expect no failures (skipped and fixme tests are allowed).
+5. For the Rejects check, run the Check-up against the fixture with `/lab/signup` and `/lab/lenient` reachable (they are unlinked; see below) and open the generated Rejects spec: it calls `expectRefused`. `/lab/signup` must pass; `/lab/lenient` must fail as accepted; `/lab/toast` fails as accepted (a toast with no `role` is not a signal, a documented limit).
+
+## Intent and refusal rule (ADR 0024)
+
+Tests, by area (browser tests need Chromium; add `--no-file-parallelism`):
+
+- Intent and saved Plans: `packages/types/tests/intent.test.ts`, `intent-types.test.ts`, `issue-type.test.ts`; `packages/core/tests/plan-intent-compat.test.ts`; `packages/wizard/tests/plan-sources-view.test.ts` (a legacy item shows as Denied).
+- Rejects and Limits planning, gating, cap: `packages/core/tests/rejects-plan.test.ts`, `rejects-gating.test.ts`, `ai-planner-limits.test.ts`, `spider-form-facts.test.ts`. Also core `expand-intents-off.test.ts`, `spider-crud.test.ts`, `crud-facts.test.ts`, `refusal-verdict.test.ts`, `refusal-run.test.ts`, `refusal-parity.test.ts`, `test-cap.test.ts`, `intent-question.test.ts`; checkers `refusal-rule.test.ts`; runner `test-cap-endpoints.test.ts`; wizard `intent-view.test.ts`, `no-banned-words.test.ts`.
+- Refusal rule and export: `packages/checkers/tests/refusal-rule.test.ts` (browser), `packages/core/tests/playwright-export.test.ts`, `refusal-parity.test.ts` (the exported helper and the checker agree), `refusal-run.test.ts`, `opening-missing.test.ts`.
+- Spider deep exploration and CRUD facts: `packages/core/tests/interactive-states.test.ts`, `crud-facts.test.ts` (browser/pure). The safety case (mutating requests aborted during the Delete probe) must fail without the guard.
+
+Fixture `/lab/*` routes (unlinked from `/`, so crawl and benchmark counts do not change): `/lab/signup` (required, email, pattern; `?mode=server` refuses with `role=alert`), `/lab/lenient` (accepts anything), `/lab/toast` (error in a `div.toast` with no role), `/lab/tabs`, `/lab/modal`, `/lab/crud`, and `/lab/stats` (JSON counts of POST, DELETE and cancelled deletes; `/lab/stats/reset` zeroes them). After a Spider crawl `/lab/stats` must show zero POSTs and zero DELETEs. Run `pnpm benchmark --sites fixture --no-ai` before release since the fixture grew.
 
 Limits of the export (also in the README of the zip):
 
@@ -108,7 +120,7 @@ Paste a row after each run.
 - A bug fix starts with a test that reproduces it.
 - Visual diff (ADR 0019): `packages/core/tests/visual-capture.test.ts` (stabilise and mask, browser), `visual-baseline-compat.test.ts` (old baselines, sidecar, evidence images; fixture app on port 3087), `html-report-visual.test.ts` (old/new/difference in the Report), `visual-redaction.test.ts`, and `packages/checkers/tests/visual-diff-finding.test.ts`. Select them with the title filter "visual" on the core package.
 
-- Sources, saved sessions and pipelined planning (ADR 0020, 0021): types `judgement-verdict`, `issue-type`; core `context-parser-multi`, `docs-fetch` (local servers), `ai-budget-pacing`, `openrouter-limits`, `preflight-session` and `role-failure-run` (browser, local login server), `ai-planner-sources`, `plan-sources-live-site`, `issues-document`, `issues-html-selfcontained`, `judgement-flow`, `mismatch-wording`, `plan-pipeline`, `group-tracker`, `pipelined-discovery` (browser), `sources-e2e` (browser); runner `sources-endpoints`, `saved-session-secrecy`, `docs-url-beta`, `ai-estimate-cap`, `issues-download`; wizard `context-files`, `session-file`, `cap-estimate`, `plan-sources-view`. Only the files marked browser need Chromium. Sentinel tests plant a fake cookie value and scan every output for it.
+- Sources, saved sessions and pipelined planning (ADR 0020, 0021): types `judgement-verdict`, `issue-type`; core `context-parser-multi`, `docs-fetch` (local servers), `ai-budget-pacing`, `openrouter-limits`, `preflight-session` and `role-failure-run` (browser, local login server), `ai-planner-sources`, `plan-sources-live-site`, `issues-document`, `issues-html-selfcontained`, `judgement-flow`, `mismatch-wording`, `plan-pipeline`, `group-tracker`, `pipelined-discovery` (browser), `sources-e2e` (browser); runner `sources-endpoints`, `saved-session-secrecy`, `docs-url-beta`, `ai-estimate-cap`, `issues-download`; wizard `context-files`, `session-file`, `cap-estimate`, `plan-sources-view`. Word and document-driven fixed-rule planning (ADR 0023): types `context-parse`; core `context-parser-structures`, `docx-to-markdown`, `spec-plan`, `spec-fixtures-sources`, `spec-fixtures-no-secrets`, `spec-plan-integration`; runner `context-docx-route`, `run-inputs-docx`, `checkup-docs`; wizard `context-read-report`, `import-roles`. Only the files marked browser need Chromium. Sentinel tests plant a fake cookie value and scan every output for it.
 
 ## Known fragile areas
 

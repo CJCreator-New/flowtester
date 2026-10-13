@@ -10,9 +10,11 @@ import type {
   SignInFailureReason,
   RunCap,
   FindingSeverity,
+  PlanIntent,
 } from '@qa/types';
 import type { StorageStateData } from '@qa/types/src/evidence-finding.js';
 import { isSignInFailureReason, signInReasonText } from '@qa/types/src/signin.js';
+import { normalizePlanIntents } from '@qa/types/src/intent.js';
 
 /**
  * Every call to the runner lives here, and every failure becomes a RunnerError whose message is a
@@ -216,6 +218,27 @@ export async function saveKey(apiKey: string): Promise<{ model: string | null }>
   throw new RunnerError(body.reason || 'The key couldn’t be saved. Try again.');
 }
 
+export interface ContextDocxResult {
+  text: string;
+  warnings: string[];
+  summary: { requirements: number; journeys: number; tables: number; rules: number };
+}
+
+/** Sends a picked Word file to the QA Tool, which converts it to Markdown. Nothing is stored. */
+export async function convertDocx(name: string, base64: string): Promise<ContextDocxResult> {
+  const res = await call('/api/runner/context/docx', { method: 'POST', body: JSON.stringify({ name, base64 }) }, 30000);
+  if (res.ok) {
+    const body = await json<Partial<ContextDocxResult>>(res);
+    return {
+      text: body.text ?? '',
+      warnings: body.warnings ?? [],
+      summary: body.summary ?? { requirements: 0, journeys: 0, tables: 0, rules: 0 },
+    };
+  }
+  const body = await json<{ error?: string; code?: string }>(res).catch(() => ({ error: undefined, code: undefined }));
+  throw new RunnerError(body.error || `“${name}” couldn’t be read. Try adding it again.`, body.code);
+}
+
 /** What the address check says about the site before anything starts. */
 export interface SiteFacts {
   /** The site as typed, e.g. "localhost:3050". */
@@ -372,6 +395,14 @@ export interface StartRunRequest {
   signInConsent?: boolean;
   /** Start testing without the plan review step. Only sent with consent. */
   skipReview?: boolean;
+  /** Most Tests the Check-up runs (the Test cap); the QA Tool's default applies when not given. */
+  testCap?: number;
+  /** Spider concurrency (1 to 5, default 2). */
+  crawlConcurrency?: number;
+  /** Per-page pacing delay in ms (0-2000, default 100ms). */
+  crawlDelayMs?: number;
+  /** Custom HTTP headers sent with every request (e.g. X-QA-Bypass-Token). */
+  customHeaders?: Record<string, string>;
 }
 
 /** Starts a check-up: the scan, then the plan waits for review. Returns the run id. */
@@ -405,6 +436,10 @@ export async function startRun(request: StartRunRequest): Promise<string> {
   if (request.replacePlan) body.replacePlan = true;
   if (request.testAgain) body.testAgain = true;
   if (request.signInConsent) body.signInConsent = true;
+  if (request.testCap) body.testCap = request.testCap;
+  if (request.crawlConcurrency) body.crawlConcurrency = request.crawlConcurrency;
+  if (request.crawlDelayMs !== undefined) body.crawlDelayMs = request.crawlDelayMs;
+  if (request.customHeaders) body.customHeaders = request.customHeaders;
 
   interface ApiErrorPayload {
     error?: string;
@@ -445,7 +480,7 @@ export async function getPlan(): Promise<ReviewPlan> {
   const res = await call('/api/runner/plan');
   if (res.status === 404) throw new RunnerError('No plan is waiting for review right now.', 'ERR_NO_PLAN');
   if (!res.ok) throw new RunnerError('Couldn’t fetch the plan. Try again.');
-  return json<ReviewPlan>(res);
+  return normalizePlanIntents(await json<ReviewPlan>(res));
 }
 
 export interface PatchPlanBody {
@@ -473,6 +508,8 @@ export interface PatchPlanBody {
   }>;
   /** "Not found in app" entries: remove one from the list. */
   notFoundEdits?: Array<{ id: string; remove?: boolean }>;
+  /** The Intents switched off (Works, Rejects, Limits, Denied); an empty list switches all on. */
+  intentsOff?: PlanIntent[];
 }
 
 /** What a small change (a switch, an answer, the sizes) changed: merged into the plan on screen. */
@@ -958,4 +995,22 @@ export function saveStoredReleaseGates(gates: ReleaseGateCriteria): void {
   try {
     localStorage.setItem(GATES_STORAGE_KEY, JSON.stringify(gates));
   } catch {}
+}
+
+export interface SpecOverridePayload {
+  runId?: string;
+  requirementId: string;
+  reason?: string;
+  status?: 'retired' | 'updated' | 'postponed';
+  newSelector?: string;
+  newUrlPath?: string;
+}
+
+export async function recordSpecOverride(payload: SpecOverridePayload): Promise<{ ok: boolean }> {
+  const res = await call('/api/runner/spec-override', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new RunnerError('Couldn’t record the spec override.');
+  return json<{ ok: boolean }>(res);
 }

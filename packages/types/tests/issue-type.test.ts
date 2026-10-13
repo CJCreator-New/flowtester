@@ -12,7 +12,7 @@ describe('issueTypeOf', () => {
     expect(issueTypeOf({ checker: 'bug-detection' })).toBe('Broken flow');
     expect(issueTypeOf({ checker: 'bug-detection', aspect: 'Accessible' })).toBe('Accessibility');
     expect(issueTypeOf({ checker: 'permission-matrix' })).toBe('Access');
-    expect(issueTypeOf({ checker: 'bug-detection', kind: 'denial' })).toBe('Access');
+    expect(issueTypeOf({ checker: 'bug-detection', intent: 'denied' })).toBe('Access');
     expect(issueTypeOf({ checker: 'security' })).toBe('Security');
     expect(issueTypeOf({ checker: 'performance' })).toBe('Performance');
     expect(issueTypeOf({ checker: 'design-standards' })).toBe('UI/UX');

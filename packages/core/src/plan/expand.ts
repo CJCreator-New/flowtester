@@ -3,10 +3,13 @@ import type {
   Breakpoint,
   DiscoveryDraft,
   PlanGradedCheck,
+  PlanIntent,
   PlanSummary,
   PlanWontRun,
   TestCase,
 } from '@qa/types';
+import { DEFAULT_TEST_CAP, INTENTS, intentOf } from '@qa/types';
+import { INTENT_ANSWERS, intentQuestionKey, safeAnswerFor } from '../discovery/questions.js';
 import { TestPlanner } from '../discovery/test-planner.js';
 import { NEEDS_TEST_COPY } from '../live-site.js';
 import { expandValidationTestCases } from '../validator-expander.js';
@@ -47,6 +50,10 @@ export const GRADED_CHECKS: PlanGradedCheck[] = [
 ];
 
 const SWITCHED_OFF = 'Switched off in the review.';
+/** Why a Rejects or Limits item is left out when the Plan has more Tests than the Test cap. */
+export const OVER_TEST_CAP = 'Over the Test cap.';
+/** Why a Rejects or Limits item is left out when the answer to its question says so. */
+export const INTENT_SWITCHED_OFF = 'Switched off by your answer.';
 /** About how long one test takes, from real check-ups: for "about N minutes". */
 const SECONDS_PER_TEST = 4;
 
@@ -70,7 +77,7 @@ export interface ExpandedPlan {
  */
 export function expandPlan(
   draft: DiscoveryDraft,
-  options: { readOnly: boolean; screenSizes: Breakpoint[]; questions?: AmbiguityQuestion[] }
+  options: { readOnly: boolean; screenSizes: Breakpoint[]; questions?: AmbiguityQuestion[]; testCap?: number }
 ): ExpandedPlan {
   const plan = draft.plan ?? { pages: [], navigation: [], layoutGroups: [], otherHosts: [] };
   const sizes = options.screenSizes;
@@ -79,6 +86,7 @@ export function expandPlan(
   const wontRun: PlanWontRun[] = [];
   const count = { page: 0, test: 0, nav: 0, link: 0 };
   const id = (prefix: string, n: number) => `${prefix}-${String(n).padStart(3, '0')}`;
+  const questionList = options.questions ?? draft.ambiguityQuestions ?? [];
 
   for (const page of plan.pages) {
     if (page.coverage === 'covered') continue;
@@ -100,7 +108,8 @@ export function expandPlan(
       });
     }
     for (const test of page.tests) {
-      const reason = test.skipped
+      const intentOff = (plan.intentsOff ?? []).some((i) => i === intentOf(test));
+      const reason = test.skipped || intentOff
         ? SWITCHED_OFF
         : test.needsHelp?.length
           ? test.needsHelp[0]
@@ -113,16 +122,33 @@ export function expandPlan(
           notRun.push({ id: test.id, flowId: 'page-test', name: test.name, role: test.role, reason });
         continue;
       }
+      // Rejects and Limits that press a Safety Filter control follow the answer to their question.
+      let steps = [...(test.openingSteps ?? []).map((s) => ({ ...s, opening: true })), ...test.steps.map((s) => ({ ...s }))];
+      let expectations = test.expectations ?? {};
+      const submit = test.expectations?.refusal?.submitSelector;
+      const asked = submit ? questionList.find((q) => q.key === intentQuestionKey(page.urlPath, submit)) : undefined;
+      if (asked && (test.intent === 'rejects' || test.intent === 'limits')) {
+        const answer = asked.selectedAnswer ?? safeAnswerFor(asked);
+        if (answer === INTENT_ANSWERS.off) {
+          wontRun.push({ itemId: test.id, what: `${page.urlPath}: ${test.name}`, reason: INTENT_SWITCHED_OFF });
+          continue;
+        }
+        if (answer === INTENT_ANSWERS.probe) {
+          steps = steps.filter((s) => !(s.action === 'click' && s.selector === submit));
+          expectations = { ...expectations, refusal: { ...expectations.refusal!, probeOnly: true } };
+        }
+      }
       testCases.push({
         id: id('TEST', ++count.test),
         kind: 'page-test',
+        ...(intentOf(test) ? { intent: intentOf(test) } : {}),
         planItemId: test.id,
         flowId: 'page-test',
         name: test.name,
         role: test.role,
         startPage: page.urlPath,
-        steps: test.steps.map((s) => ({ ...s })),
-        expectations: test.expectations ?? {},
+        steps,
+        expectations,
         ...(test.docSource ? { docSource: test.docSource } : {}),
         ...(test.docSeverity ? { docSeverity: test.docSeverity } : {}),
         ...(test.docStale ? { docStale: true } : {}),
@@ -190,10 +216,20 @@ export function expandPlan(
 
   // A journey's validation rules become tests of their own here, as the orchestrator would make them,
   // so the plan counts and lists them too.
+  const flowIntents = new Map(draft.flows.filter((f) => f.intent).map((f) => [f.id, f.intent]));
+  const flowSources = new Map(draft.flows.filter((f) => f.docSource).map((f) => [f.id, f.docSource]));
   const journeys = expandValidationTestCases(
     new TestPlanner()
       .plan(draft, { readOnly: options.readOnly })
-      .testCases.map((tc): TestCase => ({ ...tc, kind: 'journey', planItemId: `journey:${tc.flowId}` }))
+      .testCases.map(
+        (tc): TestCase => ({
+          ...tc,
+          kind: 'journey',
+          ...(flowIntents.get(tc.flowId) ? { intent: flowIntents.get(tc.flowId) } : {}),
+          planItemId: `journey:${tc.flowId}`,
+          ...(flowSources.get(tc.flowId) ? { docSource: flowSources.get(tc.flowId) } : {}),
+        })
+      )
   );
   testCases.push(...journeys);
   const ranJourneys = new Set(journeys.map((tc) => tc.flowId));
@@ -214,7 +250,35 @@ export function expandPlan(
     wontRun.push({ what: `Page ${path}`, reason: 'It’s behind a sign-in no role could get past.' });
   }
 
-  return { testCases, notRun, wontRun, summary: summarize(draft, testCases, wontRun, sizes, options.questions) };
+  // The Test cap: only Rejects and Limits are dropped, the last planned first. Works, Denied, pages
+  // and Navigation Checks always stay.
+  const cap =
+    options.testCap !== undefined && Number.isFinite(options.testCap) && options.testCap >= 1
+      ? Math.floor(options.testCap)
+      : DEFAULT_TEST_CAP;
+  let total = testCases.reduce((n, tc) => n + testsOf(tc, sizes), 0);
+  let overCap = 0;
+  for (let i = testCases.length - 1; i >= 0 && total > cap; i--) {
+    const tc = testCases[i];
+    if (tc.kind !== 'page-test' || (tc.intent !== 'rejects' && tc.intent !== 'limits')) continue;
+    const weight = testsOf(tc, sizes);
+    testCases.splice(i, 1);
+    total -= weight;
+    overCap += weight;
+    wontRun.push({ itemId: tc.planItemId, what: `${tc.startPage}: ${tc.name}`, reason: OVER_TEST_CAP });
+  }
+
+  return {
+    testCases,
+    notRun,
+    wontRun,
+    summary: summarize(draft, testCases, wontRun, sizes, options.questions, overCap),
+  };
+}
+
+/** Tests one test case counts for: its screen sizes. */
+function testsOf(tc: TestCase, sizes: Breakpoint[]): number {
+  return tc.breakpoints ? tc.breakpoints.filter((b) => sizes.includes(b)).length : sizes.length;
 }
 
 function summarize(
@@ -222,13 +286,25 @@ function summarize(
   testCases: TestCase[],
   wontRun: PlanWontRun[],
   sizes: Breakpoint[],
-  questions: AmbiguityQuestion[] = draft.ambiguityQuestions
+  questions: AmbiguityQuestion[] = draft.ambiguityQuestions,
+  overCap = 0
 ): PlanSummary {
   const plan = draft.plan ?? { pages: [], navigation: [], layoutGroups: [], otherHosts: [] };
-  const tests = testCases.reduce(
-    (n, tc) => n + (tc.breakpoints ? tc.breakpoints.filter((b) => sizes.includes(b)).length : sizes.length),
-    0
-  );
+  const tests = testCases.reduce((n, tc) => n + testsOf(tc, sizes), 0);
+  const intents = Object.fromEntries(INTENTS.map((i) => [i, { items: 0, tests: 0 }])) as Record<
+    PlanIntent,
+    { items: number; tests: number }
+  >;
+  const itemsSeen = new Map<PlanIntent, Set<string>>();
+  for (const tc of testCases) {
+    const intent = tc.intent ?? (tc.kind === 'page-test' || tc.kind === 'journey' ? 'works' : undefined);
+    if (!intent) continue;
+    intents[intent].tests += testsOf(tc, sizes);
+    const seen = itemsSeen.get(intent) ?? new Set<string>();
+    seen.add(tc.planItemId ?? tc.id);
+    itemsSeen.set(intent, seen);
+    intents[intent].items = seen.size;
+  }
   const visited = new Set(testCases.filter((tc) => tc.kind === 'page').map((tc) => tc.startPage));
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const lines: PlanSummary['lines'] = [
@@ -262,6 +338,12 @@ function summarize(
       itemIds: unanswered.map((q) => q.id),
     });
   }
+  if (overCap > 0) {
+    lines.push({
+      text: `${plural(overCap, 'Test is', 'Tests are')} over the Test cap and switched off`,
+      itemIds: wontRun.filter((w) => w.reason === OVER_TEST_CAP).flatMap((w) => (w.itemId ? [w.itemId] : [])),
+    });
+  }
   if (wontRun.length > 0) {
     lines.push({
       text: `${plural(wontRun.length, 'item', 'items')} won’t run`,
@@ -275,5 +357,7 @@ function summarize(
     screenSizes: sizes,
     lines,
     minutes: Math.max(1, Math.round((tests * SECONDS_PER_TEST) / 60)),
+    intents,
+    ...(overCap > 0 ? { overCap } : {}),
   };
 }

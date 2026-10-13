@@ -14,6 +14,12 @@ import { stepQuestion } from '../discovery/questions.js';
 import type { SpiderResult } from '../discovery/deterministic-spider.js';
 import { BudgetSpentError, StoppedEarlyError } from './ai-budget.js';
 import { fallbackReasonOf, parseJsonAnswer, PLANNING_MAX_TOKENS } from './ai-planner.js';
+import type { ParsedRequirementHint } from '../discovery/context-parser.js';
+import { docSourceOf } from './sources.js';
+
+/** Documented User Flows shown to the AI, and the room each gets. */
+const DOCUMENTED_FLOWS = 12;
+const DOCUMENTED_FLOW_CHARS = 600;
 
 /** Long product notes are cut short: the journeys need the gist, and every token counts on a free model. */
 const CONTEXT_CHARS = 4000;
@@ -37,6 +43,8 @@ export interface JourneyPlannerInput {
   redact: (text: string) => string;
   /** What the person asked for when re-planning, e.g. "include the refund journey". */
   instructions?: string;
+  /** Parsed Product Context units: the documented User Flows among them are shown to the AI. */
+  requirements?: ParsedRequirementHint[];
 }
 
 export interface JourneyPlannerOutput {
@@ -120,6 +128,21 @@ export async function planJourneys(
     byShape.set(shape, entry);
     formsForPrompt.push(entry);
   }
+  const documentedFlows = (input.requirements ?? []).filter((r) => r.kind === 'journey').slice(0, DOCUMENTED_FLOWS);
+  const documentedBlock =
+    documentedFlows.length > 0
+      ? [
+          '',
+          'Documented User Flows (plan one flow for each when the pages allow it, and add "requirementId": "<its id>" to that flow):',
+          ...documentedFlows.map((r) =>
+            JSON.stringify({ id: r.id, name: r.name, persona: r.persona, steps: r.steps, assert: r.assert }).slice(
+              0,
+              DOCUMENTED_FLOW_CHARS
+            )
+          ),
+          '',
+        ].join('\n')
+      : '';
   const promptMessage: AIMessage = {
     role: 'user',
     content: input.redact(`
@@ -128,7 +151,7 @@ Target Application: ${input.targetUrl} (a ${siteType} site)
 
 Product Context:
 ${productContextFor(input.productContext)}
-${input.instructions ? `\nThe owner asks: ${input.instructions}\n` : ''}
+${input.instructions ? `\nThe owner asks: ${input.instructions}\n` : ''}${documentedBlock}
 Discovered Pages and the interactive elements on each (nothing else exists):
 ${input.promptPages.map((p) => PlanValidator.describePageForPrompt(p)).join('\n\n')}
 
@@ -144,13 +167,14 @@ Rules:
 - Only give expected text or error messages that appear in the Product Context or on a listed page. If you don't know the exact wording, leave it out.
 
 Generate a JSON object with:
-1. "flows": the journeys a person takes across pages to get something done, as an array of 3 to 8 DiscoveredFlow items (each page's own buttons and links are planned separately, so focus on multi-step journeys). Each flow MUST have:
+1. "flows": the journeys a person takes across pages to get something done, as an array of ${documentedFlows.length > 0 ? `3 to ${Math.max(8, documentedFlows.length)}` : '3 to 8'} DiscoveredFlow items (each page's own buttons and links are planned separately, so focus on multi-step journeys). Each flow MUST have:
    - "id": e.g. "FLOW-001"
    - "name": flow name
    - "role": assigned role
    - "description": a one-line reason why this journey was chosen
    - "startPage": starting URL path
    - "steps": array of { action: "click"|"fill"|"navigate"|"wait", selector?: string, value?: string, name: string }
+   - "requirementId": only for a documented User Flow: its id from the list above
    - "inferredRules": list of validation or business constraints
    - "candidateExpectations": { url?: { pattern: string }, text?: { contains: string } }
    - "candidateValidationRules": [ { field: string, selector?: string, min?: number, max?: number, expectedError: string } ]
@@ -297,6 +321,13 @@ Respond with ONLY the JSON object.
         .trim();
       return wording.length >= 3 && context.includes(wording);
     };
+    // A flow the AI wrote for a documented User Flow keeps that Source; an id the documents don't have is dropped.
+    for (const flow of flows as Array<DiscoveredFlow & { requirementId?: unknown }>) {
+      const reqId = typeof flow.requirementId === 'string' ? flow.requirementId : undefined;
+      delete flow.requirementId;
+      const req = reqId ? input.requirements?.find((r) => r.id === reqId) : undefined;
+      if (req && !flow.docSource) flow.docSource = docSourceOf(req);
+    }
     for (const flow of flows) {
       if (!flow.description || flow.description.trim() === '')
         flow.description = `Primary ${siteType} journey: ${flow.name}`;

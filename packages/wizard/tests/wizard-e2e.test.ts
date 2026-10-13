@@ -418,6 +418,22 @@ describe('Release check-up end to end, on the one server', () => {
     // On a phone the approval bar is one line with a short button.
     await checkPhone('/check/plan', 'plan', { role: 'button', name: 'Approve' });
 
+    // Intents: chips filter the plan view; a switch turns a whole Intent off and the plan remembers it.
+    const chips = page.getByTestId('intent-chips');
+    await chips.waitFor({ timeout: 15000 });
+    const firstChip = chips.getByRole('button').first();
+    await firstChip.click();
+    expect(await firstChip.getAttribute('aria-pressed')).toBe('true');
+    await firstChip.click();
+    expect(await firstChip.getAttribute('aria-pressed')).toBe('false');
+    const intentSwitch = page.getByTestId('intent-switch-works');
+    await intentSwitch.waitFor();
+    await intentSwitch.uncheck();
+    await expect.poll(async () => (await api<ReviewPlan>('/api/runner/plan')).intentsOff ?? []).toContain('works');
+    await expect.poll(() => intentSwitch.isChecked()).toBe(false);
+    await intentSwitch.check();
+    await expect.poll(async () => (await api<ReviewPlan>('/api/runner/plan')).intentsOff ?? []).not.toContain('works');
+
     // Leaving the plan keeps it waiting, and the new check-up screen offers it again.
     await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'New check-up' }).click();
     await page.waitForURL(`${toolUrl}/check`);

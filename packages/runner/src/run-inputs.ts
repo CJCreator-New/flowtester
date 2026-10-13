@@ -1,5 +1,6 @@
 import { isSupportedContextName } from '@qa/core';
-import type { RunCap, StorageStateData } from '@qa/types';
+import { INTENTS } from '@qa/types';
+import type { PlanIntent, RunCap, StorageStateData } from '@qa/types';
 
 /** Most Product Context documents one Check-up takes, and the largest one. */
 export const MAX_CONTEXT_DOCUMENTS = 10;
@@ -19,7 +20,11 @@ const bad = (code: string, error: string): { ok: false; problem: InputProblem } 
   problem: { code, error },
 });
 
-/** The Product Context documents of a run: at most 10, each under 500 KB, .md/.txt only. */
+/**
+ * The Product Context documents of a run: at most 10, each under 500 KB, .md/.txt/.docx by name.
+ * A .docx arrives here already converted to Markdown text (POST /api/runner/context/docx), so the
+ * 500 KB limit applies to that text, not to the Word file. PDF and .doc are refused.
+ */
 export function checkContextDocuments(input: unknown): Checked<Array<{ name: string; text: string }> | undefined> {
   if (input === undefined || input === null) return { ok: true, value: undefined };
   if (!Array.isArray(input)) return bad('ERR_INVALID_CONTEXT', 'contextDocuments must be a list of { name, text }.');
@@ -75,6 +80,27 @@ export function checkAiCap(input: unknown): Checked<RunCap | undefined> {
     out.dollars = cap.dollars;
   }
   return { ok: true, value: out.requests !== undefined || out.dollars !== undefined ? out : undefined };
+}
+
+/** Most Tests the Plan runs before Rejects and Limits are trimmed: a positive whole number, 1 to 100000. Anything else uses the default. */
+export const MAX_TEST_CAP = 100000;
+export function checkTestCap(input: unknown): number | undefined {
+  const n = typeof input === 'string' && input.trim() !== '' ? Number(input) : input;
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 1) return undefined;
+  return Math.min(Math.floor(n), MAX_TEST_CAP);
+}
+
+/** The Intents a person switched off: known names only, none repeated. Anything else is refused. */
+export function checkIntentsOff(input: unknown): Checked<PlanIntent[]> {
+  if (!Array.isArray(input)) return bad('ERR_INVALID_INTENTS', 'intentsOff must be a list of Intents.');
+  const out: PlanIntent[] = [];
+  for (const i of input) {
+    if (typeof i !== 'string' || !(INTENTS as readonly string[]).includes(i)) {
+      return bad('ERR_INVALID_INTENTS', 'An Intent must be works, rejects, limits or denied.');
+    }
+    if (!out.includes(i as PlanIntent)) out.push(i as PlanIntent);
+  }
+  return { ok: true, value: out };
 }
 
 function hostMatches(domain: string, host: string): boolean {
@@ -143,6 +169,59 @@ export function checkSavedSessions(
       }
     }
     out[role] = { cookies: s.cookies, origins: s.origins };
+  }
+  return { ok: true, value: Object.keys(out).length > 0 ? out : undefined };
+}
+
+/** Spider concurrency: 1 to 5 concurrent page evaluations (default 2 per FR-1.7). */
+export function checkCrawlConcurrency(input: unknown): number | undefined {
+  const n = typeof input === 'string' && input.trim() !== '' ? Number(input) : input;
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 1) return undefined;
+  return Math.max(1, Math.min(5, Math.floor(n)));
+}
+
+/** Per-page pacing delay in ms: 0 to 2000 ms (default 100ms per FR-1.7). */
+export function checkCrawlDelayMs(input: unknown): number | undefined {
+  const n = typeof input === 'string' && input.trim() !== '' ? Number(input) : input;
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return undefined;
+  return Math.max(0, Math.min(2000, Math.floor(n)));
+}
+
+/**
+ * Custom headers to bypass bots/Cloudflare or pass test auth tokens (e.g. X-QA-Bypass-Token).
+ * Input may be Record<string, string> or raw strings "Header: Value\nOther: Val".
+ */
+export function checkCustomHeaders(input: unknown): Checked<Record<string, string> | undefined> {
+  if (input === undefined || input === null || input === '') return { ok: true, value: undefined };
+  const out: Record<string, string> = {};
+
+  if (typeof input === 'string') {
+    const lines = input.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      const idx = line.indexOf(':');
+      if (idx <= 0) {
+        return bad('ERR_INVALID_HEADERS', `Invalid header line "${line}". Expected "Header-Name: value".`);
+      }
+      const key = line.slice(0, idx).trim();
+      const val = line.slice(idx + 1).trim();
+      if (!key) return bad('ERR_INVALID_HEADERS', 'Header name cannot be empty.');
+      out[key] = val;
+    }
+    return { ok: true, value: Object.keys(out).length > 0 ? out : undefined };
+  }
+
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    return bad('ERR_INVALID_HEADERS', 'customHeaders must be a key-value object of strings.');
+  }
+
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof k !== 'string' || !k.trim()) {
+      return bad('ERR_INVALID_HEADERS', 'Header names must be non-empty strings.');
+    }
+    if (typeof v !== 'string') {
+      return bad('ERR_INVALID_HEADERS', `Header "${k}" must have a string value.`);
+    }
+    out[k.trim()] = v;
   }
   return { ok: true, value: Object.keys(out).length > 0 ? out : undefined };
 }

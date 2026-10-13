@@ -10,6 +10,7 @@ import type {
   ReleaseReport,
   TestCaseExpectations,
 } from '@qa/types';
+import { normalizeTestIntents } from '@qa/types';
 import { PlanValidator } from './discovery/plan-validator.js';
 
 /**
@@ -116,12 +117,21 @@ export function emptySiteMemory(host: string): SiteMemory {
   };
 }
 
+/** Remembered tests saved before Intent carry the old Denial kind; read them as `intent: 'denied'`. */
+export function normalizeMemoryIntents(memory: SiteMemory): SiteMemory {
+  if (!memory.plan?.pages) return memory;
+  const pages = Object.fromEntries(
+    Object.entries(memory.plan.pages).map(([k, v]) => [k, { ...v, tests: normalizeTestIntents(v.tests ?? []) }])
+  );
+  return { ...memory, plan: { ...memory.plan, pages } };
+}
+
 export async function loadSiteMemory(dataDir: string, host: string): Promise<SiteMemory | null> {
   try {
-    return {
+    return normalizeMemoryIntents({
       ...emptySiteMemory(host),
       ...(JSON.parse(await fs.readFile(memoryFile(dataDir, host), 'utf8')) as SiteMemory),
-    };
+    });
   } catch {
     return null;
   }

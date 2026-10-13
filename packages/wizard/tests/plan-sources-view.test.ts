@@ -3,6 +3,7 @@ import type { Finding, PlanNotFound } from '@qa/types';
 import {
   confirmRolesEdit,
   docSourceLabel,
+  isDenial,
   documentedLine,
   notFoundByDocument,
   originLabel,
@@ -26,6 +27,12 @@ const nf = (id: string, document: string, skipped = false): PlanNotFound => ({
 });
 
 describe('plan Source view helpers', () => {
+  it('a legacy Plan item shows as Denied', () => {
+    expect(isDenial({ kind: 'denial' } as never)).toBe(true);
+    expect(isDenial({ intent: 'denied' })).toBe(true);
+    expect(isDenial({ intent: 'works' })).toBe(false);
+    expect(isDenial({})).toBe(false);
+  });
   it('labels a Source with its document and section', () => {
     expect(docSourceLabel({ document: 'guide.md', section: 'Users > Create' })).toBe(
       'guide.md, section Users > Create'

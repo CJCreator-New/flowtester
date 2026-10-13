@@ -50,6 +50,14 @@ export interface CheckupForm {
   capRequests: string;
   /** Optional cap on dollars, as typed (only offered when the provider reports a price). */
   capDollars: string;
+  /** Optional Test cap, as typed (blank: the default). */
+  testCap: string;
+  /** Crawl concurrency (1 to 5, default 2). */
+  crawlConcurrency: number;
+  /** Per-page pacing delay in ms (0-2000, default 100ms). */
+  crawlDelayMs: number;
+  /** Custom headers string e.g. "X-QA-Bypass-Token: secret". */
+  customHeaders: string;
 }
 
 export interface SavedSessionEntry {
@@ -115,7 +123,26 @@ export const EMPTY_FORM: CheckupForm = {
   savedSessions: [],
   capRequests: '',
   capDollars: '',
+  testCap: '',
+  crawlConcurrency: 2,
+  crawlDelayMs: 100,
+  customHeaders: '',
 };
+
+/** Parses multi-line "Header: Value" text into a Record<string, string>. */
+export function parseCustomHeaders(headersText: string): Record<string, string> | undefined {
+  if (!headersText || !headersText.trim()) return undefined;
+  const out: Record<string, string> = {};
+  for (const line of headersText.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const idx = trimmed.indexOf(':');
+    if (idx > 0) {
+      out[trimmed.slice(0, idx).trim()] = trimmed.slice(idx + 1).trim();
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 /** The Product Context files as the run body takes them; undefined when none were added. */
 export function contextDocumentsOf(form: Pick<CheckupForm, 'contextFiles'>) {
@@ -141,6 +168,14 @@ export function savedSessionsOf(form: Pick<CheckupForm, 'savedSessions'>): Recor
 /** The cap the person typed, or undefined. */
 export function capOf(form: Pick<CheckupForm, 'capRequests' | 'capDollars'>): RunCap | undefined {
   return capFromInputs(form.capRequests, form.capDollars);
+}
+
+/** The Test cap as typed: a whole number from 1 to 100000, or nothing (the default applies). */
+export function testCapOf(form: Pick<CheckupForm, 'testCap'>): number | undefined {
+  const typed = form.testCap.trim();
+  if (typed === '') return undefined;
+  const n = Math.floor(Number(typed));
+  return Number.isFinite(n) && n >= 1 ? Math.min(100000, n) : undefined;
 }
 
 /** The sign-ins filled in, as the runner takes them: a role name is made up when none was given. */

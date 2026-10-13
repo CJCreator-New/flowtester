@@ -186,7 +186,7 @@ export class PreFlightChecker {
       let scope = await pickScope(live);
       let hasField = (await findField(scope, anyField)) !== null;
 
-      if (!hasField) {
+      if (!hasField && !credential.usernameSelector) {
         // Some sites keep the form behind a "Sign in" button.
         const opener = await firstVisible(
           live.getByRole('button', { name: OPENER_NAME }).or(live.getByRole('link', { name: OPENER_NAME }))
@@ -202,7 +202,7 @@ export class PreFlightChecker {
           hasField = (await findField(scope, anyField)) !== null;
         }
       }
-      if (!hasField) {
+      if (!hasField && !credential.usernameSelector) {
         if (await needsMore()) return { ok: false, reason: 'needs-more' };
         const sso =
           (await anyVisible(live.getByRole('button', { name: SSO_NAME }))) ||
@@ -211,10 +211,14 @@ export class PreFlightChecker {
       }
       if (await needsMore()) return { ok: false, reason: 'needs-more' };
 
-      const username = await findField(scope, USERNAME_SELECTOR);
+      const username = credential.usernameSelector
+        ? await firstVisible(live.locator(credential.usernameSelector))
+        : await findField(scope, USERNAME_SELECTOR);
       if (username && credential.username) await username.fill(credential.username);
 
-      let password = await findField(scope, PASSWORD_SELECTOR);
+      let password = credential.passwordSelector
+        ? await firstVisible(live.locator(credential.passwordSelector))
+        : await findField(scope, PASSWORD_SELECTOR);
       if (!password) {
         // Two-step sign-in: the password comes after the username.
         const next =
@@ -227,7 +231,9 @@ export class PreFlightChecker {
           .first()
           .waitFor({ state: 'visible', timeout: 6000 })
           .catch(() => {});
-        password = await findField(scope, PASSWORD_SELECTOR);
+        password = credential.passwordSelector
+          ? await firstVisible(live.locator(credential.passwordSelector))
+          : await findField(scope, PASSWORD_SELECTOR);
         if (!password) {
           if (await needsMore()) return { ok: false, reason: 'needs-more' };
           if (navigationFailed) return { ok: false, reason: 'unreachable' };
@@ -237,7 +243,9 @@ export class PreFlightChecker {
       }
       if (credential.password) await password.fill(credential.password);
 
-      const submit = await firstVisible(scope.locator(SUBMIT_SELECTOR));
+      const submit = credential.submitSelector
+        ? await firstVisible(live.locator(credential.submitSelector))
+        : await firstVisible(scope.locator(SUBMIT_SELECTOR));
       if (!submit) return { ok: false, reason: 'no-form' };
       const urlBefore = live.url();
       const settled = Promise.race([

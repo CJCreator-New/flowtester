@@ -34,6 +34,7 @@ import {
   EMPTY_FORM,
   addressFromSearch,
   capOf,
+  testCapOf,
   afterStart,
   consentRequestOf,
   contextDocumentsOf,
@@ -42,6 +43,7 @@ import {
   rolesOf,
   SIGN_IN_AGAIN_TEXT,
   savedSessionsOf,
+  parseCustomHeaders,
   type CheckupForm,
 } from './lib/form';
 import { isCheckRoute, matchRoute, navigate, PATHS, usePathname, type Route } from './lib/router';
@@ -432,6 +434,10 @@ export default function App() {
       contextUrl: contextUrlOf(form),
       savedSessions: savedSessionsOf(form),
       aiCap: capOf(form),
+      testCap: testCapOf(form),
+      crawlConcurrency: form.crawlConcurrency !== 2 ? form.crawlConcurrency : undefined,
+      crawlDelayMs: form.crawlDelayMs !== 100 ? form.crawlDelayMs : undefined,
+      customHeaders: parseCustomHeaders(form.customHeaders),
     }).then((started) => {
       // Saved sessions are sent once and dropped from the screen once the check-up has started; they are never kept.
       // If the start failed they stay, so the person does not have to choose the file again.

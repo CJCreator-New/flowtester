@@ -37,11 +37,11 @@ A functional constraint (validation, permission limit, calculation, state precon
 _Avoid_: Requirement, spec rule (when unconfirmed)
 
 **Product Context**:
-External reference material (PRDs, user stories, design documents) provided by QA or product managers to guide AI discovery.
+External reference material (PRDs, user stories, design documents) provided by QA or product managers to guide discovery and planning. Markdown, text or Word (.docx) files, or a docs URL. With no AI key, fixed rules turn it into Plan Items (User Flows, route access, Denial items), each with its Source; expectations they cannot check go under Needs your judgement.
 _Avoid_: Spec, documentation, requirements doc
 
 **Requirement**:
-A verified functional or non-functional capability that the application must fulfill, sourced from Product Context or confirmed during review.
+A functional or non-functional capability that the Product Context states the application must fulfill, or that the person confirmed during review. Whether the Spider reached it is an outcome the report counts ("N of M documented items reached"), not part of what a Requirement is.
 _Avoid_: Feature request, acceptance criteria
 
 **Source**:
@@ -71,6 +71,22 @@ _Avoid_: Test (for the unexpanded entry), step
 **Denial Plan Item**:
 A Plan Item that checks a role is blocked from something its Source describes for another role, such as a Viewer being unable to create a user. It passes when the action is hidden or refused.
 _Avoid_: Negative test, permission test
+
+**Intent**:
+What a journey or form Plan Item expects to happen: **Works** (valid input succeeds), **Rejects** (bad or missing input shows an error), **Limits** (extreme values such as very long text, zero or negative numbers are handled) or **Denied** (the role is blocked, which is a Denial Plan Item). Page visits and Navigation Checks have no Intent.
+_Avoid_: Category, positive/negative test, happy path, scenario type
+
+**Refusal rule**:
+How a Rejects item passes or fails, the same in the Check-up and in the Playwright export (`expectRefused`). It passes when the page did not move on (no success redirect, no new record) and something signalled refusal: the browser's invalid state, `aria-invalid`, `role="alert"`, or new visible error text. It fails if the app accepted the input, or crashed. The exact message is compared only when the Source states it. No AI judges it.
+_Avoid_: Validation check, negative test
+
+**Opening steps**:
+The recorded clicks that reach a form inside a modal, drawer, tab or accordion. They sit on the Plan Item, show in Plan Review and run before the form steps. If the opener is gone at run time the result is "Could not verify" (could not reach it), not a form failure.
+_Avoid_: Setup steps, precondition
+
+**Test cap**:
+The most Tests one Check-up may run, 2000 unless the person sets another number. Plan Items past it stay in the Plan, switched off with the reason "over the Test cap", and the approval summary says how many. It counts Tests, not AI requests.
+_Avoid_: Limit, quota, AI Request Budget (that one counts AI requests)
 
 **Not found in app**:
 A Plan Item whose Source describes something the Spider could not find in the app as that role. It does not run, is not a failure, and counts only in the report's "N of M documented items reached". The person removes it, fixes the document, or points to the page.

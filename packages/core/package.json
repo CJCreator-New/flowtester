@@ -13,6 +13,7 @@
     "@napi-rs/keyring": "^2.1.0",
     "@qa/checkers": "workspace:*",
     "@qa/types": "workspace:*",
+    "mammoth": "1.12.3",
     "playwright": "^1.49.1",
     "pngjs": "^7.0.0",
     "yaml": "^2.7.0"

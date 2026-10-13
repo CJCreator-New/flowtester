@@ -3,7 +3,7 @@ import type { StepEvidence, Finding, RoleNotTested } from './evidence-finding.js
 import type { MarketingReview, SiteAspectGrades, RankedRecommendation, SiteHistoryDiff, SlowerThanLastTime, SiteMapSummary, VisitedPage } from './aspects.js';
 import type { AIStage } from './ai.js';
 import type { RetryTelemetryEntry } from './hub.js';
-import type { AIStageUsage, DocSource } from './plan.js';
+import type { AIStageUsage, DocSource, SpecGapCode } from './plan.js';
 
 export interface TestPointResult {
   testCaseId: string;
@@ -77,7 +77,11 @@ export interface ReleaseReport {
   /** Roles that could not sign in, and why. They were not tested. */
   rolesNotTested?: RoleNotTested[];
   /** Documented items reached, of all documented, and the ones not found in the app. */
-  documentedItems?: { reached: number; total: number; notFound: Array<{ docSource: DocSource; reason: string }> };
+  documentedItems?: {
+    reached: number;
+    total: number;
+    notFound: Array<{ docSource: DocSource; reason: string; code?: SpecGapCode; override?: boolean }>;
+  };
   /** Pages found while exploring, how many were reached, and why the rest were skipped. */
   pageCoverage?: {
     found: number;

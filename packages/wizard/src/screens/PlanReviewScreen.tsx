@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { Breakpoint, ReviewPlan, RoleCredential } from '@qa/types';
+import type { Breakpoint, PlanIntent, ReviewPlan, RoleCredential } from '@qa/types';
+import { withIntentSwitched } from '../lib/intent-view';
 import { SiteMap } from '../components/SiteMap';
 import { FocusHeading, Notice, Spinner } from '../components/text';
 import { count } from '../lib/format';
@@ -115,6 +116,9 @@ export function PlanReviewScreen({
   const [switched, setSwitched] = useState<Record<string, boolean>>({});
   const [sizes, setSizes] = useState<Breakpoint[] | null>(null);
   const [barOpen, setBarOpen] = useState(false);
+  // The Intents switched off: the Plan's own list, shown at once while a change is saved.
+  const [sentOff, setSentOff] = useState<PlanIntent[] | null>(null);
+  const intentsOff = sentOff ?? plan.intentsOff ?? [];
   const shown = useMemo(() => withChanges(plan, switched, sizes), [plan, switched, sizes]);
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   // The plan a change is applied to: always the newest one, even when changes come back out of order.
@@ -263,6 +267,12 @@ export function PlanReviewScreen({
       }
     },
     quickCheck: () => void edit(() => patchPlan({ preset: 'quick' })),
+    intentsOff,
+    setIntentOff: (intent, off) => {
+      const next = withIntentSwitched(intentsOff, intent, off);
+      setSentOff(next);
+      void edit(() => patchPlan({ intentsOff: next })).finally(() => setSentOff(null));
+    },
     editSource: (edits) => void edit(() => patchPlan({ sourceEdits: edits })),
     editNotFound: (edits) => void edit(() => patchPlan({ notFoundEdits: edits })),
   };

@@ -1,4 +1,4 @@
-import type { DocSource } from './plan.js';
+import type { DocSource, PlanIntent } from './plan.js';
 
 export type FindingSeverity ='Blocker' | 'Major' | 'Minor' | 'Suggestion';
 
@@ -32,14 +32,17 @@ export interface TestCaseStep {
   optional?: boolean;
   /** Only done at these screen sizes, e.g. opening the menu that narrow screens hide their links behind. */
   onlyAt?: Breakpoint[];
+  /** Opens the control the test needs (a tab, drawer or dialog). If it fails the test is "Could not verify", not Failed. */
+  opening?: boolean;
 }
 
 /**
  * Where an expectation or rule came from. Only 'observed' and 'user' ones can fail a site; an
  * 'ai-guess' that doesn't match is reported as "Could not verify" until someone confirms it.
- * Absent means 'user' (hand-written spec files).
+ * Absent means 'user' (hand-written spec files). 'document' marks a rule read from a Product Context
+ * document that no check can judge: it is listed under "Needs your judgement", never pass or fail.
  */
-export type RuleOrigin = 'observed' | 'ai-guess' | 'user';
+export type RuleOrigin = 'observed' | 'ai-guess' | 'user' | 'document';
 
 export interface TestCaseExpectations {
   origin?: RuleOrigin;
@@ -47,6 +50,17 @@ export interface TestCaseExpectations {
    * Behaviour check for a guessed validation rule: after the steps, an error message or an
    * invalid-field marker should appear. The exact wording isn't checked.
    */
+  /**
+   * Refusal rule (ADR 0024): after the steps the app must have refused the input. `message` is set
+   * only when a Source states the wording.
+   */
+  refusal?: {
+    formPath: string;
+    submitSelector?: string;
+    message?: string;
+    /** Look only at the form's own checks; never click submit. */
+    probeOnly?: boolean;
+  };
   validationError?: {
     field: string;
     selector?: string;
@@ -55,6 +69,8 @@ export interface TestCaseExpectations {
   url?: {
     pattern: string;
     description?: string;
+    /** Passes when the final address does NOT match the pattern (a Denial Plan Item for a route). */
+    negate?: boolean;
   };
   text?: {
     contains?: string;
@@ -112,6 +128,8 @@ export interface TestCase {
    * landed; a link check only its own result. Absent means all of them, as for hand-written specs.
    */
   kind?: 'page' | 'page-test' | 'navigation' | 'link' | 'journey';
+  /** What the Plan Item checks (ADR 0024). Distinct from `kind`. */
+  intent?: PlanIntent;
   /** Only run at these screen sizes. Absent means every size the run uses. */
   breakpoints?: Breakpoint[];
   /** The Plan Item this test runs, so a report can be matched back to the plan. */

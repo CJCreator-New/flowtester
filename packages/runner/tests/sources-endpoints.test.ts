@@ -59,7 +59,7 @@ describe('Sources on the run route', () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string; code: string };
     expect(body.code).toBe('ERR_INVALID_CONTEXT');
-    expect(body.error).toContain('PDF and Word files are not supported yet');
+    expect(body.error).toContain('PDF and old .doc files are not supported');
   });
 
   it('refuses more than 10 documents and a document over 500 KB', async () => {

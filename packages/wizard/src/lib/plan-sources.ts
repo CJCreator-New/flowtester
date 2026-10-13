@@ -1,5 +1,6 @@
 import type { DocSource, FindingSeverity, PlanNotFound, PlanPageTest, ReviewPlan } from '@qa/types';
 import type { PatchPlanBody } from '../api.js';
+import { intentOf } from '@qa/types/src/intent.js';
 
 type SourceEdit = NonNullable<PatchPlanBody['sourceEdits']>[number];
 
@@ -20,8 +21,8 @@ export function rolesToConfirm(plan: Pick<ReviewPlan, 'planPages'>): number {
   return sourcedTests(plan).filter(({ test }) => !!test.proposedRoles?.length && !test.rolesConfirmed).length;
 }
 
-export function isDenial(test: Pick<PlanPageTest, 'kind'>): boolean {
-  return test.kind === 'denial';
+export function isDenial(test: Parameters<typeof intentOf>[0]): boolean {
+  return intentOf(test) === 'denied';
 }
 
 /** Whether the item was planned during the scan or added once it ended; nothing for older plans. */
@@ -76,10 +77,10 @@ export function notFoundByDocument(
   return [...groups].map(([document, items]) => ({ document, items }));
 }
 
-/** "4 of 6 documented items reached", or null when no document was added. */
+/** "4 of 6 documented requirements reached in live app", or null when no document was added. */
 export function documentedLine(documented: { reached: number; total: number } | undefined): string | null {
   if (!documented || documented.total <= 0) return null;
-  return `${documented.reached} of ${documented.total} documented items reached`;
+  return `${documented.reached} of ${documented.total} documented requirements reached in live app`;
 }
 
 /** The plan is partly written during the scan: say so plainly. */

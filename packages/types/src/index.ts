@@ -18,3 +18,5 @@ export * from './ai.js';
 export * from './discovery.js';
 export * from './hub.js';
 export * from './review-plan.js';
+export * from './context-parse.js';
+export * from './intent.js';

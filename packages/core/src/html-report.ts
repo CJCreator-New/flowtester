@@ -37,7 +37,7 @@ export async function generateSingleFileHtmlReport(
 
   // One verdict, the same as on screen: the stamp and its reason. There is no overall grade to
   // contradict it; the aspects are graded below.
-  const verdict = releaseVerdict(report.findings);
+  const verdict = releaseVerdict(report.findings, undefined, report.grades);
   const gradeStyle = verdict.ready ? GRADE_COLORS.A : GRADE_COLORS.F;
   /** Problems among an area's findings, counted as the verdict counts them. */
   const problemsIn = (ids: string[]) =>
@@ -87,6 +87,49 @@ export async function generateSingleFileHtmlReport(
       `;
     })
     .join('');
+
+  // Living Spec & Documented Requirements Coverage (FR-2.6)
+  let documentedItemsHtml = '';
+  if (report.documentedItems) {
+    const d = report.documentedItems;
+    documentedItemsHtml = `
+      <section class="section card documented-items-section">
+        <h2 class="section-title">Living Spec Conformance</h2>
+        <div class="doc-coverage-banner" style="display:flex; justify-content:space-between; align-items:center; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:1rem 1.5rem; margin-bottom:1rem;">
+          <div>
+            <div style="font-size:1.15rem; font-weight:700; color:#0F172A;">${d.reached} of ${d.total} documented requirements reached in live app</div>
+            <div style="font-size:0.875rem; color:#64748B; margin-top:0.25rem;">Coverage based on Product Context spec items matched against live crawl routes & controls.</div>
+          </div>
+          <div style="font-size:1.5rem; font-weight:800; color:${d.total > 0 && d.reached === d.total ? '#16A34A' : '#D97706'};">
+            ${d.total > 0 ? Math.round((d.reached / d.total) * 100) : 100}%
+          </div>
+        </div>
+        ${
+          d.notFound && d.notFound.length > 0
+            ? `
+          <h4 style="margin: 1rem 0 0.5rem; font-size:1rem; font-weight:600;">Unreached Requirements (${d.notFound.length})</h4>
+          <div class="gap-list" style="display:flex; flex-direction:column; gap:0.75rem;">
+            ${d.notFound
+              .map(
+                (item) => `
+              <div style="border: 1px solid #E2E8F0; border-left: 4px solid #E11D48; border-radius: 6px; padding: 0.75rem 1rem; background: #FFF;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <strong style="color:#0F172A;">${escapeHtml(item.docSource?.section || item.docSource?.document || 'Documented Requirement')}</strong>
+                  <span style="font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px; background:#FFE4E6; color:#BE123C; font-family:monospace;">${escapeHtml(item.code || 'SPEC_GAP_NO_PAGE')}</span>
+                </div>
+                <div style="font-size:0.875rem; color:#475569; margin-top:0.25rem;">${escapeHtml(item.reason)}</div>
+                <div style="margin-top:0.5rem; font-size:0.75rem; color:#64748B; font-style:italic;">
+                  Did this feature change or move? Record a spec override in .qa-data/spec-overrides.json.
+                </div>
+              </div>`
+              )
+              .join('')}
+          </div>`
+            : '<p style="color:#16A34A; font-size:0.875rem; font-weight:500;">✓ All documented requirements were reached in the live application.</p>'
+        }
+      </section>
+    `;
+  }
 
   // History Diff Banner HTML
   let historyBannerHtml = '';
@@ -529,6 +572,7 @@ export async function generateSingleFileHtmlReport(
       ${aspectCardsHtml}
     </div>
 
+    ${documentedItemsHtml}
     ${historyBannerHtml}
     ${slowerHtml}
     ${marketingHtml}

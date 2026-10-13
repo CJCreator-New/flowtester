@@ -2,7 +2,7 @@ import type { PlanNotFound } from './plan.js';
 import type { RoleNotTested } from './evidence-finding.js';
 import type { Breakpoint, RuleOrigin, TestCase } from './test-case.js';
 import type { AmbiguityQuestion, PageInventoryItem, DiscoveredFlow } from './discovery.js';
-import type { PlanPage, NavigationCheck, PlanGradedCheck, PlanLayoutGroup, AIRequestBudget, PlanWontRun, PlanSummary, PlanOtherHost } from './plan.js';
+import type { PlanPage, NavigationCheck, PlanGradedCheck, PlanLayoutGroup, AIRequestBudget, PlanWontRun, PlanSummary, PlanIntent, PlanOtherHost } from './plan.js';
 
 // --- Phase 1: Plan review types (Tasks 1.2 & 1.3) ---
 
@@ -77,6 +77,10 @@ export interface ReviewPlan {
   usedFallbackDiscovery?: boolean;
   /** The site isn't a test copy: journeys that send a form stay in the plan but aren't run. */
   readOnly?: boolean;
+  /** The Test cap this Plan was expanded with. */
+  testCap?: number;
+  /** Intents switched off for the whole Plan. */
+  intentsOff?: PlanIntent[];
   /** Why the run is read-only, in plain words. */
   readOnlyReason?: string;
   /** Sentences about what the scan could and couldn't reach, e.g. pages behind a sign-in. */

@@ -7,6 +7,10 @@ All notable changes. Format follows [Keep a Changelog](https://keepachangelog.co
 
 ### Added
 
+- Intent on Plan Items (Works, Rejects, Limits, Denied); Rejects planned from form attributes by fixed rules (no AI key needed); Limits from the AI Planner or a Source; the refusal rule shared by the Check-up and the Playwright export (`expectRefused`); Rejects and Limits wait for a Test Copy or sign-in consent; Ambiguity Questions for Sensitive submits (ADR 0024)
+- Test cap (default 2000; `testCap` in the API, `--test-cap` in the CI command): Rejects and Limits past it are switched off and counted in the approval summary; Plan Review has a filter chip and one switch-off per Intent, with counts
+- Spider deep exploration of tabs, accordions, drawers and modals (opening steps stored on the Plan Item, shown in Plan Review, replayed by the export), CRUD facts from structure, and a guarded Delete probe that cancels at the confirm (ADR 0025)
+- Word (.docx) Product Context; structured reading of tables, numbered steps, flow diagrams and User Flows; Plan Items from your documents written by fixed rules when there is no AI key (User Flows, route access and Denial items, each with its Source; unmatched steps and free-text expectations under "Needs your judgement"); per-document read feedback; Import roles; CLI `--docs` and several roles (ADR 0023)
 - Sources: Plan Items link to the document they came from (name, section); roles are proposed and confirmed in Plan Review; Product Context takes several .md/.txt files and a docs URL (ADR 0020)
 - Denial Plan Items (a role that should not see a control is checked read-only) and "Not found in app" with a reason; the report says "N of M documented items reached" (ADR 0020)
 - "Needs your judgement" section: logical-flow guesses by the AI sit apart and do not change the verdict or grades until accepted (ADR 0020)
@@ -21,11 +25,18 @@ All notable changes. Format follows [Keep a Changelog](https://keepachangelog.co
 
 ### Changed
 
-- Known gap: the CI command (`checkup.ts`) has no `--context` option yet, so multi-file Product Context and a docs URL work in the wizard and runner only
+- Denial Plan Items are now Intent Denied (`intent: 'denied'` replaces `kind: 'denial'`); saved Plans and site memory with the old value still load (ADR 0024)
+- The CI command takes Product Context with `--docs` (or `QA_DOCS`); a docs URL still works in the wizard and runner only
+- "N of M documented items reached" counts User Flows, routes and negative specs once any exist, not plain headings (ADR 0023)
+- Wizard text-file cap is 500 KB (was 1 MB), matching the runner
 
 - Sign-in test now names why it failed (wrong details, no sign-in form found, site unreachable or timed out, needs more than a password) and handles two-step and modal sign-ins (T-18)
 - Internal: split packages/types/src/index.ts into area files; exports unchanged (T-23a)
 - Fixture benchmark: every finding is labelled in the answer key (real, or known noise), fixture pages got a viewport, icon, description and h1, the fixture's sitemap address follows its port, and thresholds are calibrated
+
+### Fixed
+
+- A document's description fell back to its heading; it is now the first prose line, or empty
 
 ## [0.1.0] - 2026-10-08
 

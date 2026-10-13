@@ -18,7 +18,7 @@ import type {
   DocSource,
 } from '@qa/types';
 import { normalizeRoute, signInReasonText } from '@qa/types';
-import { BrowserManager, BREAKPOINT_VIEWPORTS, locateElement } from './browser.js';
+import { BrowserManager, BREAKPOINT_VIEWPORTS, locateElement, type BrowserEngine } from './browser.js';
 import { EvidenceCollector } from './evidence.js';
 import { captureVisualShot, readBaselineMode, writeVisualBaseline } from './visual-capture.js';
 import { PreFlightChecker, SignInFailedError } from './preflight.js';
@@ -47,7 +47,9 @@ import {
   SeoChecker,
   newMarketingLog,
   marketingReview,
+  captureRefusalBaseline,
   type DesignTokens,
+  type RefusalBaseline,
 } from '@qa/checkers';
 import { calculateSiteAspectGrades } from './scoring.js';
 import { generateRankedRecommendations } from './recommendations.js';
@@ -250,6 +252,12 @@ export interface RunOptions {
   productId: string;
   specTestCases: TestCase[];
   profile?: ProductProfile;
+  /** Multi-browser engine to run tests against: 'chromium' (default), 'webkit', or 'firefox' (FR-1.4). */
+  browserEngine?: BrowserEngine;
+  /** Custom HTTP headers sent with every request (e.g. bypass headers). */
+  customHeaders?: Record<string, string>;
+  /** Custom user-agent string. */
+  userAgent?: string;
   headless?: boolean;
   tunnelAuth?: string;
   outputDir?: string;
@@ -502,6 +510,10 @@ export class FlowTestOrchestrator {
         let page = undefined as unknown as Page;
         let testPointPassed = true;
         let stepError: string | undefined;
+        // The page as it was right before the submit click of a refusal test (reset per attempt).
+        let refusalBaseline: RefusalBaseline | undefined;
+        // Set when a step that opens a tab, drawer or dialog could not be done: the form was never reached.
+        let openingFailed: string | undefined;
         let pointResult: TestPointResult | undefined;
         let flakyRetry: RetryTelemetryEntry | undefined;
         let blockedChanges: string[] = [];
@@ -527,15 +539,20 @@ export class FlowTestOrchestrator {
               evidenceCollector = new EvidenceCollector(testCaseEvidenceDir);
               testPointPassed = true;
               stepError = undefined;
+              refusalBaseline = undefined;
+              openingFailed = undefined;
               substitutes.length = 0;
             }
             ({ context, page } = await this.browserManager.openPage({
+              engine: options.browserEngine ?? 'chromium',
               headless: options.headless ?? true,
               viewport: BREAKPOINT_VIEWPORTS[bp],
               tunnelAuth: options.tunnelAuth,
               baseUrl: options.targetUrl,
               storageState,
               recordVideoDir: recordVideo ? testCaseEvidenceDir : undefined,
+              customHeaders: options.customHeaders,
+              userAgent: options.userAgent,
             }));
 
             // On a live site nothing that could change data leaves the browser.
@@ -590,6 +607,10 @@ export class FlowTestOrchestrator {
                   if (step.action === 'click') {
                     const locator = await locateElement(page, step.selector || '');
                     await locator.waitFor({ state: 'visible', timeout: waitTimeout() });
+                    const refusalAt = testCase.expectations?.refusal;
+                    if (refusalAt && step.selector && step.selector === refusalAt.submitSelector) {
+                      refusalBaseline = await captureRefusalBaseline(page).catch(() => undefined);
+                    }
                     sendGuard?.clickStarted(i);
                     await locator.click({ timeout: budget.clamp(step.optional ? 1500 : 4000) });
                   } else if (step.action === 'fill') {
@@ -672,6 +693,9 @@ export class FlowTestOrchestrator {
               if (!stepSuccess && !skipped) {
                 testPointPassed = false;
                 stepError = currentStepError;
+                if (step.opening) {
+                  openingFailed = `Could not reach ${testCase.name || testCase.flowId}: the control that opens it was not found`;
+                }
               }
 
               const stepEvidence = await evidenceCollector.recordStep(
@@ -787,6 +811,7 @@ export class FlowTestOrchestrator {
             role: testCase.role,
             breakpoint: bp,
             baseUrl: options.targetUrl,
+            refusalBaseline,
             onObservation: (o) => observations.push(o),
           });
 
@@ -1013,7 +1038,7 @@ export class FlowTestOrchestrator {
             ...designFindings,
             ...a11yDepth,
           ]
-            .filter((f) => !sentData || (f.checker !== 'spec-conformance' && !f.id.startsWith('F-STEP-')))
+            .filter((f) => !(sentData || openingFailed) || (f.checker !== 'spec-conformance' && !f.id.startsWith('F-STEP-')))
             .map((f) => withSourceWording(f, testCase));
 
           // Enrich findings with Source Code Locator and Repro Script
@@ -1039,7 +1064,9 @@ export class FlowTestOrchestrator {
             keptFindings.some((f) => f.needsConfirmation && f.id.startsWith('F-STEP-'));
           const status: TestPointResult['status'] = sentData
             ? 'Skipped'
-            : hasRealFinding || (hasStepFailure && !hasGuessedFailure)
+            : openingFailed
+              ? 'Could not verify'
+              : hasRealFinding || (hasStepFailure && !hasGuessedFailure)
               ? 'Failed'
               : keptFindings.length > 0
                 ? 'Could not verify'
@@ -1053,7 +1080,7 @@ export class FlowTestOrchestrator {
             durationMs: Date.now() - pointStartTime,
             findings: keptFindings,
             stepEvidence: stepEvidenceList,
-            error: stepError,
+            error: openingFailed ?? stepError,
             observations: observations.length > 0 ? observations : undefined,
             skipReason: sentData ? NEEDS_TEST_COPY : undefined,
             breakpoint: bp,
@@ -1062,7 +1089,7 @@ export class FlowTestOrchestrator {
               ux: !lightChecks,
               pageLevel: pageLevelChecks,
               search: searchHere && options.searchChecks !== false,
-              spec: !sentData && Object.keys(testCase.expectations || {}).some((k) => k !== 'origin'),
+              spec: !sentData && !openingFailed && Object.keys(testCase.expectations || {}).some((k) => k !== 'origin'),
               permissions: !!permChecker,
               design: (!!designTokens && pageLevelChecks) || designFindings.length > 0,
             }),
@@ -1215,6 +1242,7 @@ export class FlowTestOrchestrator {
     const grades = calculateSiteAspectGrades(uniqueFindings, {
       checkersRun: results.flatMap((r) => (r.checks || []).map((c) => c.checker)),
       marketingChecked: marketingLog.homeRead,
+      flakyCount: coverage.flakyFlows,
     });
     const marketing = marketingReview(marketingLog);
     const recommendations = generateRankedRecommendations(uniqueFindings);

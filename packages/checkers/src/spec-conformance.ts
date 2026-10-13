@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { Finding, TestCase, StepEvidence, Breakpoint } from '@qa/types';
+import { judgeRefusal, readRefusal, type RefusalBaseline, type RefusalExpectation } from './refusal-rule.js';
 
 /** Elements sites commonly use to show a validation or error message. */
 const ERROR_MESSAGE_SELECTOR = [
@@ -43,6 +44,8 @@ export class SpecConformanceChecker {
       baseUrl: string;
       /** Receives what the site was seen doing, such as the error message it showed. */
       onObservation?: (observation: string) => void;
+      /** The page as it was right before the submit click of a refusal test. */
+      refusalBaseline?: RefusalBaseline;
     }
   ): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -134,6 +137,82 @@ export class SpecConformanceChecker {
       }
     }
 
+    // 0b. Refusal rule: a form sent with a value it should not accept must be refused.
+    const refusal = (testCase.expectations as { refusal?: RefusalExpectation }).refusal;
+    if (refusal && context.refusalBaseline) {
+      const seen = await readRefusal(page, {
+        baseline: context.refusalBaseline,
+        message: refusal.message,
+        probeOnly: refusal.probeOnly,
+      }).catch(() => null);
+      if (seen) {
+        const judged = judgeRefusal(seen, { message: refusal.message });
+        const urlPath = new URL(currentUrl, context.baseUrl).pathname;
+        const last = stepEvidenceList[stepEvidenceList.length - 1];
+        const base = {
+          testCaseId: testCase.id,
+          flowId: testCase.flowId,
+          checker: 'spec-conformance' as const,
+          where: { urlPath, role: context.role, breakpoint: context.breakpoint },
+          stepsToReproduce: [
+            `Navigate to ${testCase.startPage}`,
+            ...testCase.steps.map((s) => `Execute "${s.name}"`),
+            `Look at the page`,
+          ],
+          evidence: { screenshotPath: last?.screenshotPath, domSnapshotPath: last?.domSnapshotPath },
+        };
+        if (judged.crashed) {
+          findings.push({
+            ...base,
+            id: `F-SPEC-${testCase.id}-${counter++}`,
+            severity: 'Major',
+            title: `${urlPath} broke when the form was sent`,
+            expectedVsActual: {
+              expected: `The form at ${refusal.formPath} refuses the value and stays usable`,
+              actual: 'The page showed an error page, an error status or nothing',
+            },
+            resolution: 'Make the form answer a value it cannot accept with a message, not a failure.',
+          });
+        } else if (!judged.refused) {
+          findings.push(
+            asGuess(
+              {
+                ...base,
+                id: `F-SPEC-${testCase.id}-${counter++}`,
+                // A Source-backed one is re-worded by withSourceWording to docSeverity ?? Major.
+                severity: testCase.docSource ? 'Major' : 'Minor',
+                title: `The form at ${refusal.formPath} accepted a value it should refuse`,
+                expectedVsActual: {
+                  expected: `The form refuses the value: it stays on the page, adds nothing, and shows an error`,
+                  actual: seen.moved
+                    ? 'The page moved on after the form was sent'
+                    : seen.newRecord
+                      ? 'A new record appeared'
+                      : 'No error, invalid field or alert appeared',
+                },
+                resolution: 'Check the value on the server and show a message next to the field.',
+              },
+              `Could not verify: the form at ${refusal.formPath} seems to accept a value it should refuse. Confirm the limit.`
+            )
+          );
+        } else if (judged.messageMatches === false) {
+          findings.push({
+            ...base,
+            id: `F-SPEC-${testCase.id}-${counter++}`,
+            severity: 'Major',
+            title: `The form at ${refusal.formPath} refused with different wording`,
+            expectedVsActual: {
+              expected: `The message says: "${refusal.message}"`,
+              actual: `The page says: "${seen.errorText ?? ''}"`,
+            },
+            resolution: 'Change the message to the wording in the document, or update the document.',
+          });
+        } else if (seen.errorText) {
+          context.onObservation?.(`The form at ${refusal.formPath} refused the value: "${seen.errorText}"`);
+        }
+      }
+    }
+
     // 1. URL Pattern Check
     if (testCase.expectations.url) {
       const pattern = testCase.expectations.url.pattern;
@@ -142,7 +221,38 @@ export class SpecConformanceChecker {
       // "/docs" and "/docs/" are the same page.
       const otherSlash = urlPath.length > 1 && urlPath.endsWith('/') ? urlPath.slice(0, -1) : `${urlPath}/`;
 
-      if (!urlMatchesPattern(pattern, [urlPath, otherSlash, urlPath + landed.search, currentUrl])) {
+      const matches = urlMatchesPattern(pattern, [urlPath, otherSlash, urlPath + landed.search, currentUrl]);
+      if (testCase.expectations.url.negate) {
+        // A Denial Plan Item for a route: it passes when the role did NOT end on the route (a redirect
+        // or a refusal), and fails when the page opened.
+        if (matches) {
+          findings.push(
+            asGuess(
+              {
+                id: `F-SPEC-${testCase.id}-${counter++}`,
+                testCaseId: testCase.id,
+                flowId: testCase.flowId,
+                severity: 'Blocker',
+                checker: 'spec-conformance',
+                title: `${context.role} reached ${urlPath}, which should not be open to this role`,
+                where: { urlPath, role: context.role, breakpoint: context.breakpoint },
+                expectedVsActual: {
+                  expected: `The URL does not match ${pattern} (${testCase.expectations.url.description || ''})`,
+                  actual: `Current URL is ${urlPath}`,
+                },
+                stepsToReproduce: [
+                  `Navigate to ${testCase.startPage}`,
+                  ...testCase.steps.map((s) => `Perform "${s.name}" (${s.action})`),
+                  `Assert URL does not match ${pattern}`,
+                ],
+                evidence: { screenshotPath: stepEvidenceList[stepEvidenceList.length - 1]?.screenshotPath },
+                resolution: `Redirect or refuse ${context.role} on ${pattern}, or correct the document if this role should have access.`,
+              },
+              `Could not verify: ${context.role} reached "${urlPath}", which the document says is not for this role.`
+            )
+          );
+        }
+      } else if (!matches) {
         findings.push(
           asGuess(
             {

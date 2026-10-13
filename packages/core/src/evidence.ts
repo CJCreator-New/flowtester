@@ -42,23 +42,36 @@ export class EvidenceCollector {
       });
     });
 
+    const requestStartTimes = new Map<object, number>();
+    page.on('request', (req) => {
+      requestStartTimes.set(req, Date.now());
+    });
+
     page.on('requestfailed', (req) => {
+      const startTime = requestStartTimes.get(req);
+      const durationMs = startTime ? Date.now() - startTime : undefined;
+      requestStartTimes.delete(req);
       this.networkLogs.push({
         url: req.url(),
         method: req.method(),
         status: 0,
         postData: req.postData() || undefined,
+        durationMs,
         timestamp: Date.now(),
       });
     });
 
     page.on('response', (res: Response) => {
       const status = res.status();
-      // Record all requests or especially failed ones
+      const req = res.request();
+      const startTime = requestStartTimes.get(req);
+      const durationMs = startTime ? Date.now() - startTime : undefined;
+      requestStartTimes.delete(req);
       this.networkLogs.push({
         url: res.url(),
         method: res.request().method(),
         status,
+        durationMs,
         timestamp: Date.now(),
       });
     });

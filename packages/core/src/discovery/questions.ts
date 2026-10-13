@@ -1,4 +1,5 @@
-import type { AmbiguityQuestion, DiscoveredFlow, SensitiveAction } from '@qa/types';
+import type { AmbiguityQuestion, DiscoveredFlow, PlanPage, SensitiveAction } from '@qa/types';
+import type { SafetyFilter } from './safety-filter.js';
 
 /**
  * The questions the plan review asks, in plain words. Each has a safe answer, used when nobody
@@ -87,6 +88,59 @@ export function stepQuestion(flow: DiscoveredFlow, index: number): AmbiguityQues
     safeAnswer: STEP_ANSWERS.skip,
     category: 'unverified_step',
   };
+}
+
+export const INTENT_ANSWERS = {
+  run: 'Run it',
+  off: 'Switch off',
+  probe: 'Probe only up to the form checks',
+} as const;
+
+/** The key of the question about sending a form's checks: stays the same from run to run. */
+export function intentQuestionKey(urlPath: string, submitSelector: string): string {
+  return `intent:${urlPath}:${submitSelector}`;
+}
+
+/**
+ * The question for a Rejects or Limits Plan Item whose submit button looks like it deletes, pays or
+ * sends a message. It is asked once per form. The safe answer switches the items off.
+ */
+export function intentQuestion(
+  item: { name: string; submitName: string },
+  urlPath: string,
+  submitSelector: string,
+  index: number
+): AmbiguityQuestion {
+  return {
+    id: `Q-INTENT-${index}`,
+    key: intentQuestionKey(urlPath, submitSelector),
+    targetElement: submitSelector,
+    urlPath,
+    question: `Rejects and Limits tests of the form on ${urlPath || 'this page'} would press “${item.submitName}”, which looks like it deletes, pays or sends a message. What should they do?`,
+    options: [INTENT_ANSWERS.run, INTENT_ANSWERS.off, INTENT_ANSWERS.probe],
+    safeAnswer: INTENT_ANSWERS.off,
+    category: 'sensitive_action',
+  };
+}
+
+/** One intent question for each form whose Rejects or Limits items press a Safety Filter control. */
+export function intentQuestionsFor(pages: PlanPage[], safety: SafetyFilter, firstIndex = 1): AmbiguityQuestion[] {
+  const out: AmbiguityQuestion[] = [];
+  const seen = new Set<string>();
+  for (const page of pages) {
+    for (const test of page.tests) {
+      const submit = test.expectations?.refusal?.submitSelector;
+      if ((test.intent !== 'rejects' && test.intent !== 'limits') || !submit) continue;
+      const press = test.steps.find((s) => s.action === 'click' && s.selector === submit);
+      const submitName = press?.name?.trim() || 'Send';
+      if (!safety.isSensitive(submitName, submit)) continue;
+      const key = intentQuestionKey(page.urlPath, submit);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(intentQuestion({ name: test.name, submitName }, page.urlPath, submit, firstIndex + out.length));
+    }
+  }
+  return out;
 }
 
 /** The answer a question gets when nobody answers it: the one that sends nothing and deletes nothing. */

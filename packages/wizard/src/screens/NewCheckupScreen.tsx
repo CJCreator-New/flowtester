@@ -3,6 +3,7 @@ import type { RunSummary } from '@qa/types';
 import {
   checkDomainProof,
   checkReachable,
+  convertDocx,
   estimateAi,
   RunnerError,
   type AiEstimate,
@@ -15,7 +16,15 @@ import {
 import { KeyField } from '../components/KeyField';
 import { ErrorMessage, Notice, Question, Spinner } from '../components/text';
 import { capLine } from '../lib/cap';
-import { MAX_CONTEXT_FILES, readContextFiles, rejectReason } from '../lib/context';
+import {
+  describeSummary,
+  MAX_CONTEXT_FILES,
+  readContextFiles,
+  readCount,
+  rejectReason,
+  unreadMessage,
+} from '../lib/context';
+import { fillRoleRows, parseRoleList } from '../lib/import-roles';
 import { parseSessionFile } from '../lib/session-file';
 import {
   capOf,
@@ -227,7 +236,7 @@ export function NewCheckupScreen({
 
   const added =
     [form.specs, form.designNotes, form.journeys, form.contextUrl].filter((t) => t.trim()).length +
-    (form.contextFiles.length > 0 ? 1 : 0);
+    (readCount(form.contextFiles) > 0 ? 1 : 0);
 
   return (
     <div className="mx-auto max-w-[44rem] px-4 py-10 sm:px-6 sm:py-14">
@@ -441,6 +450,78 @@ export function NewCheckupScreen({
               </span>
             </div>
 
+            <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+              <label htmlFor="test-cap">Test cap</label>
+              <input
+                id="test-cap"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={100000}
+                placeholder="2000"
+                className="field w-24 py-1.5 text-sm"
+                value={form.testCap}
+                onChange={(e) => onFormChange((f) => ({ ...f, testCap: e.target.value }))}
+                aria-describedby="test-cap-hint"
+              />
+              <span>tests at most</span>
+              <span id="test-cap-hint" className="basis-full text-ink-soft">
+                Past this many Tests, the last Rejects and Limits are switched off in the Plan. Leave it empty for 2000.
+              </span>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-edge bg-surface p-4 text-sm">
+              <span className="block font-semibold text-ink">Crawl Settings</span>
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                <div className="flex items-center gap-2">
+                  <label htmlFor="crawl-concurrency">Concurrency</label>
+                  <input
+                    id="crawl-concurrency"
+                    type="number"
+                    min={1}
+                    max={5}
+                    className="field w-20 py-1.5 text-sm"
+                    value={form.crawlConcurrency}
+                    onChange={(e) => {
+                      const val = Math.max(1, Math.min(5, Number(e.target.value) || 2));
+                      onFormChange((f) => ({ ...f, crawlConcurrency: val }));
+                    }}
+                  />
+                  <span className="text-xs text-ink-soft">workers (1–5)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label htmlFor="crawl-delay">Pacing delay</label>
+                  <input
+                    id="crawl-delay"
+                    type="number"
+                    min={0}
+                    max={2000}
+                    step={50}
+                    className="field w-24 py-1.5 text-sm"
+                    value={form.crawlDelayMs}
+                    onChange={(e) => {
+                      const val = Math.max(0, Math.min(2000, Number(e.target.value) || 0));
+                      onFormChange((f) => ({ ...f, crawlDelayMs: val }));
+                    }}
+                  />
+                  <span className="text-xs text-ink-soft">ms (0–2000)</span>
+                </div>
+              </div>
+              <div className="mt-3">
+                <label htmlFor="custom-headers" className="block text-xs font-medium text-ink">
+                  Custom Headers (bypass bot protection / Cloudflare allowlist tokens)
+                </label>
+                <textarea
+                  id="custom-headers"
+                  rows={2}
+                  placeholder="X-QA-Bypass-Token: your-token&#10;User-Agent: MyCustomAgent"
+                  className="field mt-1 w-full font-mono text-xs"
+                  value={form.customHeaders}
+                  onChange={(e) => onFormChange((f) => ({ ...f, customHeaders: e.target.value }))}
+                />
+              </div>
+            </div>
+
             <SignInsSection
               form={form}
               saved={remembered?.signIns}
@@ -612,7 +693,7 @@ export function NewCheckupScreen({
                   value={form.journeys}
                   onChange={(value) => onFormChange((f) => ({ ...f, journeys: value }))}
                 />
-                <ReferenceDocuments form={form} onFormChange={onFormChange} />
+                <ReferenceDocuments form={form} onFormChange={onFormChange} keyReady={keyReady} />
               </div>
             </details>
           </div>
@@ -767,8 +848,11 @@ function MaterialField({
 function ReferenceDocuments({
   form,
   onFormChange,
+  keyReady,
 }: {
   form: CheckupForm;
+  /** An AI key is set: without one, Plan Items from documents are written by fixed rules. */
+  keyReady: boolean;
   onFormChange: (update: (form: CheckupForm) => CheckupForm) => void;
 }) {
   const [rejected, setRejected] = useState<string[]>([]);
@@ -781,15 +865,15 @@ function ReferenceDocuments({
           <input
             type="file"
             multiple
-            accept=".md,.markdown,.txt"
+            accept=".md,.markdown,.txt,.docx"
             className="hidden"
-            aria-label="Add documents (.md or .txt)"
+            aria-label="Add documents (.md, .txt or .docx)"
             onChange={async (e) => {
               const input = e.currentTarget;
               const picked = Array.from(input.files ?? []);
               input.value = '';
               if (picked.length === 0) return;
-              const result = await readContextFiles(picked, form.contextFiles.length);
+              const result = await readContextFiles(picked, form.contextFiles.length, { convertDocx });
               setRejected(result.rejected);
               if (result.accepted.length > 0) {
                 onFormChange((f) => ({
@@ -805,7 +889,7 @@ function ReferenceDocuments({
         </label>
       </div>
       <p className="text-sm text-ink-soft">
-        Markdown or text files, up to {MAX_CONTEXT_FILES}. Plan Items link back to the document and section they came
+        Markdown, text or Word files, up to {MAX_CONTEXT_FILES}. Plan Items link back to the document and section they came
         from.
       </p>
       {form.contextFiles.length > 0 && (
@@ -813,6 +897,17 @@ function ReferenceDocuments({
           {form.contextFiles.map((file) => (
             <li key={file.name} className="flex flex-wrap items-center gap-x-3">
               <span className="font-mono text-ink">{file.name}</span>
+              {file.summary && !file.unread && <span className="text-ink-soft">{describeSummary(file.summary)}</span>}
+              {file.unread && (
+                <span role="alert" className="text-fail">
+                  {unreadMessage(file.name)}
+                </span>
+              )}
+              {file.warnings?.map((w, n) => (
+                <span key={n} className="text-ink-soft">
+                  {w}
+                </span>
+              ))}
               <button
                 type="button"
                 className="btn-link text-sm"
@@ -826,6 +921,12 @@ function ReferenceDocuments({
             </li>
           ))}
         </ul>
+      )}
+      {form.contextFiles.length > 0 && !keyReady && (
+        <p className="text-sm text-ink-soft">
+          Plan Items from your documents are written by fixed rules. Steps that cannot be matched to a control, and
+          free-text expectations, are listed under Needs your judgement.
+        </p>
       )}
       {rejected.length > 0 && (
         <ul role="alert" className="space-y-1 text-sm text-fail">
@@ -1088,6 +1189,7 @@ function SignInsSection({
         >
           {form.signIns.length === 0 ? 'Add a sign-in' : 'Add another sign-in'}
         </button>
+        <ImportRoles onFormChange={onFormChange} />
         <SavedSessions form={form} onFormChange={onFormChange} />
         {form.signIns.length > 0 && (
           <label className="flex cursor-pointer items-start gap-3 text-sm">
@@ -1104,6 +1206,92 @@ function SignInsSection({
         )}
       </div>
     </details>
+  );
+}
+
+/**
+ * Import roles: a list of `role,username,password` lines typed, pasted or picked by the person
+ * fills the sign-in rows above. Form state only: never saved, logged or sent from here.
+ */
+function ImportRoles({ onFormChange }: { onFormChange: (update: (form: CheckupForm) => CheckupForm) => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [note, setNote] = useState<string | null>(null);
+  const apply = (source: string) => {
+    const { roles, skipped } = parseRoleList(source);
+    if (roles.length > 0) {
+      onFormChange((f) => ({ ...f, signIns: fillRoleRows(f.signIns, roles) }));
+      setText('');
+    }
+    const done = roles.length > 0 ? `${roles.length} ${roles.length === 1 ? 'role' : 'roles'} filled in.` : 'No roles found.';
+    setNote([done, ...skipped].join(' '));
+  };
+  if (!open) {
+    return (
+      <button type="button" className="btn-link text-sm" onClick={() => setOpen(true)}>
+        Import roles
+      </button>
+    );
+  }
+  return (
+    <div className="space-y-2 rounded-md border border-rule p-3">
+      <label className="block text-sm">
+        <span className="mb-1 block font-bold">Roles to import</span>
+        <textarea
+          className="field py-2 font-mono text-sm"
+          rows={4}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="role,username,password"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+      </label>
+      <p className="text-sm text-ink-soft">
+        One role per line: role,username,password. Used for this check-up only; nothing is saved from here.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" className="btn-quiet" disabled={!text.trim()} onClick={() => apply(text)}>
+          Fill in roles
+        </button>
+        <label className="cursor-pointer text-sm font-bold text-stamp underline underline-offset-4 hover:text-stamp-dark focus-within:outline focus-within:outline-2 focus-within:outline-stamp">
+          Pick a list file
+          <input
+            type="file"
+            accept=".csv,.txt"
+            className="hidden"
+            aria-label="Pick a role list file (.csv or .txt)"
+            onChange={async (e) => {
+              const input = e.currentTarget;
+              const file = input.files?.[0];
+              input.value = '';
+              if (!file) return;
+              try {
+                apply(await file.text());
+              } catch {
+                setNote('The file couldn’t be read. Try again.');
+              }
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          className="btn-link text-sm"
+          onClick={() => {
+            setOpen(false);
+            setText('');
+            setNote(null);
+          }}
+        >
+          Close
+        </button>
+      </div>
+      {note && (
+        <p role="status" className="text-sm">
+          {note}
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -12,3 +12,4 @@ export * from './geo.js';
 export * from './marketing.js';
 export * from './security-depth.js';
 export * from './keyboard-a11y.js';
+export * from './refusal-rule.js';

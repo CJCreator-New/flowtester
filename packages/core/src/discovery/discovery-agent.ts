@@ -13,11 +13,15 @@ import { lookAtNarrowScreens } from '../plan/narrow-look.js';
 import { estimatePageRequests, planPagesAndMenus, testedPages } from '../plan/ai-planner.js';
 import { PacedAI } from '../plan/ai-budget.js';
 import { planJourneys } from '../plan/journeys.js';
+import { planFromSpec } from '../plan/spec-plan.js';
+import { documentedUnits, reachedRequirementIds } from '../plan/sources.js';
+import { SafetyFilter } from './safety-filter.js';
+import type { PlanPage } from '@qa/types';
 import { ContextParser } from './context-parser.js';
 import { Redactor } from '../redact.js';
 import { replaceCredentialsWithPlaceholders } from '../credentials.js';
 import { detectSiteType, type SiteType } from './site-type.js';
-import { formQuestion } from './questions.js';
+import { formQuestion, intentQuestionsFor } from './questions.js';
 import { siteContentKey, type RememberedPlan } from '../site-memory.js';
 import type { CrawlOptions } from './deterministic-spider.js';
 import { RobotsPolicy } from '../competitive/robots.js';
@@ -46,6 +50,12 @@ export interface DiscoveryOptions {
   readOnly?: boolean;
   /** Pages to explore per crawl. Default 200 (DEFAULT_MAX_PAGES). */
   maxPages?: number;
+  /** Crawl concurrency (1 to 5, default 2). */
+  crawlConcurrency?: number;
+  /** Crawl delay between page loads in ms (0-2000, default 100 for public sites). */
+  crawlDelayMs?: number;
+  /** Custom HTTP headers sent with every request (e.g. X-QA-Bypass-Token). */
+  customHeaders?: Record<string, string>;
   /**
    * The AI key's free requests today, when the AI service says: planning stops asking the AI
    * past `left`, and the rest is planned by fixed rules.
@@ -325,7 +335,9 @@ export class DiscoveryAgent {
     const ownMachine = isPrivateHost(targetOrigin.hostname);
     const crawlOptions: CrawlOptions = {
       robots: ownMachine ? undefined : await RobotsPolicy.fetch(targetOrigin.origin, CRAWLER_TOKEN),
-      pageDelayMs: ownMachine ? 0 : PUBLIC_SITE_PAGE_DELAY_MS,
+      pageDelayMs: options.crawlDelayMs !== undefined ? options.crawlDelayMs : (ownMachine ? 0 : PUBLIC_SITE_PAGE_DELAY_MS),
+      concurrency: options.crawlConcurrency,
+      customHeaders: options.customHeaders,
       screenshotDir: path.join(outputDir, 'plan-pages'),
       // Stopping to plan what's found ends the crawl the same way as stopping outright.
       signal:
@@ -334,7 +346,11 @@ export class DiscoveryAgent {
           : (options.finishSignal ?? signal),
     };
     const newContext = async (storageState?: string | StorageStateData) => {
-      const context = await this.browserManager.createContext({ baseUrl: options.targetUrl, storageState });
+      const context = await this.browserManager.createContext({
+        baseUrl: options.targetUrl,
+        storageState,
+        customHeaders: options.customHeaders,
+      });
       if (options.readOnly) await blockChanges(context);
       return context;
     };
@@ -552,6 +568,7 @@ export class DiscoveryAgent {
             roles: options.profile?.roles || [],
             siteType,
             redact: (text) => redactor.text(text),
+            requirements: parsedContext.requirements,
           },
           paced
         );
@@ -563,6 +580,59 @@ export class DiscoveryAgent {
     ambiguityQuestions.push(...journeyPlan.questions);
     planningProgress(requestsNeeded, 'Planned the journeys');
 
+    // Fixed rules read the documents: User Flows, route access and Denial items, each with its Source.
+    // With an AI, only units it did not reach are filled in here.
+    const units = documentedUnits(parsedContext.requirements).filter((r) =>
+      ['journey', 'route', 'negative'].includes(r.kind ?? '')
+    );
+    if (units.length > 0) {
+      const aiReached = reachedRequirementIds(pagePlan.pages, synthesizedFlows);
+      const spec = planFromSpec({
+        hints: parsedContext.requirements,
+        roles: roleNames,
+        crawls,
+        readOnly: !!options.readOnly,
+        safety: new SafetyFilter(options.profile?.forbiddenActions || []),
+        skipRequirementIds: paced ? aiReached : undefined,
+        fallbackReason: paced ? (synthesizedFlows.find((f) => f.fallbackReason)?.fallbackReason ?? 'unusable') : 'no-ai',
+      });
+      const have = new Set(synthesizedFlows.map((f) => f.id));
+      synthesizedFlows.push(...spec.flows.filter((f) => !have.has(f.id)));
+      for (const { urlPath, test } of spec.pageTests) {
+        let page: PlanPage | undefined = pagePlan.pages.find((p) => pathOf(p.urlPath) === pathOf(urlPath));
+        if (!page) {
+          page = {
+            id: `page:${urlPath}`,
+            urlPath,
+            title: urlPath,
+            coverage: 'tested',
+            reachedBy: [test.role],
+            tests: [],
+            source: 'fallback',
+            fallbackReason: test.docSource ? 'no-ai' : undefined,
+          };
+          pagePlan.pages.push(page);
+        }
+        if (page.coverage === 'covered') page.coverage = 'promoted';
+        if (!page.tests.some((t) => t.id === test.id)) page.tests.push(test);
+      }
+      const ids = new Set([...aiReached, ...spec.documented.reachedIds]);
+      const unitIds = new Set(units.map((u) => u.id));
+      const merged = new Map<string, NonNullable<typeof pagePlan.notFound>[number]>();
+      for (const n of spec.notFound) merged.set(n.id, n);
+      pagePlan.notFound = [...merged.values()];
+      pagePlan.documentedItems = {
+        total: unitIds.size,
+        reached: [...unitIds].filter((id) => ids.has(id)).length,
+      };
+      exploration.notes.push(...spec.notes);
+    }
+
+    // Rejects and Limits items that would press a Safety Filter control are asked about, once per form.
+    ambiguityQuestions.push(
+      ...intentQuestionsFor(pagePlan.pages, new SafetyFilter(options.profile?.forbiddenActions || []), ambiguityQuestions.length + 1)
+    );
+
     const draft: DiscoveryDraft = {
       version: '1.0',
       productId: options.productId,
@@ -572,9 +642,20 @@ export class DiscoveryAgent {
       pages: spiderResult.pages,
       forms: spiderResult.forms.map((f) => ({
         urlPath: f.urlPath,
-        inputs: f.inputs.map((i) => ({ selector: i.selector })),
+        inputs: f.inputs.map((i) => ({
+          selector: i.selector,
+          type: i.type,
+          label: i.label,
+          required: i.required,
+          pattern: i.pattern,
+          min: i.min,
+          max: i.max,
+          minLength: i.minLength,
+          maxLength: i.maxLength,
+        })),
         submitButtonSelector: f.submitButtonSelector,
         method: f.method,
+        ...(f.opening?.length ? { opening: f.opening } : {}),
       })),
       flows: synthesizedFlows,
       sensitiveActions: spiderResult.sensitiveActions,

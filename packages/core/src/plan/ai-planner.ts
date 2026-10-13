@@ -19,6 +19,8 @@ import { AITruncatedError, completeWith, type AIProvider } from '../ai/ai-provid
 import { SafetyFilter } from '../discovery/safety-filter.js';
 import { RISKY_TO_CLICK, SESSION_ENDING } from '../discovery/deterministic-spider.js';
 import { needsTestCopy } from '../live-site.js';
+import { guessFillValue } from './fill-values.js';
+import { deriveRejects } from './rejects.js';
 import { BudgetSpentError, CapSpentError, StoppedEarlyError } from './ai-budget.js';
 import { linkKey, pathOf, type SharedLink, type SiteGraph } from './site-graph.js';
 import type { PageCoverageInfo } from './sampling.js';
@@ -28,6 +30,7 @@ import {
   defaultBinding,
   deriveDenials,
   deriveNotFound,
+  documentedUnits,
   docSourceOf,
   documentedItems,
   readBinding,
@@ -39,8 +42,20 @@ import {
 export interface PlannerForm {
   urlPath: string;
   method?: string;
-  inputs: Array<{ label?: string; type?: string; selector: string; required?: boolean }>;
+  inputs: Array<{
+    label?: string;
+    type?: string;
+    selector: string;
+    required?: boolean;
+    pattern?: string;
+    min?: string;
+    max?: string;
+    minLength?: number;
+    maxLength?: number;
+  }>;
   submitButtonSelector?: string;
+  /** Steps that open the form first (tab, drawer, dialog). */
+  opening?: TestCaseStep[];
 }
 
 export interface PagePlannerInput {
@@ -230,24 +245,6 @@ export function parseJsonAnswer(text: string): any {
 function plannedAs(page: PageInventoryItem): string {
   const reached = page.reachedBy?.length ? page.reachedBy : ['visitor'];
   return reached[reached.length - 1];
-}
-
-function guessFillValue(target: string): string {
-  const hint = target.toLowerCase();
-  if (hint.includes('email')) return 'test.user@example.com';
-  if (hint.includes('password') || hint.includes('pass')) return 'TestPassword123!';
-  if (
-    hint.includes('url') ||
-    hint.includes('address') ||
-    hint.includes('site') ||
-    hint.includes('domain') ||
-    hint.includes('host')
-  )
-    return 'https://example.com';
-  if (hint.includes('phone') || hint.includes('tel')) return '5555550123';
-  if (hint.includes('name')) return 'Test User';
-  if (/number|amount|qty|quantity|price/.test(hint)) return '1';
-  return 'Test Value';
 }
 
 function hostOf(address: string): string {
@@ -440,14 +437,38 @@ function siteIntro(input: PagePlannerInput): string {
   ].join('\n');
 }
 
-/** The documented requirements as ids and short text, cut to the same size as the product notes. */
+/** Room for a User Flow's persona, steps and assertions in the prompt, per entry. */
+const STRUCTURED_TEXT_CHARS = 600;
+/** The requirements block is allowed more room when User Flows or Negative specs are in it. */
+const STRUCTURED_CONTEXT_CHARS = 6000;
+
+/**
+ * The documented requirements as ids and short text. User Flows and Negative specs also carry their
+ * persona, steps and assertions (up to 600 characters), and the block's budget grows only when any exist.
+ */
 function requirementsForPrompt(input: PagePlannerInput): string {
   const lines: string[] = [];
+  const reqs = input.requirements ?? [];
+  const structured = reqs.some((r) => r.kind === 'journey' || r.kind === 'negative');
+  const budget = structured ? STRUCTURED_CONTEXT_CHARS : CONTEXT_CHARS_PER_REQUEST;
   let size = 0;
-  for (const r of input.requirements ?? []) {
+  for (const r of reqs) {
     const text = `${r.name}${r.description ? `: ${r.description}` : ''}`.replace(/\s+/g, ' ').trim();
-    const line = JSON.stringify({ id: r.id, text: text.slice(0, REQUIREMENT_TEXT_CHARS) });
-    if (size + line.length > CONTEXT_CHARS_PER_REQUEST) break;
+    const entry: Record<string, unknown> = { id: r.id, text: text.slice(0, REQUIREMENT_TEXT_CHARS) };
+    if (r.kind === 'journey' || r.kind === 'negative') {
+      const detail = [
+        r.persona ? `Persona: ${r.persona}` : '',
+        r.steps?.length ? `Steps: ${r.steps.join(' → ')}` : '',
+        r.assert?.length ? `Assert: ${r.assert.join('; ')}` : '',
+        r.kind === 'negative' && r.rules.length ? `Cannot: ${r.rules.join('; ')}` : '',
+      ]
+        .filter(Boolean)
+        .join(' | ')
+        .replace(/\s+/g, ' ');
+      if (detail) entry.detail = detail.slice(0, STRUCTURED_TEXT_CHARS);
+    }
+    const line = JSON.stringify(entry);
+    if (size + line.length > budget) break;
     lines.push(line);
     size += line.length;
   }
@@ -465,6 +486,7 @@ For EVERY page below, plan "tests": what a person does on the page and what shou
    {"name": "plain words, e.g. Switching to yearly billing shows yearly prices",
     "steps": [{"action": "click" | "fill" | "select" | "check", "selector": "copied exactly from THIS page's controls or form fields", "value": "text to type or option to pick, for fill and select", "name": "plain words"}],
     "expect": {"text": "wording that should then show"} or {"visible": "a selector from this page that should then show"} or {"url": "/path it should go to"} or {"error": "the label of a field whose error message should show"} or {}}
+For a test that fills a form with a value at the edge of what it should accept (very long text, the largest number, odd characters), add "intent": "limits" to the test; the form should refuse it. Leave "intent" out of every other test.
 Where a page lists "links" (links to pages not yet seen), you may add "links": [{"selector": "the same as listed", "expect": "what the destination should show, in a few words"}] for the ones you can say something about. Leave out the rest.
 
 Rules:
@@ -588,6 +610,30 @@ function readPageAnswer(
       expectations,
       source: 'ai',
     };
+    // Intent: only 'limits', 'rejects' and 'works' are taken from the AI, and only a test that sends one of the
+    // page's forms can be Limits or Rejects. Anything else is dropped and the test stays a plain one.
+    const wanted = typeof t?.intent === 'string' ? t.intent.trim().toLowerCase() : undefined;
+    if (wanted === 'works') test.intent = 'works';
+    else if (wanted === 'limits' || wanted === 'rejects') {
+      const clicked = steps.length > 0 ? steps[steps.length - 1] : undefined;
+      const form = forms.find(
+        (f) =>
+          (f.method || 'GET').toUpperCase() !== 'GET' &&
+          !!f.submitButtonSelector &&
+          clicked?.action === 'click' &&
+          clicked.selector === f.submitButtonSelector &&
+          steps.some((s) => s.action === 'fill' && f.inputs.some((i) => i.selector === s.selector))
+      );
+      if (form) {
+        test.intent = wanted;
+        if (form.opening?.length) test.openingSteps = form.opening.map((s) => ({ ...s }));
+        // The AI's guess about a limit never fails a site on its own.
+        test.expectations = {
+          origin: 'ai-guess',
+          refusal: { formPath: page.urlPath, submitSelector: form.submitButtonSelector },
+        };
+      }
+    }
     // A requirement id the documents don't have is dropped silently: the test stays, without a Source.
     const reqId = typeof t?.requirementId === 'string' ? t.requirementId : undefined;
     const req = reqId ? input.requirements?.find((r) => r.id === reqId) : undefined;
@@ -598,6 +644,7 @@ function readPageAnswer(
     }
     const asFlow = { id: test.id, name, role, description: '', startPage: page.urlPath, steps } as DiscoveredFlow;
     if (needsTestCopy(asFlow, [page], forms)) test.needsTestCopy = true;
+    if (test.intent === 'limits' || test.intent === 'rejects') test.needsTestCopy = true;
     answer.tests.push(test);
   });
 
@@ -1099,18 +1146,24 @@ export async function assemblePlan(
   for (const { urlPath, test } of deriveDenials(pages, binding, { safety, controlShownTo: input.controlShownTo })) {
     pages.find((p) => p.urlPath === urlPath)?.tests.push(test);
   }
+  // Rejects: fixed rules from what each form states, planned with or without an AI.
+  for (const { urlPath, test } of deriveRejects(pages, input.forms, { safety, inventory: input.pages })) {
+    pages.find((p) => p.urlPath === urlPath)?.tests.push(test);
+  }
   const notes: string[] = [];
   let notFound: PlanNotFound[] | undefined;
   let documented: { reached: number; total: number } | undefined;
   if (requirements.length > 0) {
-    // Mapping needs the AI to have planned every page; fixed rules know nothing of the documents.
+    // Mapping needs the AI to have planned every page; fixed rules read the documents only through spec-plan.ts.
     const mapped = !!ai && pages.every((p) => p.coverage === 'covered' || p.tests.length === 0 || p.source === 'ai');
     if (mapped) {
       notFound = deriveNotFound(requirements, pages, binding, input.roles ?? []);
-      const named = requirements.filter((r) => r.name?.trim()).length;
+      const named = documentedUnits(requirements).filter((r) => r.name?.trim()).length;
       documented = documentedItems(named, reachedRequirementIds(pages).size);
     } else {
-      notes.push('The documents could not be matched to the app because fixed rules planned some pages, so nothing is listed as not found.');
+      // Documents with User Flows, route rows or Negative specs are mapped by the spec rules (spec-plan.ts).
+      if (!requirements.some((r) => r.kind && ['journey', 'route', 'negative'].includes(r.kind)))
+        notes.push('The documents could not be matched to the app because fixed rules planned some pages, so nothing is listed as not found.');
     }
     if (bound.failed)
       notes.push('The AI could not work out which roles the documents are for, so every role is allowed and no Denial items were added.');

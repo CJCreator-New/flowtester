@@ -123,6 +123,9 @@ export interface RoleCredential {
   password?: string;
   token?: string;
   loginPath?: string;
+  usernameSelector?: string;
+  passwordSelector?: string;
+  submitSelector?: string;
 }
 
 export interface ProductProfile {

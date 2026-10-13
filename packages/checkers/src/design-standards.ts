@@ -53,7 +53,7 @@ export class DesignStandardsChecker {
     }
   ): Promise<Finding[]> {
     const findings: Finding[] = [];
-    if (!tokens || (!tokens.colors && !tokens.borderRadius)) {
+    if (!tokens || (!tokens.colors && !tokens.borderRadius && !tokens.fontSize)) {
       return findings;
     }
 
@@ -119,16 +119,62 @@ export class DesignStandardsChecker {
               });
             }
           }
+
+          // 4. Font size & typography tokens (FR-6.6)
+          if (toks.fontSize) {
+            const fontTokenValues = Object.values(toks.fontSize).map((v) => v.trim().toLowerCase());
+            if (toks.fontSize.base && (testId.includes('body') || testId.includes('text') || testId.includes('desc'))) {
+              const fs = computed.fontSize;
+              if (fs && fs.toLowerCase() !== toks.fontSize.base.toLowerCase()) {
+                results.push({
+                  testId,
+                  selector: `[data-testid="${el.getAttribute('data-testid')}"]`,
+                  styleProp: 'font-size',
+                  actual: fs,
+                  expected: toks.fontSize.base,
+                });
+              }
+            } else if ((toks.fontSize.lg || toks.fontSize.xl) && (testId.includes('heading') || testId.includes('title'))) {
+              const expectedFs = (toks.fontSize.lg || toks.fontSize.xl)!.toLowerCase();
+              const fs = computed.fontSize;
+              if (fs && fs.toLowerCase() !== expectedFs) {
+                results.push({
+                  testId,
+                  selector: `[data-testid="${el.getAttribute('data-testid')}"]`,
+                  styleProp: 'font-size',
+                  actual: fs,
+                  expected: expectedFs,
+                });
+              }
+            } else {
+              const fs = computed.fontSize;
+              if (fs && fontTokenValues.length > 0 && !fontTokenValues.includes(fs.toLowerCase())) {
+                results.push({
+                  testId,
+                  selector: `[data-testid="${el.getAttribute('data-testid')}"]`,
+                  styleProp: 'font-size',
+                  actual: fs,
+                  expected: fontTokenValues.join(', '),
+                });
+              }
+            }
+          }
         }
 
         return results;
       }, tokens);
 
       for (const m of mismatches) {
-        const normActual = normalizeColor(m.actual);
-        const normExpected = normalizeColor(m.expected);
+        let isMismatch = false;
+        if (m.styleProp === 'background-color') {
+          const normActual = normalizeColor(m.actual);
+          const normExpected = normalizeColor(m.expected);
+          isMismatch = normActual !== normExpected;
+        } else {
+          isMismatch = m.actual.toLowerCase() !== m.expected.toLowerCase();
+        }
 
-        if (normActual !== normExpected) {
+        if (isMismatch) {
           findings.push({
             id: `F-DESIGN-${context.testCaseId || 'TOK'}-${counter++}`,
             testCaseId: context.testCaseId,

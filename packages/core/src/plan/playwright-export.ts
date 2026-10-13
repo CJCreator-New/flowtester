@@ -1,3 +1,4 @@
+import { CAPTURE_BASELINE_SOURCE, REFUSAL_RULE_SOURCE } from '@qa/checkers';
 import type { Breakpoint, ReviewPlan, TestCase, TestCaseExpectations, TestCaseStep } from '@qa/types';
 import { SafetyFilter } from '../discovery/safety-filter.js';
 import { needsTestCopy } from '../live-site.js';
@@ -25,6 +26,7 @@ export const EXPORT_LIMITS: string[] = [
   'Clean Flow Retry, Entity Namespacing, per-step retries and budgets are not reproduced.',
   'Each test runs at one screen size; steps for another size are dropped, and menu steps only appear through their size.',
   'Expectations that are an AI guess, or that need judging (error messages, success messages, moving away from a page, API calls), are written as comments, not checked.',
+  'expectRefused is a generic rule: a toast with no role and no error markup counts as accepted. Tighten it, or add a message from a Source.',
   'URL expectations support the * wildcard only, not regular expressions.',
   'No screenshots, evidence or visual baselines.',
 ];
@@ -250,12 +252,30 @@ function emitTest(plan: ReviewPlan, tc: TestCase, title: string): Emitted {
 
   const body: string[] = [];
   let fixme: string | undefined;
+  let baselined = false;
   const start = whereIs(plan.targetUrl, tc.startPage || '/');
   if (start.kind === 'request') fixme = 'The start page is on another site, which the export does not open.';
   else body.push(`const response = await page.goto(${q(start.path)});`);
   if (!fixme) {
     try {
-      for (const s of steps) body.push(...mapStep(s, tc.role, plan.targetUrl));
+      const refusal = tc.expectations?.refusal;
+      const asserted = !!refusal && tc.expectations?.origin !== 'ai-guess';
+      for (const s of steps) {
+        if (asserted && !baselined && s.action === 'click' && s.selector && s.selector === refusal.submitSelector) {
+          body.push(`const before = await captureBaseline(page);`);
+          baselined = true;
+        }
+        body.push(...mapStep(s, tc.role, plan.targetUrl));
+      }
+      if (asserted) {
+        if (!baselined) body.push(`const before = await captureBaseline(page);`);
+        const opts: string[] = [];
+        if (refusal.message) opts.push(`message: ${q(refusal.message)}`);
+        if (refusal.probeOnly) opts.push(`probeOnly: true`);
+        body.push(`await expectRefused(page, before${opts.length ? `, { ${opts.join(', ')} }` : ''});`);
+      } else if (refusal) {
+        body.push(`// Not checked (AI guess): the form at ${comment(refusal.formPath)} refuses the value`);
+      }
     } catch (err) {
       if (!(err instanceof Unmappable)) throw err;
       fixme = err.message;
@@ -282,6 +302,41 @@ function emitTest(plan: ReviewPlan, tc: TestCase, title: string): Emitted {
       `});`,
     ],
   };
+}
+
+function rawConst(name: string, source: string): string {
+  if (source.includes('`') || source.includes('${')) throw new Error(`${name} cannot be embedded as a raw template`);
+  return 'const ' + name + ' = String.raw`' + source + '`;';
+}
+
+/** The refusal rule, embedded byte for byte from @qa/checkers so the export judges like the Check-up. */
+function refusalHelperLines(): string[] {
+  return [
+    `// The refusal rule (ADR 0024), copied from the Check-up. Generic: tighten it for your app.`,
+    rawConst('CAPTURE_BASELINE_SOURCE', CAPTURE_BASELINE_SOURCE),
+    rawConst('REFUSAL_RULE_SOURCE', REFUSAL_RULE_SOURCE),
+    ``,
+    `export interface Baseline { path: string; records: number; errorTexts: string[] }`,
+    `interface Seen { moved: boolean; newRecord: boolean; signals: string[]; errorText?: string; crashed: boolean }`,
+    ``,
+    `// Call right before the submit click.`,
+    `export async function captureBaseline(page: Page): Promise<Baseline> {`,
+    `  return (await page.evaluate('(' + CAPTURE_BASELINE_SOURCE + ')()')) as Baseline;`,
+    `}`,
+    ``,
+    `// Refused = the page did not move on, no new record appeared, and a field is invalid or an alert/error text shows.`,
+    `export async function expectRefused(page: Page, baseline: Baseline, opts: { message?: string; probeOnly?: boolean } = {}): Promise<void> {`,
+    `  await page.waitForLoadState('load');`,
+    `  const input = JSON.stringify({ baseline, message: opts.message, probeOnly: opts.probeOnly });`,
+    `  const seen = (await page.evaluate('(' + REFUSAL_RULE_SOURCE + ')(' + input + ')')) as Seen;`,
+    `  expect(seen.crashed, 'The page broke when the form was sent').toBe(false);`,
+    `  expect(seen.moved, 'The page moved on after the form was sent').toBe(false);`,
+    `  expect(seen.newRecord, 'A new record appeared').toBe(false);`,
+    `  expect(seen.signals.length, 'No invalid field, alert or error text appeared').toBeGreaterThan(0);`,
+    `  if (opts.message) expect((seen.errorText ?? '').toLowerCase()).toContain(opts.message.toLowerCase());`,
+    `}`,
+    ``,
+  ];
 }
 
 const HELPERS = [
@@ -312,6 +367,7 @@ const HELPERS = [
   `  expect(seen.some((s) => re.test(s)), 'Expected the page address to match ' + pattern + ' but it is ' + url.href).toBe(true);`,
   `}`,
   ``,
+  ...refusalHelperLines(),
   `// A link that leaves the site is only asked for its status, never opened. Broken = 404, 410 or a server error.`,
   `export async function expectLinkOk(request: APIRequestContext, url: string): Promise<void> {`,
   `  const res = await request.get(url, { maxRedirects: 10, failOnStatusCode: false });`,
@@ -483,7 +539,7 @@ export function planToPlaywrightProject(plan: ReviewPlan): ExportFile[] {
     for (const [group, tests] of groups) {
       const content = [
         `import { test, expect } from '../../support/test';`,
-        `import { sel, expectUrl, expectLinkOk } from '../../support/helpers';`,
+        `import { sel, expectUrl, expectLinkOk, captureBaseline, expectRefused } from '../../support/helpers';`,
         ``,
         ...tests.flatMap((t) => [...t, ``]),
       ].join('\n');

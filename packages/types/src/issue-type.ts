@@ -3,6 +3,7 @@
  * A finding belongs to exactly one type; the order here is the order the document lists them.
  */
 import type { Finding } from './evidence-finding.js';
+import type { PlanIntent } from './plan.js';
 
 export const ISSUE_TYPES = [
   'UI/UX',
@@ -19,13 +20,13 @@ export type IssueType = (typeof ISSUE_TYPES)[number];
 
 type IssueTypeInput = Pick<Finding, 'checker'> &
   Partial<Pick<Finding, 'needsJudgement' | 'aspect' | 'categoryTag' | 'issueKey' | 'title'>> & {
-    kind?: 'denial';
+    intent?: PlanIntent;
   };
 
 /** Which issue type a finding is listed under. Judgement items and spec mismatches are Logical flow. */
 export function issueTypeOf(f: IssueTypeInput): IssueType {
   if (f.needsJudgement) return 'Logical flow';
-  if (f.kind === 'denial') return 'Access';
+  if (f.intent === 'denied') return 'Access';
   if (f.categoryTag) return 'Other';
   switch (f.checker) {
     case 'spec-conformance':

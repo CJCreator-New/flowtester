@@ -14,8 +14,11 @@ export type PlanItemSource = 'ai' | 'fallback' | 'person';
  */
 export type FallbackReason = 'budget' | 'truncated' | 'no-answer' | 'unusable' | 'no-ai' | 'stopped' | 'cap';
 
-/** Kinds of Plan Item beyond the ordinary test: a Denial Plan Item asserts a control is hidden from a role. */
-export type PlanItemKind = 'denial';
+/**
+ * What a journey or form Plan Item checks (ADR 0024): Works (the intended use), Rejects (bad input is
+ * refused), Limits (extremes are handled), Denied (a role cannot do it).
+ */
+export type PlanIntent = 'works' | 'rejects' | 'limits' | 'denied';
 
 /** Where a Plan Item was planned: while the Spider was still crawling, or after the crawl finished. */
 export type PlanItemOrigin = 'while-crawling' | 'after-crawl';
@@ -31,6 +34,8 @@ export interface DocSource {
   requirementId?: string;
 }
 
+export type SpecGapCode = 'SPEC_GAP_NO_PAGE' | 'SPEC_GAP_NO_ELEMENT' | 'SPEC_GAP_GUARDED';
+
 /** A documented item with no matching page or control in the app: reported as "Not found in app", not a failure. */
 export interface PlanNotFound {
   id: string;
@@ -39,6 +44,8 @@ export interface PlanNotFound {
   roles: string[];
   /** Plain words: what was searched for and not found. */
   reason: string;
+  code?: SpecGapCode;
+  override?: boolean;
   skipped?: boolean;
 }
 
@@ -116,8 +123,12 @@ export interface PlanPageTest {
   needsTestCopy?: boolean;
   /** The document section this item came from. */
   docSource?: DocSource;
-  /** 'denial': asserts the control is not visible to this role. */
-  kind?: PlanItemKind;
+  /** 'denied': asserts the control is not visible to this role. Plans saved before Intent used the old Denial kind; see intentOf. */
+  intent?: PlanIntent;
+  /** Why the item is switched off, when it is. */
+  offReason?: string;
+  /** Steps that open the form first (tab, drawer, dialog); put before `steps` when the test is built. */
+  openingSteps?: TestCaseStep[];
   /** Roles the AI proposed for the Source; the person confirms them in Plan Review. */
   proposedRoles?: string[];
   rolesConfirmed?: boolean;
@@ -272,7 +283,14 @@ export interface PlanSummary {
   lines: Array<{ text: string; itemIds: string[] }>;
   /** About how many minutes the tests take. */
   minutes?: number;
+  /** Plan Items and Tests per Intent. */
+  intents?: Record<PlanIntent, { items: number; tests: number }>;
+  /** Tests switched off because the Plan went over the Test cap. */
+  overCap?: number;
 }
+
+/** Most Tests a Plan runs before Rejects and Limits are trimmed (the Test cap). */
+export const DEFAULT_TEST_CAP = 2000;
 
 /** Another host the site links to: listed, its links checked for being broken, crawled if ticked. */
 export interface PlanOtherHost {
@@ -293,4 +311,6 @@ export interface DraftPlan {
   /** Documented items with no page or control in the app. */
   notFound?: PlanNotFound[];
   documentedItems?: { reached: number; total: number };
+  /** Intents the person switched off in Plan Review; all are on when absent. */
+  intentsOff?: PlanIntent[];
 }

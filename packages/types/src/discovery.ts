@@ -1,5 +1,5 @@
 import type { TestCaseStep, RuleOrigin, TestCaseExpectations, ValidationRule } from './test-case.js';
-import type { FallbackReason, PageLink, NarrowMenu, DraftPlan } from './plan.js';
+import type { FallbackReason, PageLink, NarrowMenu, DraftPlan, DocSource, PlanIntent } from './plan.js';
 import type { SignInFailureReason } from './signin.js';
 
 export interface SensitiveAction {
@@ -83,10 +83,20 @@ export interface PageInventoryItem {
   narrowMenus?: NarrowMenu[];
   /** A fingerprint of the page's controls: the same on the next run when the page hasn't changed. */
   contentKey?: string;
+  /** Facts about a list-and-edit page, from its structure only (never from submitting anything). */
+  crud?: {
+    list?: boolean;
+    add?: string;
+    editFromRow?: boolean;
+    /** True: asking to delete shows a confirm. False: none appeared. Absent: not probed. */
+    deleteConfirm?: boolean;
+  };
 }
 
 export interface DiscoveredFlow {
   id: string;
+  /** What the journey checks (ADR 0024). Absent means Works. */
+  intent?: PlanIntent;
   name: string;
   role: string;
   description: string;
@@ -115,6 +125,8 @@ export interface DiscoveredFlow {
   userRules?: Array<{ text: string; origin: RuleOrigin; checkable: boolean; check?: TestCaseExpectations }>;
   /** Not in this site's last reviewed run, or its steps changed since. */
   isNew?: boolean;
+  /** The Product Context document, section and requirement this journey came from (ADR 0020). */
+  docSource?: DocSource;
 }
 
 export interface DiscoveryDraft {
@@ -155,8 +167,21 @@ export interface DiscoveryDraft {
   /** Form fields and submit buttons the crawler found. Plan steps may use their selectors too. */
   forms?: Array<{
     urlPath: string;
-    inputs: Array<{ selector: string }>;
+    inputs: Array<{
+      selector: string;
+      /** Facts read from the field's attributes; absent when the page does not set them. */
+      type?: string;
+      label?: string;
+      required?: boolean;
+      pattern?: string;
+      min?: string;
+      max?: string;
+      minLength?: number;
+      maxLength?: number;
+    }>;
     submitButtonSelector?: string;
+    /** Steps that open the form first (a tab, drawer or dialog); recorded by the Spider. */
+    opening?: TestCaseStep[];
     /** How the form is sent: GET only fetches a page (a search); anything else sends data. */
     method?: string;
   }>;

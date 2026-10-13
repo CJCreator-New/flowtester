@@ -1,13 +1,15 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { BrowserContext } from 'playwright';
-import type { PageInventoryItem, SensitiveAction, AmbiguityQuestion, ElementInventoryItem, PageLink } from '@qa/types';
+import type { BrowserContext, Page } from 'playwright';
+import type { TestCaseStep, PageInventoryItem, SensitiveAction, AmbiguityQuestion, ElementInventoryItem, PageLink } from '@qa/types';
 import { SafetyFilter } from './safety-filter.js';
 import { collectElementInventory, TEST_ID_ATTRIBUTES } from './element-inventory.js';
 import { redactUrl } from '../redact.js';
 import { isSameSite } from '../same-site.js';
 import { readLayoutFingerprint } from '../competitive/safe-crawler.js';
 import type { RobotsPolicy } from '../competitive/robots.js';
+import { exploreInteractiveStates, type ReadForm } from './interactive-states.js';
+import { inferCrud, readCrudStructure, probeDeleteConfirm } from './crud-facts.js';
 
 export interface FormInputInfo {
   /** The HTML name attribute (may be empty). */
@@ -18,6 +20,11 @@ export interface FormInputInfo {
   selector: string;
   defaultValue?: string;
   required?: boolean;
+  pattern?: string;
+  min?: string;
+  max?: string;
+  minLength?: number;
+  maxLength?: number;
 }
 
 export interface DiscoveredFormInfo {
@@ -27,6 +34,8 @@ export interface DiscoveredFormInfo {
   urlPath: string;
   inputs: FormInputInfo[];
   submitButtonSelector?: string;
+  /** Steps that open the form first (a tab, drawer or dialog), recorded while exploring. */
+  opening?: TestCaseStep[];
 }
 
 export interface SpiderResult {
@@ -54,8 +63,12 @@ export interface CrawlOptions {
   exploreClicks?: boolean;
   /** Pages robots.txt asks crawlers to leave alone are skipped (public sites). */
   robots?: RobotsPolicy;
-  /** Minimum pause between page loads, to go easy on a site we don't own. Default 0. */
+  /** Minimum pause between page loads, to go easy on a site we don't own. Default 100ms. */
   pageDelayMs?: number;
+  /** Number of concurrent page evaluations (1 to 5, default 2). */
+  concurrency?: number;
+  /** Custom HTTP headers sent with every request (e.g. X-QA-Bypass-Token). */
+  customHeaders?: Record<string, string>;
   /** Folder for a small screenshot of each page, shown on the plan map. None when absent. */
   screenshotDir?: string;
   /** Start of each screenshot's file name, so crawls as different roles don't overwrite each other. */
@@ -124,6 +137,91 @@ export function contentKeyOf(elements: ElementInventoryItem[], formCount: number
   return hash.toString(36);
 }
 
+/** Every form on the page as it is now, with whether a person could see it. */
+export async function readPageForms(page: Page): Promise<ReadForm[]> {
+  return page.$$eval(
+      'form',
+      (formEls, testIdAttributes) =>
+        formEls.map((f) => {
+          const action = f.getAttribute('action') || '';
+          const method = (f.getAttribute('method') || 'GET').toUpperCase();
+          const clean = (s: string | null | undefined) => (s || '').replace(/\s+/g, ' ').trim();
+          const testIdSelector = (el: Element) => {
+            const attr = testIdAttributes.find((a) => el.hasAttribute(a));
+            return attr ? `[${attr}="${el.getAttribute(attr)}"]` : null;
+          };
+          const inputs = Array.from(f.querySelectorAll('input:not([type="hidden"]), select, textarea')).map(
+            (inp) => {
+              const name = inp.getAttribute('name') || '';
+              const type = inp.getAttribute('type') || inp.tagName.toLowerCase();
+              const id = inp.getAttribute('id');
+              const ariaLabel = clean(inp.getAttribute('aria-label'));
+              const placeholder = clean(inp.getAttribute('placeholder'));
+              const selector =
+                testIdSelector(inp) ||
+                (id
+                  ? `#${id}`
+                  : name
+                    ? `[name="${name}"]`
+                    : ariaLabel
+                      ? `[aria-label="${ariaLabel}"]`
+                      : placeholder
+                        ? `[placeholder="${placeholder}"]`
+                        : `${inp.tagName.toLowerCase()}[type="${type}"]`);
+              const required = inp.hasAttribute('required');
+              const forLabel = id ? document.querySelector(`label[for="${id}"]`) : null;
+              const wrapping = inp.closest('label')?.cloneNode(true) as Element | undefined;
+              wrapping?.querySelectorAll('input, select, textarea').forEach((c) => c.remove());
+              // What a person would call the field: its label, then placeholder, then id, then name.
+              const label =
+                clean(inp.getAttribute('aria-label')) ||
+                clean(forLabel?.textContent) ||
+                clean(wrapping?.textContent) ||
+                clean(inp.getAttribute('placeholder')) ||
+                clean(id) ||
+                name;
+              const attr = (n: string) => inp.getAttribute(n) ?? undefined;
+              const num = (n: string) => {
+                const v = inp.getAttribute(n);
+                return v !== null && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined;
+              };
+              return {
+                name,
+                label,
+                type,
+                selector,
+                required,
+                pattern: attr('pattern'),
+                min: attr('min'),
+                max: attr('max'),
+                minLength: num('minlength'),
+                maxLength: num('maxlength'),
+              };
+            }
+          );
+
+          const submitBtn = f.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+          let submitSelector: string | undefined;
+          if (submitBtn) {
+            const sTestId = testIdSelector(submitBtn);
+            const sId = submitBtn.getAttribute('id');
+            submitSelector = sTestId
+              ? sTestId
+              : sId
+                ? `#${sId}`
+                : submitBtn.tagName.toLowerCase() === 'input'
+                  ? 'input[type="submit"]'
+                  : 'button[type="submit"]';
+          }
+
+          // checkVisibility also sees through a closed <details>, which keeps its content out of the layout.
+          const visible = f.getClientRects().length > 0 && f.checkVisibility({ checkVisibilityCSS: true });
+          return { action, method, inputs, submitButtonSelector: submitSelector, visible };
+        }),
+      TEST_ID_ATTRIBUTES
+    );
+}
+
 export class DeterministicSpider {
   private safetyFilter: SafetyFilter;
   private maxPages: number;
@@ -134,6 +232,13 @@ export class DeterministicSpider {
   }
 
   async crawl(context: BrowserContext, targetUrl: string, options: CrawlOptions = {}): Promise<SpiderResult> {
+    const concurrency = Math.max(1, Math.min(5, options.concurrency ?? 2));
+    const pageDelayMs = options.pageDelayMs !== undefined ? options.pageDelayMs : 100;
+
+    if (options.customHeaders && Object.keys(options.customHeaders).length > 0) {
+      await context.setExtraHTTPHeaders(options.customHeaders).catch(() => {});
+    }
+
     const baseUrlObj = new URL(targetUrl);
     // The site is where the start address lands: example.com that redirects to www.example.com is
     // crawled as www.example.com. Until a page has opened, it's the address as typed.
@@ -147,11 +252,23 @@ export class DeterministicSpider {
     const visited = new Set<string>();
     const queued = new Set<string>();
     const queue: string[] = [];
+
+    let activeWorkers = 0;
+    let idleResolvers: (() => void)[] = [];
+    const notifyWork = () => {
+      const resolvers = idleResolvers;
+      idleResolvers = [];
+      for (const r of resolvers) r();
+    };
+    const onAbort = () => notifyWork();
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+
     const enqueue = (pathAndSearch: string) => {
       const key = new URL(pathAndSearch, targetUrl).pathname;
       if (visited.has(key) || queued.has(key)) return;
       queued.add(key);
       queue.push(pathAndSearch);
+      notifyWork();
     };
     for (const start of [...(options.startPaths || []), baseUrlObj.pathname + baseUrlObj.search || '/']) enqueue(start);
 
@@ -166,28 +283,51 @@ export class DeterministicSpider {
     const redirects = new Map<string, string>();
     let questionCounter = 1;
     let clickBudget = MAX_EXPLORATION_CLICKS;
-    let lastLoadAt = 0;
+    let screenshotIndex = 0;
     if (options.screenshotDir) await fs.mkdir(options.screenshotDir, { recursive: true });
 
-    const page = await context.newPage();
+    const waitForWork = () =>
+      new Promise<void>((resolve) => {
+        if (options.signal?.aborted) return resolve();
+        let done = false;
+        const timer = setTimeout(() => {
+          if (!done) {
+            done = true;
+            idleResolvers = idleResolvers.filter((r) => r !== onWake);
+            resolve();
+          }
+        }, 50);
+        const onWake = () => {
+          if (!done) {
+            done = true;
+            clearTimeout(timer);
+            resolve();
+          }
+        };
+        idleResolvers.push(onWake);
+      });
 
-    while (queue.length > 0 && visited.size < this.maxPages && !options.signal?.aborted) {
-      const requested = queue.shift()!;
-      const requestedPath = new URL(requested, targetUrl).pathname;
-      if (visited.has(requestedPath)) continue;
-      visited.add(requestedPath);
-
+    const evaluatePage = async (
+      page: Page,
+      requested: string,
+      requestedPath: string,
+      getLastLoadAt: () => number,
+      setLastLoadAt: (t: number) => void
+    ) => {
       const fullUrl = new URL(requested, site).toString();
       if (options.robots && !options.robots.isAllowed(requested)) {
         skippedByRobots.push(requestedPath);
         skipped.push({ urlPath: requestedPath, why: 'robots' });
-        continue;
+        return;
       }
 
       try {
-        // Go easy on sites we don't own: a pause between page loads.
-        if (options.pageDelayMs) await page.waitForTimeout(Math.max(0, lastLoadAt + options.pageDelayMs - Date.now()));
-        lastLoadAt = Date.now();
+        // Go easy on sites we don't own: a pause between page loads (default 100ms per FR-1.7).
+        if (pageDelayMs > 0) {
+          const waitMs = Math.max(0, getLastLoadAt() + pageDelayMs - Date.now());
+          if (waitMs > 0) await page.waitForTimeout(waitMs);
+        }
+        setLastLoadAt(Date.now());
         await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
         const landed = new URL(page.url());
         const hasSignInForm = (await page.locator('input[type="password"]').count()) > 0;
@@ -202,7 +342,7 @@ export class DeterministicSpider {
             redirects.set(requestedPath, landed.pathname);
             enqueue(landed.pathname + landed.search);
           }
-          continue;
+          return;
         }
         if (!landedOnce) {
           landedOnce = true;
@@ -211,12 +351,12 @@ export class DeterministicSpider {
         // Redirected off the site: not one of its pages.
         if (!onSite(landed)) {
           skipped.push({ urlPath: requestedPath, why: 'did-not-load' });
-          continue;
+          return;
         }
         // Redirected within the site: the page is recorded once, under the address it really has.
         if (landed.pathname !== requestedPath) {
           redirects.set(requestedPath, landed.pathname);
-          if (visited.has(landed.pathname)) continue;
+          if (visited.has(landed.pathname)) return;
           visited.add(landed.pathname);
         }
         const pageUrl = page.url();
@@ -258,69 +398,7 @@ export class DeterministicSpider {
         }
 
         // 3. Discover Forms
-        const pageForms = await page.$$eval(
-          'form',
-          (formEls, testIdAttributes) =>
-            formEls.map((f) => {
-              const action = f.getAttribute('action') || '';
-              const method = (f.getAttribute('method') || 'GET').toUpperCase();
-              const clean = (s: string | null | undefined) => (s || '').replace(/\s+/g, ' ').trim();
-              const testIdSelector = (el: Element) => {
-                const attr = testIdAttributes.find((a) => el.hasAttribute(a));
-                return attr ? `[${attr}="${el.getAttribute(attr)}"]` : null;
-              };
-              const inputs = Array.from(f.querySelectorAll('input:not([type="hidden"]), select, textarea')).map(
-                (inp) => {
-                  const name = inp.getAttribute('name') || '';
-                  const type = inp.getAttribute('type') || inp.tagName.toLowerCase();
-                  const id = inp.getAttribute('id');
-                  const ariaLabel = clean(inp.getAttribute('aria-label'));
-                  const placeholder = clean(inp.getAttribute('placeholder'));
-                  const selector =
-                    testIdSelector(inp) ||
-                    (id
-                      ? `#${id}`
-                      : name
-                        ? `[name="${name}"]`
-                        : ariaLabel
-                          ? `[aria-label="${ariaLabel}"]`
-                          : placeholder
-                            ? `[placeholder="${placeholder}"]`
-                            : `${inp.tagName.toLowerCase()}[type="${type}"]`);
-                  const required = inp.hasAttribute('required');
-                  const forLabel = id ? document.querySelector(`label[for="${id}"]`) : null;
-                  const wrapping = inp.closest('label')?.cloneNode(true) as Element | undefined;
-                  wrapping?.querySelectorAll('input, select, textarea').forEach((c) => c.remove());
-                  // What a person would call the field: its label, then placeholder, then id, then name.
-                  const label =
-                    clean(inp.getAttribute('aria-label')) ||
-                    clean(forLabel?.textContent) ||
-                    clean(wrapping?.textContent) ||
-                    clean(inp.getAttribute('placeholder')) ||
-                    clean(id) ||
-                    name;
-                  return { name, label, type, selector, required };
-                }
-              );
-
-              const submitBtn = f.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
-              let submitSelector: string | undefined;
-              if (submitBtn) {
-                const sTestId = testIdSelector(submitBtn);
-                const sId = submitBtn.getAttribute('id');
-                submitSelector = sTestId
-                  ? sTestId
-                  : sId
-                    ? `#${sId}`
-                    : submitBtn.tagName.toLowerCase() === 'input'
-                      ? 'input[type="submit"]'
-                      : 'button[type="submit"]';
-              }
-
-              return { action, method, inputs, submitButtonSelector: submitSelector };
-            }),
-          TEST_ID_ATTRIBUTES
-        );
+        const pageForms = (await readPageForms(page)).map(({ visible: _v, ...f }) => f);
 
         for (const f of pageForms) {
           forms.push({
@@ -337,16 +415,17 @@ export class DeterministicSpider {
         const fingerprint = await readLayoutFingerprint(page);
         let screenshotPath: string | undefined;
         if (options.screenshotDir) {
+          screenshotIndex++;
           screenshotPath = path.join(
             options.screenshotDir,
-            `${options.screenshotPrefix || 'page'}-${pages.length + 1}.jpg`
+            `${options.screenshotPrefix || 'page'}-${screenshotIndex}.jpg`
           );
           await page
             .screenshot({ path: screenshotPath, type: 'jpeg', quality: 55 })
             .catch(() => (screenshotPath = undefined));
         }
 
-        pages.push({
+        const pageItem: PageInventoryItem = {
           urlPath: currentPath,
           title,
           interactiveElementsCount: elements.length,
@@ -357,8 +436,9 @@ export class DeterministicSpider {
           screenshotPath,
           links,
           contentKey: contentKeyOf(elements, pageForms.length),
-        });
-        options.onPage?.(pages[pages.length - 1], pages.length, forms.slice(forms.length - pageForms.length));
+        };
+        pages.push(pageItem);
+        options.onPage?.(pageItem, pages.length, forms.slice(forms.length - pageForms.length));
 
         // 4. Single-page apps navigate by script: try the controls that look like navigation.
         if (exploreClicks && clickBudget > 0) {
@@ -373,9 +453,11 @@ export class DeterministicSpider {
             if (clickBudget-- <= 0) break;
             try {
               if (page.url() !== pageUrl) {
-                if (options.pageDelayMs)
-                  await page.waitForTimeout(Math.max(0, lastLoadAt + options.pageDelayMs - Date.now()));
-                lastLoadAt = Date.now();
+                if (pageDelayMs > 0) {
+                  const waitMs = Math.max(0, getLastLoadAt() + pageDelayMs - Date.now());
+                  if (waitMs > 0) await page.waitForTimeout(waitMs);
+                }
+                setLastLoadAt(Date.now());
                 await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
               }
               await page.locator(el.selector).first().click({ timeout: 3000 });
@@ -399,13 +481,104 @@ export class DeterministicSpider {
             }
           }
         }
+
+        // 5. Tabs, accordions, drawers and dialogs hide forms; list pages show how they are managed.
+        // Guarded (ADR 0025): nothing is submitted, changing requests are aborted, dialogs dismissed.
+        if (exploreClicks && clickBudget > 0 && onSite(landed)) {
+          const reload = async () => {
+            if (pageDelayMs > 0) {
+              const waitMs = Math.max(0, getLastLoadAt() + pageDelayMs - Date.now());
+              if (waitMs > 0) await page.waitForTimeout(waitMs);
+            }
+            setLastLoadAt(Date.now());
+            await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+          };
+          try {
+            clickBudget -= await exploreInteractiveStates({
+              page,
+              pageUrl,
+              currentPath,
+              elements,
+              isSafe: (el) => this.isSafeOpener(el),
+              readForms: readPageForms,
+              allForms: forms,
+              reload,
+              budget: clickBudget,
+            });
+            if (page.url() !== pageUrl) await reload();
+            const structure = await readCrudStructure(page);
+            const crud = structure && inferCrud(structure);
+            if (crud) {
+              pageItem.crud = crud;
+              // Heavily guarded probe: only a plain per-row delete, only when the Safety Filter sees an
+              // ordinary deletion (a forbidden action keyword switches the probe off).
+              if (
+                structure.hasProbeTarget &&
+                clickBudget > 0 &&
+                this.safetyFilter.isSensitive('Delete', '')?.type === 'deletion'
+              ) {
+                clickBudget--;
+                const confirmed = await probeDeleteConfirm(page);
+                if (confirmed !== undefined) crud.deleteConfirm = confirmed;
+              }
+            }
+          } catch {
+            // Exploring states is a bonus; the page itself is already recorded.
+          }
+        }
       } catch {
         // Skip page on navigation failure
         skipped.push({ urlPath: requestedPath, why: 'did-not-load' });
       }
-    }
+    };
 
-    await page.close();
+    const runWorker = async () => {
+      let workerPage: Page | null = null;
+      try {
+        workerPage = await context.newPage();
+      } catch {
+        return;
+      }
+      let lastLoadAt = 0;
+      try {
+        while (!options.signal?.aborted && visited.size < this.maxPages) {
+          let requested: string | null = null;
+          let requestedPath = '';
+
+          while (queue.length > 0) {
+            const item = queue.shift()!;
+            const p = new URL(item, targetUrl).pathname;
+            if (!visited.has(p)) {
+              visited.add(p);
+              requested = item;
+              requestedPath = p;
+              break;
+            }
+          }
+
+          if (requested) {
+            activeWorkers++;
+            try {
+              await evaluatePage(workerPage, requested, requestedPath, () => lastLoadAt, (t) => { lastLoadAt = t; });
+            } finally {
+              activeWorkers--;
+              notifyWork();
+            }
+          } else {
+            if (activeWorkers === 0 || visited.size >= this.maxPages || options.signal?.aborted) {
+              break;
+            }
+            await waitForWork();
+          }
+        }
+      } finally {
+        await workerPage.close().catch(() => {});
+      }
+    };
+
+    const workers = Array.from({ length: concurrency }, () => runWorker());
+    await Promise.all(workers);
+    options.signal?.removeEventListener('abort', onAbort);
 
     // When the person stops the scan (abort), the queue left over is not listed as skipped on purpose:
     // 'page-limit' would be inaccurate, and the report carries a "you stopped the scan" note instead.
@@ -434,6 +607,13 @@ export class DeterministicSpider {
       skippedByRobots: skippedByRobots.length > 0 ? skippedByRobots : undefined,
       skipped: skipped.length > 0 ? skipped : undefined,
     };
+  }
+
+  /** Controls that may be opened to look for forms: not risky, not sensitive, not ending a session. */
+  private isSafeOpener(el: ElementInventoryItem): boolean {
+    if (!el.visible || !el.enabled || el.insideForm) return false;
+    if (RISKY_TO_CLICK.test(el.name) || SESSION_ENDING.test(el.name)) return false;
+    return !this.safetyFilter.isSensitive(el.name, el.selector);
   }
 
   /** Controls worth clicking to find script-driven pages: navigation-like, never risky. */

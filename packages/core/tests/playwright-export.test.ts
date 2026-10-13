@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import type { DiscoveryDraft, ReviewPlan, TestCase } from '@qa/types';
 import { planToPlaywrightProject, EXPORT_PLAYWRIGHT_RANGE } from '../src/plan/playwright-export.js';
 import { zipFiles, crc32 } from '../src/plan/zip.js';
+import { REFUSAL_RULE_SOURCE, CAPTURE_BASELINE_SOURCE } from '@qa/checkers';
 import { expandPlan } from '../src/plan/expand.js';
 
 const tc = (extra: Partial<TestCase> = {}): TestCase => ({
@@ -393,5 +394,85 @@ describe('playwright export', () => {
     expect(() => planToPlaywrightProject({ ...planOf([]), testCases: undefined })).toThrow(
       'The Plan has no tests to export'
     );
+  });
+  describe('Rejects tests (ADR 0024)', () => {
+    const rejects = (extra: Partial<TestCase> = {}): TestCase =>
+      tc({
+        id: 'TC-R1',
+        kind: 'page-test',
+        intent: 'rejects',
+        name: 'Sign up rejects an empty email',
+        startPage: '/signup',
+        steps: [
+          { action: 'fill', selector: '#email', value: '', name: 'Leave email empty' },
+          { action: 'fill', selector: '#pw', value: 'S3cret-sentinel!', name: 'Fill password' },
+          { action: 'click', selector: '#go', name: 'Press Sign up' },
+        ],
+        expectations: { refusal: { formPath: '/signup', submitSelector: '#go' } },
+        ...extra,
+      });
+
+    it('calls expectRefused after the submit, with a baseline taken right before it', () => {
+      const files = planToPlaywrightProject(planOf([rejects()]));
+      const spec = file(files, 'tests/visitor/page-tests.spec.ts');
+      const before = spec.indexOf('const before = await captureBaseline(page);');
+      const click = spec.indexOf('click();', before);
+      const after = spec.indexOf('await expectRefused(page, before);');
+      expect(before).toBeGreaterThan(-1);
+      expect(click).toBeGreaterThan(before);
+      expect(after).toBeGreaterThan(click);
+      expect(spec).toContain('captureBaseline, expectRefused');
+    });
+
+    it('embeds the refusal rule source byte-identical', () => {
+      const helpers = file(planToPlaywrightProject(planOf([rejects()])), 'support/helpers.ts');
+      expect(helpers).toContain('const REFUSAL_RULE_SOURCE = String.raw`' + REFUSAL_RULE_SOURCE + '`;');
+      expect(helpers).toContain('const CAPTURE_BASELINE_SOURCE = String.raw`' + CAPTURE_BASELINE_SOURCE + '`;');
+    });
+
+    it('passes a Source message and probe-only through, writes no secret', () => {
+      const files = planToPlaywrightProject(
+        planOf([
+          rejects({
+            expectations: { refusal: { formPath: '/signup', submitSelector: '#go', message: 'Enter an email', probeOnly: true } },
+          }),
+        ])
+      );
+      const spec = file(files, 'tests/visitor/page-tests.spec.ts');
+      expect(spec).toContain('expectRefused(page, before, { message: "Enter an email", probeOnly: true })');
+      expect(all(files)).not.toContain('S3cret-sentinel!');
+    });
+
+    it('an AI-guess Limits test is a comment, not asserted', () => {
+      const files = planToPlaywrightProject(
+        planOf([
+          rejects({
+            intent: 'limits',
+            expectations: { origin: 'ai-guess', refusal: { formPath: '/signup', submitSelector: '#go' } },
+          }),
+        ])
+      );
+      const spec = file(files, 'tests/visitor/page-tests.spec.ts');
+      expect(spec).not.toContain('expectRefused(page');
+      expect(spec).toContain('// Not checked (AI guess)');
+    });
+
+    it('replays opening steps before the fill steps and notes the generic rule in the limits', () => {
+      const files = planToPlaywrightProject(
+        planOf([
+          rejects({
+            steps: [
+              { action: 'click', selector: '#tab-b', name: 'Open tab B', opening: true },
+              { action: 'fill', selector: '#email', value: 'x', name: 'Fill email' },
+              { action: 'click', selector: '#go', name: 'Press Sign up' },
+            ],
+          }),
+        ])
+      );
+      const spec = file(files, 'tests/visitor/page-tests.spec.ts');
+      expect(spec.indexOf('"#tab-b"')).toBeGreaterThan(-1);
+      expect(spec.indexOf('"#tab-b"')).toBeLessThan(spec.indexOf('"#email"'));
+      expect(file(files, 'README.md')).toContain('expectRefused is a generic rule');
+    });
   });
 });

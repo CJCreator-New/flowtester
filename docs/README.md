@@ -8,6 +8,7 @@ Read in this order when you are new to the project (people and Claude Code alike
 | [`../CONTEXT.md`](../CONTEXT.md)                   | The domain glossary. Use these terms exactly, in code, UI text and docs                |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md)               | Packages, how a check-up flows through them, where state lives                         |
 | [`adr/`](adr/)                                     | Why the big decisions were made. Read the relevant one before changing behavior        |
+| [`adr/0023-...`](adr/0023-word-in-scope-and-structured-spec-parsing.md) | Latest ADR: Word Product Context, structured parsing, Plan Items from documents with no AI key |
 | [`TESTING.md`](TESTING.md)                         | Test layout, what to run when, how to add a test                                       |
 | [`CONFIGURATION.md`](CONFIGURATION.md)             | Every environment variable, port and data folder                                       |
 | [`LANDING_MEASUREMENT.md`](LANDING_MEASUREMENT.md) | The optional landing counter: events, what is sent, how to read it, how to turn it off |
@@ -22,6 +23,7 @@ Read in this order when you are new to the project (people and Claude Code alike
 
 Product and planning documents that already exist:
 
+- [`PRD.md`](PRD.md): Product Requirements Document (baseline requirements, personas, features, architecture, and roadmap)
 - [`PRODUCT_GUIDE.md`](PRODUCT_GUIDE.md): full product specification
 - [`E2E_PLATFORM_IMPLEMENTATION_PLAN.md`](E2E_PLATFORM_IMPLEMENTATION_PLAN.md) and [`research/e2e-platform-roadmap.md`](research/e2e-platform-roadmap.md): the end-to-end testing expansion
 - [`../URL_FIRST_IMPLEMENTATION_PLAN.md`](../URL_FIRST_IMPLEMENTATION_PLAN.md), [`../UX_IMPLEMENTATION_PLAN.md`](../UX_IMPLEMENTATION_PLAN.md), [`../PRODUCT_REVIEW.md`](../PRODUCT_REVIEW.md)

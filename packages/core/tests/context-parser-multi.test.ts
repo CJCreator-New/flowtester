@@ -29,15 +29,27 @@ describe('ContextParser.parseDocuments', () => {
   });
 });
 
-describe('isSupportedContextName', () => {
-  it('accepts md, markdown, txt', () => {
-    for (const n of ['a.md', 'B.MD', 'x.markdown', 'notes.txt']) expect(isSupportedContextName(n)).toEqual({ ok: true });
+describe('description', () => {
+  it('is the first prose line, or empty (parseDocuments and parseContent)', () => {
+    const text = '# A\n- a rule\nProse here\n# B\n- only rule';
+    const multi = new ContextParser().parseDocuments([{ name: 'x.md', text }]).requirements;
+    expect(multi.map((r) => r.description)).toEqual(['Prose here', '']);
+    const single = new ContextParser().parseContent(text).requirements;
+    expect(single.map((r) => r.description)).toEqual(['Prose here', '']);
   });
-  it('rejects pdf/docx/doc with a plain message', () => {
-    for (const n of ['a.pdf', 'b.docx', 'c.DOC']) {
+});
+
+describe('isSupportedContextName', () => {
+  it('accepts md, markdown, txt, docx', () => {
+    for (const n of ['a.md', 'B.MD', 'x.markdown', 'notes.txt', 'spec.docx', 'S.DOCX']) {
+      expect(isSupportedContextName(n)).toEqual({ ok: true });
+    }
+  });
+  it('rejects pdf and doc with a plain message', () => {
+    for (const n of ['a.pdf', 'c.DOC']) {
       expect(isSupportedContextName(n)).toEqual({
         ok: false,
-        message: 'PDF and Word files are not supported yet. Save the text as .md or .txt.',
+        message: 'PDF and old .doc files are not supported. Save as .docx, .md or .txt.',
       });
     }
   });

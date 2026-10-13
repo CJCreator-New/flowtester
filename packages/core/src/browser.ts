@@ -1,7 +1,24 @@
-import { chromium, type Browser, type BrowserContext, type Page, type Locator } from 'playwright';
+import { chromium, webkit, firefox, type Browser, type BrowserContext, type Page, type Locator } from 'playwright';
 import type { Breakpoint, StorageStateData } from '@qa/types';
 
+export type BrowserEngine = 'chromium' | 'webkit' | 'firefox';
+
+/** PRD FR-1.4 multi-browser engine display label. */
+export function browserEngineLabel(engine: BrowserEngine): string {
+  switch (engine) {
+    case 'chromium':
+      return 'Chrome/Chromium (primary)';
+    case 'webkit':
+      return 'WebKit (Playwright build)';
+    case 'firefox':
+      return 'Firefox (Playwright build)';
+    default:
+      return engine;
+  }
+}
+
 export interface BrowserOptions {
+  engine?: BrowserEngine;
   headless?: boolean;
   viewport?: { width: number; height: number };
   tunnelAuth?: string;
@@ -10,6 +27,10 @@ export interface BrowserOptions {
   storageState?: string | StorageStateData;
   /** When set, Playwright records a .webm of every page in the context into this directory. */
   recordVideoDir?: string;
+  /** Custom HTTP headers sent with every request (e.g. X-QA-Bypass-Token). */
+  customHeaders?: Record<string, string>;
+  /** Custom user-agent string. */
+  userAgent?: string;
 }
 
 /**
@@ -58,46 +79,65 @@ export const BREAKPOINT_VIEWPORTS: Record<Breakpoint, { width: number; height: n
 
 export class BrowserManager {
   private browser: Browser | null = null;
+  private browsers = new Map<BrowserEngine, Browser>();
 
-  async launch(headless = true): Promise<Browser> {
-    // A browser that crashed (low memory, a renderer fault) is replaced, not reused.
-    if (this.browser && !this.browser.isConnected()) {
-      await this.browser.close().catch(() => {});
-      this.browser = null;
+  async launch(engineOrHeadless: BrowserEngine | boolean = 'chromium', headless = true): Promise<Browser> {
+    const engine: BrowserEngine = typeof engineOrHeadless === 'string' ? engineOrHeadless : 'chromium';
+    const isHeadless = typeof engineOrHeadless === 'boolean' ? engineOrHeadless : headless;
+
+    const existing = this.browsers.get(engine);
+    if (existing && !existing.isConnected()) {
+      await existing.close().catch(() => {});
+      this.browsers.delete(engine);
+      if (engine === 'chromium') this.browser = null;
     }
-    if (!this.browser) {
+
+    let b = this.browsers.get(engine);
+    if (!b) {
+      const launcher = engine === 'webkit' ? webkit : engine === 'firefox' ? firefox : chromium;
       const pinned = Object.entries(browserPolicy?.pinned ?? {}).map(
         ([host, ip]) => `MAP ${host} ${ip.includes(':') ? `[${ip.replace(/^\[|\]$/g, '')}]` : ip}`
       );
-      this.browser = await chromium.launch({
-        headless,
-        // Small hosts have little memory: no GPU process or extensions to hold on to.
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
-          '--disable-extensions',
-          ...(pinned.length ? [`--host-resolver-rules=${pinned.join(', ')}`] : []),
-        ],
+      const args = engine === 'chromium'
+        ? [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-extensions',
+            ...(pinned.length ? [`--host-resolver-rules=${pinned.join(', ')}`] : []),
+          ]
+        : [];
+      b = await launcher.launch({
+        headless: isHeadless,
+        args,
       });
+      this.browsers.set(engine, b);
+      if (engine === 'chromium') {
+        this.browser = b;
+      }
     }
-    return this.browser;
+    return b;
   }
 
   async createContext(options: BrowserOptions = {}): Promise<BrowserContext> {
-    const browser = await this.launch(options.headless ?? true);
+    const engine = options.engine ?? 'chromium';
+    const browser = await this.launch(engine, options.headless ?? true);
 
     const extraHTTPHeaders: Record<string, string> = {};
     if (options.tunnelAuth) {
       extraHTTPHeaders['X-Tunnel-Skip-AntiPhishing-Page'] = 'true';
       extraHTTPHeaders['X-Tunnel-Authorization'] = options.tunnelAuth;
     }
+    if (options.customHeaders) {
+      Object.assign(extraHTTPHeaders, options.customHeaders);
+    }
 
     const viewport = options.viewport || BREAKPOINT_VIEWPORTS['1440px'];
     const contextOptions = {
       viewport,
       extraHTTPHeaders,
+      userAgent: options.userAgent,
       baseURL: options.baseUrl,
       ignoreHTTPSErrors: true,
       storageState: options.storageState as NonNullable<Parameters<Browser['newContext']>[0]>['storageState'],
@@ -131,6 +171,7 @@ export class BrowserManager {
    * costs one test point rather than the whole run.
    */
   async openPage(options: BrowserOptions = {}): Promise<{ context: BrowserContext; page: Page }> {
+    const engine = options.engine ?? 'chromium';
     for (let attempt = 0; ; attempt++) {
       let context: BrowserContext | undefined;
       try {
@@ -139,18 +180,21 @@ export class BrowserManager {
       } catch (err) {
         await context?.close().catch(() => {});
         if (attempt > 0) throw err;
-        console.warn(`[Browser] Restarting the browser: ${err instanceof Error ? err.message.split('\n')[0] : err}`);
-        await this.browser?.close().catch(() => {});
-        this.browser = null;
+        console.warn(`[Browser] Restarting the browser (${engine}): ${err instanceof Error ? err.message.split('\n')[0] : err}`);
+        const dead = this.browsers.get(engine);
+        await dead?.close().catch(() => {});
+        this.browsers.delete(engine);
+        if (engine === 'chromium') this.browser = null;
       }
     }
   }
 
   async close(): Promise<void> {
-    if (this.browser) {
-      await this.browser.close().catch(() => {});
-      this.browser = null;
+    for (const b of this.browsers.values()) {
+      await b.close().catch(() => {});
     }
+    this.browsers.clear();
+    this.browser = null;
   }
 }
 

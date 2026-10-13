@@ -1,4 +1,4 @@
-import type { DocSource, PlanNotFound, PlanPage, PlanPageTest } from '@qa/types';
+import { intentOf, type DocSource, type PlanNotFound, type PlanPage, type PlanPageTest, type SpecGapCode } from '@qa/types';
 import type { ParsedRequirementHint } from '../discovery/context-parser.js';
 import { SafetyFilter } from '../discovery/safety-filter.js';
 
@@ -93,7 +93,7 @@ export function deriveDenials(
     for (const source of page.tests) {
       const reqId = source.docSource?.requirementId;
       const entry = reqId ? binding.get(reqId) : undefined;
-      if (!reqId || !entry || entry.deniedRoles.length === 0 || source.kind === 'denial') continue;
+      if (!reqId || !entry || entry.deniedRoles.length === 0 || intentOf(source) === 'denied') continue;
       const first = source.steps[0];
       if (!first?.selector) continue;
       const allowedRoles = new Set(entry.roles);
@@ -108,7 +108,7 @@ export function deriveDenials(
           id,
           name: `${role} cannot: ${source.name}`,
           role,
-          kind: 'denial',
+          intent: 'denied',
           steps: [{ action: 'wait', name: 'Look at the page' }],
           expectations: { elementState: { selector: first.selector, visible: false }, origin: 'ai-guess' },
           source: source.source,
@@ -124,13 +124,47 @@ export function deriveDenials(
   return out;
 }
 
-/** The ids of requirements that at least one planned test (not a Denial) points at. */
-export function reachedRequirementIds(pages: PlanPage[]): Set<string> {
+const UNIT_KINDS = new Set(['journey', 'route', 'negative']);
+
+/**
+ * What "documented items" counts: the User Flows, route rows and Negative specs, once the documents
+ * have any. Plain headings only count when nothing structured was read (older documents).
+ */
+export function documentedUnits(requirements: ParsedRequirementHint[]): ParsedRequirementHint[] {
+  const units = requirements.filter((r) => r.kind && UNIT_KINDS.has(r.kind));
+  return units.length > 0 ? units : requirements;
+}
+
+/** The ids of requirements that at least one planned test (not a Denial) or User Flow points at. */
+export function reachedRequirementIds(
+  pages: PlanPage[],
+  flows: Array<{ docSource?: DocSource; needsHelp?: string[] }> = []
+): Set<string> {
   const reached = new Set<string>();
   for (const page of pages)
     for (const t of page.tests)
-      if (t.kind !== 'denial' && t.docSource?.requirementId) reached.add(t.docSource.requirementId);
+      if (intentOf(t) !== 'denied' && t.docSource?.requirementId) reached.add(t.docSource.requirementId);
+  for (const f of flows) if (f.docSource?.requirementId && !f.needsHelp?.length) reached.add(f.docSource.requirementId);
   return reached;
+}
+
+export function specGapCodeFor(req: ParsedRequirementHint, pages: PlanPage[]): SpecGapCode {
+  const text = `${req.name} ${req.description ?? ''} ${(req.rules ?? []).join(' ')}`.toLowerCase();
+  const guardedWords = /delete|remove|destroy|pay|purchase|billing|checkout|payment|credit card/i;
+  if (guardedWords.test(text)) {
+    return 'SPEC_GAP_GUARDED';
+  }
+  const routeMatch = req.name.match(/\/[a-zA-Z0-9_\-\/]+/);
+  if (routeMatch) {
+    const route = routeMatch[0];
+    const pageExists = pages.some((p) => p.urlPath === route || p.urlPath.startsWith(route));
+    if (pageExists) return 'SPEC_GAP_NO_ELEMENT';
+    return 'SPEC_GAP_NO_PAGE';
+  }
+  const words = req.name.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+  const pageMatches = pages.some((p) => words.some((w) => p.urlPath.toLowerCase().includes(w) || p.title.toLowerCase().includes(w)));
+  if (pageMatches) return 'SPEC_GAP_NO_ELEMENT';
+  return 'SPEC_GAP_NO_PAGE';
 }
 
 /** Documented items with no mapped test: reported as "Not found in app", never as failures. */
@@ -142,16 +176,18 @@ export function deriveNotFound(
 ): PlanNotFound[] {
   const reached = reachedRequirementIds(pages);
   const out: PlanNotFound[] = [];
-  for (const req of requirements) {
+  for (const req of documentedUnits(requirements)) {
     const name = req.name?.trim();
     if (!name || reached.has(req.id)) continue;
     const roles = binding.get(req.id)?.roles ?? allRoles;
     const as = roles.length ? roles.join(', ') : 'any role';
+    const code = specGapCodeFor(req, pages);
     out.push({
       id: `notfound:${req.id}`,
       docSource: docSourceOf(req),
       roles: [...roles],
       reason: `No page or control matching “${name}” was found as ${as}`,
+      code,
     });
   }
   return out;

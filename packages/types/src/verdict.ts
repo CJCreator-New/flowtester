@@ -1,4 +1,4 @@
-import type { Finding, FindingSeverity } from './index.js';
+import type { AspectGrade, AspectType, Finding, FindingSeverity, SiteAspectGrades } from './index.js';
 import { groupIntoProblems, isDismissed } from './problems.js';
 
 export interface ReleaseGateCriteria {
@@ -6,12 +6,31 @@ export interface ReleaseGateCriteria {
   maxMajors?: number;
   maxMinors?: number;
   strictAccessibility?: boolean;
+  minAreaScore?: number;
+  minAreaGrade?: AspectGrade;
+  enforceAllAreas?: boolean;
+  advisoryAreas?: AspectType[];
 }
 
 export const DEFAULT_RELEASE_GATES: Record<'strict' | 'standard' | 'lenient', ReleaseGateCriteria> = {
-  strict: { maxBlockers: 0, maxMajors: 0, strictAccessibility: true },
-  standard: { maxBlockers: 0, maxMajors: 2, strictAccessibility: false },
-  lenient: { maxBlockers: 1, maxMajors: 5, strictAccessibility: false },
+  strict: {
+    maxBlockers: 0,
+    maxMajors: 0,
+    strictAccessibility: true,
+    minAreaScore: 90,
+    minAreaGrade: 'A',
+    enforceAllAreas: true,
+  },
+  standard: {
+    maxBlockers: 0,
+    minAreaScore: 60,
+    minAreaGrade: 'C',
+    enforceAllAreas: true,
+  },
+  lenient: {
+    maxBlockers: 0,
+    advisoryAreas: ['Accessible', 'Fast and mobile', 'Findable', 'Looks and reads well'],
+  },
 };
 
 /**
@@ -48,7 +67,8 @@ export function countsTowardVerdict(f: Pick<Finding, 'triageStatus' | 'needsConf
 
 export function releaseVerdict(
   findings?: Array<Pick<Finding, 'severity' | 'triageStatus' | 'needsConfirmation' | 'title'> & Partial<Finding>> | null,
-  gate?: ReleaseGateCriteria
+  gate?: ReleaseGateCriteria,
+  grades?: SiteAspectGrades
 ): ReleaseVerdict {
   const safeFindings = findings ?? [];
   const problems = groupIntoProblems(
@@ -62,11 +82,11 @@ export function releaseVerdict(
   for (const p of active) counts[p.severity]++;
 
   const maxBlockers = gate?.maxBlockers ?? 0;
-  const maxMajors = gate?.maxMajors ?? 0;
+  const maxMajors = gate?.maxMajors;
   const maxMinors = gate?.maxMinors;
 
   const blockersBreached = counts.Blocker > maxBlockers;
-  const majorsBreached = counts.Major > maxMajors;
+  const majorsBreached = maxMajors !== undefined && counts.Major > maxMajors;
   const minorsBreached = maxMinors !== undefined && counts.Minor > maxMinors;
 
   const breaches: string[] = [];
@@ -79,7 +99,32 @@ export function releaseVerdict(
   if (minorsBreached)
     breaches.push(`${counts.Minor} minor ${counts.Minor === 1 ? 'problem' : 'problems'} (${maxMinors} allowed)`);
 
-  const ready = !blockersBreached && !majorsBreached && !minorsBreached;
+  // Area score and grade evaluations per PRD FR-8.2
+  if (grades && gate) {
+    const aspects = grades.aspects;
+    const gradeRanks: Record<AspectGrade, number> = { A: 4, B: 3, C: 2, D: 1, F: 0 };
+    const minRank = gate.minAreaGrade ? gradeRanks[gate.minAreaGrade] : undefined;
+
+    for (const [name, scoreInfo] of Object.entries(aspects) as Array<[AspectType, typeof aspects[AspectType]]>) {
+      if (scoreInfo.checked === false) continue;
+      if (gate.advisoryAreas?.includes(name)) continue;
+
+      if (gate.minAreaScore !== undefined && scoreInfo.score < gate.minAreaScore) {
+        breaches.push(`${name} score is ${scoreInfo.score} (minimum ${gate.minAreaScore} required)`);
+      }
+      if (minRank !== undefined && gradeRanks[scoreInfo.grade] < minRank) {
+        breaches.push(`${name} grade is ${scoreInfo.grade} (minimum Grade ${gate.minAreaGrade} required)`);
+      }
+    }
+
+    if (gate.strictAccessibility && aspects.Accessible?.checked !== false) {
+      if (aspects.Accessible.grade !== 'A' || aspects.Accessible.score < 90) {
+        breaches.push(`Accessible area must achieve Grade A under strict accessibility gating`);
+      }
+    }
+  }
+
+  const ready = !blockersBreached && !majorsBreached && !minorsBreached && breaches.length === 0;
   const mustFix = counts.Blocker + counts.Major;
   const others = counts.Minor + counts.Suggestion;
 

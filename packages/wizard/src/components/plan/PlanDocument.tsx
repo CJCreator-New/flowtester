@@ -4,6 +4,7 @@ import type {
   DiscoveredFlow,
   FindingSeverity,
   NavigationCheck,
+  PlanIntent,
   PlanPage,
   PlanPageTest,
   ReviewPlan,
@@ -26,6 +27,17 @@ import {
   severityEdit,
   staleEdit,
 } from '../../lib/plan-sources';
+import {
+  INTENT_HINTS,
+  INTENT_LABELS,
+  filterByIntent,
+  intentKey,
+  intentSummaryLine,
+  intentsInPlan,
+  openingLine,
+  overCapLine,
+  wontRunReason,
+} from '../../lib/intent-view';
 import { Badge, ItemToggle, ReplanControl, SourceBadge, itemDomId, showItem } from './parts';
 import {
   DndContext,
@@ -76,6 +88,9 @@ export interface PlanActions {
   editSource: (edits: NonNullable<PatchPlanBody['sourceEdits']>) => void;
   /** Removes an entry from "Not found in app". */
   editNotFound: (edits: NonNullable<PatchPlanBody['notFoundEdits']>) => void;
+  /** The Intents switched off, one switch per Intent. */
+  intentsOff: PlanIntent[];
+  setIntentOff: (intent: PlanIntent, off: boolean) => void;
 }
 
 const SIZES: Breakpoint[] = ['375px', '768px', '1440px'];
@@ -97,6 +112,8 @@ interface View {
   query: string;
   needsMe: boolean;
   expandAll?: boolean | null;
+  /** Show only the items with this Intent. */
+  intent?: PlanIntent | null;
 }
 const ViewContext = createContext<View>({ query: '', needsMe: false });
 
@@ -577,6 +594,51 @@ const TOKEN_STAGES: Record<string, string> = {
   other: 'Other',
 };
 
+/** Tests per Intent, the over-cap line, and one switch per Intent. */
+function IntentSummary({ plan, actions }: { plan: ReviewPlan; actions: PlanActions }) {
+  const present = intentsInPlan(plan);
+  const line = intentSummaryLine(plan);
+  const overCap = overCapLine(plan);
+  if (!line && !overCap) return null;
+  return (
+    <div className="mt-4" data-testid="intent-summary">
+      {line && <p className="text-base text-ink">{line}</p>}
+      {overCap && (
+        <p className="mt-1 text-base text-warn" data-testid="over-cap-line">
+          {overCap}
+        </p>
+      )}
+      {present.length > 0 && (
+        <fieldset className="mt-3">
+          <legend className="label mb-2">Intents to run</legend>
+          <div className="flex flex-wrap gap-x-5 gap-y-1">
+            {present.map((c) => {
+              const off = actions.intentsOff.includes(c.intent);
+              return (
+                <label
+                  key={c.intent}
+                  className="flex min-h-[44px] cursor-pointer items-center gap-2 text-base text-ink"
+                  title={INTENT_HINTS[c.intent]}
+                >
+                  <input
+                    type="checkbox"
+                    className="h-5 w-5 accent-[#6C9BF2]"
+                    data-testid={`intent-switch-${c.intent}`}
+                    checked={!off}
+                    disabled={actions.busy}
+                    onChange={(e) => actions.setIntentOff(c.intent, !e.target.checked)}
+                  />
+                  {c.label} ({c.items})
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+      )}
+    </div>
+  );
+}
+
 function SummarySection({ plan, actions }: { plan: ReviewPlan; actions: PlanActions }) {
   const sizes = plan.screenSizes?.length ? plan.screenSizes : SIZES;
   const budget = plan.budget;
@@ -603,6 +665,7 @@ function SummarySection({ plan, actions }: { plan: ReviewPlan; actions: PlanActi
           </li>
         ))}
       </ul>
+      <IntentSummary plan={plan} actions={actions} />
 
       <fieldset className="mt-5">
         <legend className="label mb-2">Screen sizes</legend>
@@ -877,12 +940,12 @@ function TestRow({ test, page, actions }: { test: PlanPageTest; page: PlanPage; 
             <SourceBadge source={test.source} />
             {test.needsTestCopy && (
               <Badge tone="warn" title="It sends a form or changes data, so it only runs on a test copy">
-                Needs a test copy
+                Needs a Test Copy
               </Badge>
             )}
-            {isDenial(test) && (
-              <Badge tone="stamp" title="Checks that this role cannot see or use something it should not">
-                Denial check
+            {intentKey(test) !== 'works' && (
+              <Badge tone="stamp" title={INTENT_HINTS[intentKey(test)]}>
+                {INTENT_LABELS[intentKey(test)]}
               </Badge>
             )}
             {originLabel(test.origin) && <Badge>{originLabel(test.origin)}</Badge>}
@@ -892,12 +955,20 @@ function TestRow({ test, page, actions }: { test: PlanPageTest; page: PlanPage; 
               Passes when {roleName(test.role)} cannot see this on the page. It only looks; it does not try to use it.
             </p>
           ) : (
-            <ol className="mt-1 list-decimal pl-5 text-sm text-ink-soft">
-              {test.steps.map((step, i) => (
-                <li key={i}>{stepToSentence(step)}</li>
-              ))}
-            </ol>
+            <>
+              {openingLine(test) && (
+                <p className="mt-1 text-sm text-ink-soft" data-testid="opening-steps">
+                  {openingLine(test)}
+                </p>
+              )}
+              <ol className="mt-1 list-decimal pl-5 text-sm text-ink-soft">
+                {test.steps.map((step, i) => (
+                  <li key={i}>{stepToSentence(step)}</li>
+                ))}
+              </ol>
+            </>
           )}
+          {test.offReason && <p className="mt-1 text-sm text-warn">{wontRunReason(test.offReason)}</p>}
           <SourceDetails test={test} actions={actions} />
           <Expected itemId={test.id} expectations={test.expectations} actions={actions} />
         </div>
@@ -907,7 +978,9 @@ function TestRow({ test, page, actions }: { test: PlanPageTest; page: PlanPage; 
 }
 
 function PageRow({ page, actions }: { page: PlanPage; actions: PlanActions }) {
+  const view = useContext(ViewContext);
   const covered = page.coverage === 'covered';
+  const tests = filterByIntent(page.tests, view.intent);
   return (
     <li
       id={itemDomId(page.id)}
@@ -949,9 +1022,9 @@ function PageRow({ page, actions }: { page: PlanPage; actions: PlanActions }) {
               · visited as {page.reachedBy.map(roleName).join(', ')}
             </p>
           )}
-          {!covered && page.tests.length > 0 && (
+          {!covered && tests.length > 0 && (
             <ul className="mt-2 space-y-2">
-              {page.tests.map((test) => (
+              {tests.map((test) => (
                 <TestRow key={test.id} test={test} page={page} actions={actions} />
               ))}
             </ul>
@@ -1017,7 +1090,8 @@ function PagesSection({ plan, actions }: { plan: ReviewPlan; actions: PlanAction
   const pages = (plan.planPages || []).filter(
     (p) =>
       matches(view, `${p.urlPath} ${p.title} ${p.tests.map((t) => t.name).join(' ')}`) &&
-      (!view.needsMe || pageNeedsMe(p))
+      (!view.needsMe || pageNeedsMe(p)) &&
+      (!view.intent || filterByIntent(p.tests, view.intent).length > 0)
   );
   const groups = plan.layoutGroups || [];
   const grouped = new Set(groups.flatMap((g) => g.pages));
@@ -1419,7 +1493,12 @@ function SortableJourneyItem({ flow, actions }: { flow: DiscoveredFlow; actions:
             )}
             <SourceBadge source={flow.source} />
             {flow.isNew && <Badge tone="stamp">New</Badge>}
-            {flow.needsTestCopy && <Badge tone="warn">Needs a test copy</Badge>}
+            {flow.needsTestCopy && <Badge tone="warn">Needs a Test Copy</Badge>}
+            {intentKey(flow) !== 'works' && (
+              <Badge tone="stamp" title={INTENT_HINTS[intentKey(flow)]}>
+                {INTENT_LABELS[intentKey(flow)]}
+              </Badge>
+            )}
           </div>
           {flow.description && <p className="mt-0.5 text-sm text-ink-soft">{flow.description}</p>}
           <ol className="mt-2 list-decimal pl-5 text-sm text-ink">
@@ -1449,7 +1528,7 @@ function SortableJourneyItem({ flow, actions }: { flow: DiscoveredFlow; actions:
 function JourneysSection({ plan, actions }: { plan: ReviewPlan; actions: PlanActions }) {
   const view = useContext(ViewContext);
   const flows = plan.flows.filter(
-    (f) => matches(view, `${f.name} ${f.description} ${f.startPage}`) && (!view.needsMe || flowNeedsMe(f))
+    (f) => matches(view, `${f.name} ${f.description} ${f.startPage}`) && (!view.needsMe || flowNeedsMe(f)) && (!view.intent || intentKey(f) === view.intent)
   );
 
   const sensors = useSensors(
@@ -1525,7 +1604,7 @@ function WontRunSection({ plan }: { plan: ReviewPlan }) {
           {items.map((item, i) => (
             <li key={i} className="flex items-start justify-between gap-3">
               <span>
-                <strong className="text-ink">{item.what}</strong> <span className="text-ink-soft">— {item.reason}</span>
+                <strong className="text-ink">{item.what}</strong> <span className="text-ink-soft">— {wontRunReason(item.reason)}</span>
               </span>
               {item.itemId && (
                 <button type="button" className="btn-link shrink-0 text-sm" onClick={() => showItem(item.itemId!)}>
@@ -1648,6 +1727,32 @@ function DocsSection({ plan, actions }: { plan: ReviewPlan; actions: PlanActions
 }
 
 /** The plan at a glance: how many of each, and how many need the reader, each a link to its section. */
+/** Filter chips: show only the items with one Intent. Pressing the chosen one again shows all. */
+function IntentChips({ plan, view, setView }: { plan: ReviewPlan; view: View; setView: (v: View) => void }) {
+  const present = intentsInPlan(plan);
+  if (present.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Show by Intent" data-testid="intent-chips">
+      {present.map((c) => {
+        const pressed = view.intent === c.intent;
+        return (
+          <button
+            key={c.intent}
+            type="button"
+            aria-pressed={pressed}
+            title={INTENT_HINTS[c.intent]}
+            data-testid={`intent-chip-${c.intent}`}
+            className={`min-h-[44px] rounded-control border px-3 text-sm font-bold ${pressed ? 'border-stamp bg-stamp text-white' : 'border-rule text-ink hover:border-stamp'}`}
+            onClick={() => setView({ ...view, intent: pressed ? null : c.intent })}
+          >
+            {c.label} ({c.items})
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function Overview({ plan, view, setView }: { plan: ReviewPlan; view: View; setView: (v: View) => void }) {
   const pages = plan.planPages || [];
   const navigation = plan.navigation || [];
@@ -1681,6 +1786,7 @@ function Overview({ plan, view, setView }: { plan: ReviewPlan; view: View; setVi
         ))}
       </nav>
       {plannedWhileScanningLine(plan) && <p className="text-sm text-ink-soft">{plannedWhileScanningLine(plan)}</p>}
+      <IntentChips plan={plan} view={view} setView={setView} />
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <label className="sr-only" htmlFor="plan-filter">
           Find in the plan

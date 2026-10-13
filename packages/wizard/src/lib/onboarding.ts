@@ -17,6 +17,7 @@ export function hasNonDefaultOptions(form: CheckupForm): boolean {
     form.savedSessions.length > 0 ||
     form.capRequests.trim() !== '' ||
     form.capDollars.trim() !== '' ||
+    form.testCap.trim() !== '' ||
     form.searchChecks !== null ||
     (form.visibility ?? null) !== null
   );
