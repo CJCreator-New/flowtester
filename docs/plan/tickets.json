@@ -133,7 +133,7 @@
       "filesReadOnly": [
         "packages/core/src/redact.ts"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-106",

@@ -11,7 +11,11 @@
  *   QA_AI_PROVIDER   openrouter (default), gemini, openai or anthropic
  *   QA_OUTPUT_DIR    where the report goes (default qa-report)
  *   QA_MAX_PAGES     pages to explore at most (default 50, to keep a run inside free Actions minutes)
- *   QA_FAIL_ON       blocker (default), major or none
+ *   QA_FAIL_ON       standard (default), blocker, major or none
+ *   QA_CONCURRENCY   spider concurrency 1..5 (default 2)
+ *   QA_DELAY_MS      pacing delay in ms 0..2000 (default 100)
+ *   QA_CUSTOM_HEADERS custom HTTP headers JSON, e.g. {"X-QA-Bypass-Token":"..."} (or --header "Name: value")
+ *   QA_DEBUG         comma list of debug areas (crawl, auth, nav), or "all" (or --debug [areas])
  *   QA_USERNAME, QA_PASSWORD  test sign-in details. Environment only, never a flag. Setting both is the
  *                    consent to sign in and test fully (ADR 0022): use a test account on a test copy.
  *   QA_LOGIN_PATH    optional sign-in page path (for example /login)
@@ -26,7 +30,7 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { isActiveFinding, releaseVerdict, isSupportedContextName, summarizeDocument } from '@qa/types';
+import { isActiveFinding, releaseVerdict, isSupportedContextName, summarizeDocument, parseHeaderText } from '@qa/types';
 import { githubAnnotations, docxToMarkdown } from '@qa/core';
 import type { AIProviderType, Finding, ReleaseReport, SiteAspectGrades } from '@qa/types';
 import { RunnerServer } from './server.js';
@@ -55,6 +59,8 @@ export interface CheckupArgs {
   crawlDelayMs?: number;
   /** Custom HTTP headers e.g. X-QA-Bypass-Token (--header "Name: value" or QA_CUSTOM_HEADERS). */
   customHeaders?: Record<string, string>;
+  /** Debug areas to trace to stderr (--debug or QA_DEBUG). */
+  debug?: string;
 }
 
 export interface SignIn {
@@ -159,6 +165,21 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
         .split(';')
         .map((d) => d.trim())
         .filter(Boolean);
+  let debugValue: string | undefined;
+  const debugIdx = argv.indexOf('--debug');
+  if (debugIdx >= 0) {
+    const next = argv[debugIdx + 1];
+    if (next && !next.startsWith('--') && !/^https?:\/\//i.test(next)) {
+      debugValue = next;
+    } else {
+      debugValue = 'all';
+    }
+    process.env.QA_DEBUG = debugValue;
+  } else if (env.QA_DEBUG) {
+    debugValue = env.QA_DEBUG;
+    process.env.QA_DEBUG = env.QA_DEBUG;
+  }
+
   const rawConcurrency = flag('--concurrency') ?? env.QA_CONCURRENCY;
   const crawlConcurrency = rawConcurrency ? Math.max(1, Math.min(5, Number(rawConcurrency) || 2)) : undefined;
   const rawDelay = flag('--delay') ?? env.QA_DELAY_MS;
@@ -167,25 +188,36 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   if (env.QA_CUSTOM_HEADERS) {
     try {
       const parsed = JSON.parse(env.QA_CUSTOM_HEADERS);
-      if (typeof parsed === 'object' && parsed !== null) {
-        Object.assign(customHeaders, parsed);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error();
+      }
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof k !== 'string' || typeof v !== 'string') {
+          throw new Error();
+        }
+        customHeaders[k.trim()] = v;
       }
     } catch {
-      // ignore invalid json
+      throw new Error('QA_CUSTOM_HEADERS is not valid');
     }
   }
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--header' && argv[i + 1]) {
+    if (argv[i] === '--header') {
       const line = argv[i + 1];
-      const colon = line.indexOf(':');
-      if (colon > 0) {
-        customHeaders[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
+      if (!line || line.startsWith('--')) {
+        throw new Error('QA_CUSTOM_HEADERS is not valid');
       }
+      const { headers, errors } = parseHeaderText(line);
+      if (errors.length > 0 || Object.keys(headers).length === 0) {
+        throw new Error('QA_CUSTOM_HEADERS is not valid');
+      }
+      Object.assign(customHeaders, headers);
     }
   }
 
   const flagValues = new Set<string>([
     ...(['--fail-on', '--provider', '--max-pages', '--output', '--test-cap', '--concurrency', '--delay', '--header'].map((f) => flag(f)).filter(Boolean) as string[]),
+    ...(debugValue && debugValue !== 'all' ? [debugValue] : []),
     ...flagDocs,
   ]);
   const signIns = parseRoles(env);
@@ -206,6 +238,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
     crawlConcurrency,
     crawlDelayMs,
     customHeaders: Object.keys(customHeaders).length > 0 ? customHeaders : undefined,
+    debug: debugValue,
   };
 }
 
