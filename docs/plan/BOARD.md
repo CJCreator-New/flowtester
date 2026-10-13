@@ -6,7 +6,7 @@ All tickets start `todo`. Update the Status column when a ticket is picked up (`
 |---|---|---|---|---|---|---|
 | 0 | T-101 | Shared contracts: route telemetry, sign-in step, input rules, shared coverage type | S | none | G-003, G-006, G-018, G-049 | done |
 | 0 | T-102 | Fixture routes that reproduce auth and crawl failure modes | M | none | G-012, G-028 | done |
-| 0 | T-103 | Browser context options, origin-scoped headers, narrower browser restart | M | none | G-004, G-016, G-039 | todo |
+| 0 | T-103 | Browser context options, origin-scoped headers, narrower browser restart | M | none | G-004, G-016, G-039 | done |
 | 0 | T-106 | Tooling alignment: one Playwright version, typecheck tests, Node pin | M | none | G-025, G-026, G-047 | todo |
 | 1 | T-104 | Runner input validation: roles, login path, header rules | S | T-101 | G-018, G-022, G-023 | todo |
 | 1 | T-105 | Redacted debug logger and CLI debug switch | S | T-101 | G-003, G-006, G-018 | todo |

@@ -1,5 +1,6 @@
 import { chromium, webkit, firefox, type Browser, type BrowserContext, type Page, type Locator } from 'playwright';
 import type { Breakpoint, StorageStateData } from '@qa/types';
+import { isSameSite } from './same-site.js';
 
 export type BrowserEngine = 'chromium' | 'webkit' | 'firefox';
 
@@ -17,20 +18,27 @@ export function browserEngineLabel(engine: BrowserEngine): string {
   }
 }
 
-export interface BrowserOptions {
+export interface RunContextOptions {
+  /** Target origin; headers go only to this host */
+  baseUrl: string;
+  /** Tunnel authentication secret */
+  tunnelAuth?: string;
+  /** Custom HTTP headers (e.g. X-QA-Bypass-Token) */
+  customHeaders?: Record<string, string>;
+  /** Custom user-agent string */
+  userAgent?: string;
+  /** Extra hosts that may receive secret headers (Domain Allowlist) */
+  headerHosts?: string[];
+}
+
+export interface BrowserOptions extends Partial<RunContextOptions> {
   engine?: BrowserEngine;
   headless?: boolean;
   viewport?: { width: number; height: number };
-  tunnelAuth?: string;
-  baseUrl?: string;
   /** A file path, or the state itself (kept in memory so a saved session never touches disk). */
   storageState?: string | StorageStateData;
   /** When set, Playwright records a .webm of every page in the context into this directory. */
   recordVideoDir?: string;
-  /** Custom HTTP headers sent with every request (e.g. X-QA-Bypass-Token). */
-  customHeaders?: Record<string, string>;
-  /** Custom user-agent string. */
-  userAgent?: string;
 }
 
 /**
@@ -76,6 +84,14 @@ export const BREAKPOINT_VIEWPORTS: Record<Breakpoint, { width: number; height: n
   '768px': { width: 768, height: 1024 }, // Tablet
   '1440px': { width: 1440, height: 900 }, // Desktop
 };
+
+function tunnelHeaders(tunnelAuth?: string): Record<string, string> {
+  if (!tunnelAuth) return {};
+  return {
+    'X-Tunnel-Skip-AntiPhishing-Page': 'true',
+    'X-Tunnel-Authorization': tunnelAuth,
+  };
+}
 
 export class BrowserManager {
   private browser: Browser | null = null;
@@ -124,33 +140,59 @@ export class BrowserManager {
     const engine = options.engine ?? 'chromium';
     const browser = await this.launch(engine, options.headless ?? true);
 
-    const extraHTTPHeaders: Record<string, string> = {};
-    if (options.tunnelAuth) {
-      extraHTTPHeaders['X-Tunnel-Skip-AntiPhishing-Page'] = 'true';
-      extraHTTPHeaders['X-Tunnel-Authorization'] = options.tunnelAuth;
-    }
-    if (options.customHeaders) {
-      Object.assign(extraHTTPHeaders, options.customHeaders);
-    }
-
     const viewport = options.viewport || BREAKPOINT_VIEWPORTS['1440px'];
     const contextOptions = {
       viewport,
-      extraHTTPHeaders,
       userAgent: options.userAgent,
       baseURL: options.baseUrl,
       ignoreHTTPSErrors: true,
       storageState: options.storageState as NonNullable<Parameters<Browser['newContext']>[0]>['storageState'],
     };
 
-    const guarded = async (context: BrowserContext): Promise<BrowserContext> => {
-      if (browserPolicy?.guard) await installRequestGuard(context, browserPolicy.guard);
+    const hostAllowed = (reqUrl: string): boolean => {
+      try {
+        const reqHost = new URL(reqUrl).host.toLowerCase();
+        if (options.baseUrl) {
+          const baseHost = new URL(options.baseUrl).host.toLowerCase();
+          if (isSameSite(reqHost, baseHost) || reqHost === baseHost) return true;
+        }
+        if (options.headerHosts) {
+          for (const h of options.headerHosts) {
+            const allowedHost = h.toLowerCase();
+            if (isSameSite(reqHost, allowedHost) || reqHost === allowedHost) return true;
+          }
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    };
+
+    const secret = { ...tunnelHeaders(options.tunnelAuth), ...options.customHeaders };
+
+    const setupContext = async (context: BrowserContext): Promise<BrowserContext> => {
+      // 1. Scoped headers route: registered before guard, so Playwright's LIFO runs guard first.
+      if (Object.keys(secret).length > 0) {
+        await context.route('**/*', async (route) => {
+          if (hostAllowed(route.request().url())) {
+            return route.fallback({
+              headers: { ...route.request().headers(), ...secret },
+            });
+          }
+          return route.fallback();
+        });
+      }
+
+      // 2. Request guard: registered after, so it runs first in LIFO order.
+      if (browserPolicy?.guard) {
+        await installRequestGuard(context, browserPolicy.guard);
+      }
       return context;
     };
 
     if (options.recordVideoDir) {
       try {
-        return await guarded(
+        return await setupContext(
           await browser.newContext({
             ...contextOptions,
             recordVideo: { dir: options.recordVideoDir, size: viewport },
@@ -163,7 +205,7 @@ export class BrowserManager {
         );
       }
     }
-    return guarded(await browser.newContext(contextOptions));
+    return setupContext(await browser.newContext(contextOptions));
   }
 
   /**
@@ -180,6 +222,12 @@ export class BrowserManager {
       } catch (err) {
         await context?.close().catch(() => {});
         if (attempt > 0) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        const b = this.browsers.get(engine);
+        const isClosed =
+          /Target (page, context or browser )?has been closed|Browser has been closed|browser has disconnected/i.test(msg) ||
+          (b ? !b.isConnected() : false);
+        if (!isClosed) throw err;
         console.warn(`[Browser] Restarting the browser (${engine}): ${err instanceof Error ? err.message.split('\n')[0] : err}`);
         const dead = this.browsers.get(engine);
         await dead?.close().catch(() => {});
