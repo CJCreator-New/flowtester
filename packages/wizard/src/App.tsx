@@ -133,7 +133,7 @@ export default function App() {
   // The new check-up form lives here, so changing screens or adding the key never loses it.
   const [form, setForm] = useState<CheckupForm>(() => ({
     ...EMPTY_FORM,
-    address: addressFromSearch(window.location.search),
+    address: isCheckRoute(matchRoute(window.location.pathname)) ? addressFromSearch(window.location.search) : '',
   }));
   const [plan, setPlan] = useState<ReviewPlan | null>(null);
   const [planNotice, setPlanNotice] = useState<PlanNotice | null>(null);
