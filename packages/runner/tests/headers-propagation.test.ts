@@ -248,11 +248,14 @@ describe('headers propagation & per-run auth isolation', () => {
     expect(approveOk.status).toBe(200);
 
     // Wait for testing to finish
-    for (let i = 0; i < 120; i++) {
+    phase = 'testing';
+    for (let i = 0; i < 240; i++) {
       const statusRes = await (await fetch(`${runnerUrl}/api/runner/status`)).json();
-      if (statusRes.phase === 'done' || statusRes.phase === 'failed') break;
+      phase = statusRes.phase;
+      if (phase === 'done' || phase === 'failed') break;
       await new Promise((r) => setTimeout(r, 500));
     }
+    expect(phase).toBe('done');
 
     // Verify authDir/<runId> is cleaned up after testing finishes
     const runAuthFolder = runner.runAuthDir(runId);

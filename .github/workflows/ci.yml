@@ -50,10 +50,14 @@ jobs:
             echo "Typecheck found **$count** error(s)." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  # Full Build & Browser Test Suite: Runs site/runner builds and browser-driven test suite with coverage
+  # Full Build & Browser Test Suite: Sharded across 4 parallel runners to complete in ~2-3 minutes instead of 15-20 minutes
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/4, 2/4, 3/4, 4/4]
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
@@ -86,27 +90,10 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @qa/core exec playwright install-deps chromium
 
-      # Every package test except wizard-e2e (takes minutes, run it before a release) and auth-crawl (tested in parallel in auth-crawl job).
+      # Every package test run across 4 parallel shards (except wizard-e2e and auth-crawl which is tested in parallel in auth-crawl job).
       # Chromium is installed above for the browser-driven checker and core tests.
-      - name: Tests
-        run: pnpm exec vitest run --exclude "**/wizard-e2e.test.ts" --exclude "**/auth-crawl-*.test.ts" --coverage
-
-      # Totals from the coverage run, shown on the workflow summary page. Print only; no threshold.
-      - name: Coverage summary
-        if: ${{ !cancelled() }}
-        run: |
-          node -e '
-          const fs = require("fs");
-          const out = process.env.GITHUB_STEP_SUMMARY;
-          let md = "### Coverage\n\nNo coverage data (tests did not finish)\n";
-          try {
-            const t = JSON.parse(fs.readFileSync("coverage/coverage-summary.json", "utf8")).total;
-            md = "### Coverage\n\n| Statements | Branches | Functions | Lines |\n|---|---|---|---|\n| " +
-              ["statements", "branches", "functions", "lines"].map((k) => t[k].pct + "%").join(" | ") + " |\n";
-          } catch {}
-          if (out) fs.appendFileSync(out, md);
-          console.log(md);
-          '
+      - name: Tests (Shard ${{ matrix.shard }})
+        run: pnpm exec vitest run --shard=${{ matrix.shard }} --exclude "**/wizard-e2e.test.ts" --exclude "**/auth-crawl-*.test.ts"
 
   # Integration tests for authenticated crawls against the fixture app.
   # Runs on PRs touching packages/core, packages/runner, fixtures, or packages/types.

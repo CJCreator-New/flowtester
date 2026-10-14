@@ -89,24 +89,43 @@ jobs:
   verify:
     needs: publish
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     env:
       VERCEL_SITE_URL: ${{ vars.VERCEL_SITE_URL || 'https://flowtester.vercel.app' }}
       RENDER_APP_URL: ${{ vars.RENDER_APP_URL || 'https://qa-check-up-2q68.onrender.com' }}
     steps:
-      # Both builds take a few minutes, and a free Render service sleeps: wait for each to answer.
-      - name: The Vercel site answers
+      # Both builds take a few minutes, and a free Render service sleeps: check both concurrently.
+      - name: Verify Vercel and Render deployments concurrently
         run: |
+          echo "Verifying Vercel ($VERCEL_SITE_URL) and Render ($RENDER_APP_URL) concurrently..."
+          vercel_ready=0
+          render_ready=0
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "$VERCEL_SITE_URL/") && [ "$code" = 200 ] && echo "Vercel: 200" && exit 0
-            echo "Vercel: not ready ($code), try $i"; sleep 10
+            if [ "$vercel_ready" -eq 0 ]; then
+              code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$VERCEL_SITE_URL/") || code="000"
+              if [ "$code" = "200" ]; then
+                echo "Vercel ready (200 OK) on attempt $i"
+                vercel_ready=1
+              fi
+            fi
+            if [ "$render_ready" -eq 0 ]; then
+              code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$RENDER_APP_URL/healthz") || code="000"
+              if [ "$code" = "200" ]; then
+                echo "Render ready (200 OK) on attempt $i"
+                render_ready=1
+              fi
+            fi
+            if [ "$vercel_ready" -eq 1 ] && [ "$render_ready" -eq 1 ]; then
+              echo "Deployment verification PASSED: Both Vercel and Render are responding with HTTP 200."
+              exit 0
+            fi
+            echo "Attempt $i: Vercel ready=$vercel_ready, Render ready=$render_ready. Waiting 5s..."
+            sleep 5
           done
-          echo "::error::$VERCEL_SITE_URL did not answer"; exit 1
-
-      - name: The Render app answers
-        run: |
-          for i in $(seq 1 40); do
-            code=$(curl -s -o /dev/null -m 30 -w '%{http_code}' "$RENDER_APP_URL/healthz") && [ "$code" = 200 ] && echo "Render: 200" && exit 0
-            echo "Render: not ready ($code), try $i"; sleep 15
-          done
-          echo "::error::$RENDER_APP_URL did not answer"; exit 1
+          if [ "$vercel_ready" -ne 1 ]; then
+            echo "::error::Vercel site ($VERCEL_SITE_URL) did not become ready in time."
+          fi
+          if [ "$render_ready" -ne 1 ]; then
+            echo "::error::Render app ($RENDER_APP_URL) did not become ready in time."
+          fi
+          exit 1
