@@ -46,6 +46,12 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Playwright version matches the Docker image tag
+        run: node scripts/check-playwright-version.mjs
+
+      - name: Lint
+        run: pnpm lint
+
       # The same build Vercel runs, and the one Render's image runs for the wizard.
       - name: Build the site
         run: pnpm run vercel-build

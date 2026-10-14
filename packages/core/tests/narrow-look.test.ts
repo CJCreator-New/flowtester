@@ -9,8 +9,8 @@ import { DeterministicSpider } from '../src/discovery/deterministic-spider.js';
 import { lookAtNarrowScreens } from '../src/plan/narrow-look.js';
 import { BREAKPOINT_VIEWPORTS } from '../src/browser.js';
 
-const PORT = 3532;
-const base = `http://localhost:${PORT}`;
+let port = 0;
+let base = '';
 
 // Below 600 px the menu's links fold behind a "Menu" button; tablets (768 px) still show them.
 const layout = (title: string) => `<!doctype html><html lang="en"><head><title>${title}</title><style>
@@ -35,7 +35,13 @@ describe('Looking at narrow screens', () => {
       res.writeHead(title ? 200 : 404, { 'Content-Type': 'text/html' });
       res.end(title ? layout(title) : 'Not found');
     });
-    await new Promise<void>((resolve) => server.listen(PORT, resolve));
+    await new Promise<void>((resolve) =>
+      server.listen(0, () => {
+        port = (server.address() as any).port;
+        base = `http://localhost:${port}`;
+        resolve();
+      })
+    );
     browser = await chromium.launch();
   });
 

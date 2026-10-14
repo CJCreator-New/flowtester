@@ -2,7 +2,7 @@
 
 Status: Accepted, 2026-10-12 (agreed in a grilling session on `QA testcases plan.md`). Implemented in four tickets: Intent migration, Rejects and the refusal rule, Plan Review and Test cap, Spider deep exploration. Implemented 2026-10-12. See [0025](0025-spider-guarded-delete-probe.md) for the Delete probe.
 
-Builds on [0003](0003-deterministic-safety-filters.md) (Safety Filter), [0014](0014-verified-domains-and-safe-host-classification.md) (Test Copy), [0020](0020-sources-role-binding-and-pipelined-planning.md) (Sources) and [0022](0022-test-sign-in-as-consent.md) (sign-in consent).
+Builds on [0003](0003-deterministic-safety-filters-for-ai-discovery.md) (Safety Filter), [0014](0014-verified-domains-and-safe-host-classification.md) (Test Copy), [0020](0020-sources-role-binding-and-pipelined-planning.md) (Sources) and [0022](0022-test-sign-in-as-consent.md) (sign-in consent).
 
 ## Context
 The plan wants positive and negative coverage: valid input, validation errors, boundary values and permission denials. Today a Plan Item has only `kind: 'denial'` for blocked actions. The plan's own wording ("negative test", "test matrix", "happy path") is on the glossary's _Avoid_ lists.

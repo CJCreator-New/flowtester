@@ -49,21 +49,43 @@ requests a minute, and 50 a day until the account has bought 10 credits (then 1,
 
 ## One check-up from CI (`packages/runner/src/checkup.ts`)
 
-| Variable         | Default      | Meaning                                                                                                                                                   |
-| ---------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `QA_TARGET_URL`  | required     | Address to check                                                                                                                                          |
-| `QA_STAGING`     | `false`      | `true` marks it a test copy, so forms may be filled and sent. Anything else is read-only. Local and CI use only: no Verified Domain proof is needed there |
-| `QA_AI_API_KEY`  | none         | The AI key                                                                                                                                                |
-| `QA_AI_PROVIDER` | `openrouter` | `openrouter`, `gemini`, `openai` or `anthropic`                                                                                                           |
-| `QA_OUTPUT_DIR`  | `qa-report`  | Report folder                                                                                                                                             |
-| `QA_MAX_PAGES`   | `50`         | Page cap, to stay inside free Actions minutes                                                                                                             |
-| `QA_FAIL_ON`     | `blocker`    | `blocker`, `major` or `none`: when the build fails                                                                                                        |
-| `QA_USERNAME`    | none         | Test sign-in username. Used only when `QA_PASSWORD` is also set                                                                                           |
-| `QA_PASSWORD`    | none         | Test sign-in password. Environment only: there is no flag for it. Use a repository secret                                                                 |
-| `QA_LOGIN_PATH`  | none         | Optional sign-in page path, for example `/login`                                                                                                          |
-| `QA_DOCS`        | none         | Product Context files, `;` separated (`.md`, `.txt`, `.docx`). Same as `--docs a.md b.docx`, which takes every argument up to the next flag                |
-| `QA_ROLES`       | none         | Several roles, JSON: `[{"role","username","password","loginPath"?}]`. Holds passwords: environment only, there is no flag. Use a repository secret         |
-| `--test-cap <n>` | `2000`       | Flag only, no variable. The most Tests the Check-up may run; Rejects and Limits past it are switched off ("Over the Test cap."). Same as `testCap` on `POST /api/runner/run` |
+| Variable                   | Default      | Meaning                                                                                                                                                                   |
+| -------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `QA_TARGET_URL`            | required     | Address to check                                                                                                                                                          |
+| `QA_STAGING`               | `false`      | `true` marks it a test copy, so forms may be filled and sent. Anything else is read-only. Local and CI use only: no Verified Domain proof is needed there                 |
+| `QA_AI_API_KEY`            | none         | The AI key                                                                                                                                                                |
+| `QA_AI_PROVIDER`           | `openrouter` | `openrouter`, `gemini`, `openai` or `anthropic`                                                                                                                           |
+| `QA_OUTPUT_DIR`            | `qa-report`  | Report folder                                                                                                                                                             |
+| `QA_MAX_PAGES`             | `50`         | Page cap (clamped to 1..1000, default 50). Keeps run within time budgets                                                                                                  |
+| `QA_FAIL_ON`               | `standard`   | `standard` (default: fails if any active Blocker or any of 6 areas scores below C / 60), `blocker` (fails if active Blocker), `major` (fails if Blocker/Major), or `none` |
+| `QA_CONCURRENCY`           | `2`          | Number of concurrent page evaluations (1 to 5; clamped). Flag: `--concurrency <n>`                                                                                        |
+| `QA_DELAY_MS`              | `100`        | Per-page pacing delay in milliseconds (0 to 2000; clamped). Flag: `--delay <n>`                                                                                           |
+| `QA_CUSTOM_HEADERS`        | none         | JSON object `{"Name": "value"}` or repeated `--header "Name: value"`. Up to 20 headers. Sent only to the target host and allowlisted hosts. Values are secrets            |
+| `QA_DEBUG`                 | none         | Debug logging module or `all`. Flag: `--debug [module]`                                                                                                                   |
+| `QA_RELOGIN`               | `1`          | `1` enables automatic one-time re-login when a session expires; `0` disables it                                                                                           |
+| `QA_CRAWL_MAX_MINUTES`     | `10`         | Spider crawl timeout budget in minutes                                                                                                                                    |
+| `QA_DISCOVERY_MAX_MINUTES` | `20`         | Discovery agent total time budget in minutes                                                                                                                              |
+| `QA_USERNAME`              | none         | Test sign-in username. Used only when `QA_PASSWORD` is also set                                                                                                           |
+| `QA_PASSWORD`              | none         | Test sign-in password. Environment only: there is no flag for it. Use a repository secret                                                                                 |
+| `QA_LOGIN_PATH`            | none         | Optional sign-in page path, for example `/login`                                                                                                                          |
+| `QA_DOCS`                  | none         | Product Context files, `;` separated (`.md`, `.txt`, `.docx`). Same as `--docs a.md b.docx`, which takes every argument up to the next flag                               |
+| `QA_ROLES`                 | none         | JSON list of up to 10 role objects: `[{"role", "username", "password", "loginPath"?, "usernameSelector"?, "passwordSelector"?, "submitSelector"?}]`. Holds secrets        |
+| `--test-cap <n>`           | `2000`       | Flag only, no variable. Most Tests the Check-up may run (clamped 1..100000); Rejects and Limits past it are switched off. Same as `testCap` on `POST /api/runner/run`     |
+
+`QA_FAIL_ON` gates the process exit code:
+
+- `standard` (default): Exit 0 if 0 active Blockers AND all 6 quality areas score >= C (score >= 60); Exit 1 otherwise.
+- `blocker`: Exit 1 if any active Blocker finding exists; Exit 0 otherwise.
+- `major`: Exit 1 if any active Blocker or Major finding exists; Exit 0 otherwise.
+- `none`: Always exits 0.
+
+Clamp ranges and invalid inputs:
+
+- `QA_CONCURRENCY` is clamped to 1..5 (default 2).
+- `QA_DELAY_MS` is clamped to 0..2000 ms (default 100).
+- `QA_MAX_PAGES` is clamped to 1..1000 (default 50).
+- `QA_CUSTOM_HEADERS` must be a valid JSON object or valid `--header "Header: Value"` strings. Up to 20 headers (`MAX_CUSTOM_HEADERS`). Header names must be valid HTTP header tokens; header values must not contain control characters. Invalid input throws an error and stops check-up startup (`QA_CUSTOM_HEADERS is not valid`).
+- `QA_ROLES` takes up to 10 roles (`MAX_ROLES`). Each string field must be under 500 characters (`MAX_ROLE_FIELD_CHARS`). Invalid role structure throws `ERR_INVALID_ROLES`. `loginPath` must stay on the target host (apex/www equal, protocol-relative rejected); invalid `loginPath` throws `ERR_INVALID_LOGIN_PATH`.
 
 `--docs` and `QA_DOCS` follow the wizard's limits (text 500 KB, Word 2 MB, 10 documents; PDF and old `.doc` are refused). Word files are converted in-process. With no `QA_AI_API_KEY`, Plan Items from the documents are written by fixed rules ([ADR 0023](adr/0023-word-in-scope-and-structured-spec-parsing.md)). A document that yields nothing prints a warning; if every document does, the check-up exits with code 2. `QA_ROLES` adds to `QA_USERNAME`/`QA_PASSWORD` (role `member`); any sign-in is the ADR 0022 consent. Usernames and passwords are never printed.
 
@@ -72,6 +94,33 @@ Setting both `QA_USERNAME` and `QA_PASSWORD` is the consent to sign in and test 
 **Sign-in in GitHub Actions is a manual step.** `.github/workflows/qa-check.yml` does not pass `QA_USERNAME`, `QA_PASSWORD` or `QA_LOGIN_PATH`, so a CI Check-up there is unchanged. To use them, add the values as repository secrets (Settings, Secrets and variables, Actions), then add them to the `env:` block of the check-up job yourself (for example `QA_USERNAME: ${{ secrets.QA_USERNAME }}`). Adding them is your consent to sign in and send forms on that address for every run of the workflow, per [ADR 0022](adr/0022-test-sign-in-as-consent.md). Use a test account only. Never write the values into the workflow file.
 
 The CI check-up listens on port 3601 unless `QA_CHECKUP_PORT` is set. When `GITHUB_ACTIONS=true` it also prints annotations for active Blockers (error) and Majors (warning); there is no setting for it.
+
+## Sign-in and crawl limits
+
+- **Supported login shapes:** Single-page form (`username` + `password` + `submit`), two-step login (username -> continue -> password -> submit), and modal openers (sign-in form inside a modal, drawer, or dialog opened by a button). Custom selectors can be specified per role via `usernameSelector`, `passwordSelector`, `submitSelector`, `postLoginSelector`, and `postLoginUrl`.
+- **Not supported:** CAPTCHA, one-time passwords (OTP/2FA/SMS), and external SSO/OAuth identity providers. Workaround: saved sessions via Playwright `storageState` JSON passed in `savedSessions` ([ADR 0021](adr/0021-saved-sessions-memory-only-and-confined-docs-fetch.md)).
+- **Caps and budgets:**
+  - Pages: Crawler defaults to 200 pages (`DEFAULT_MAX_PAGES`), CLI defaults to 50 (`QA_MAX_PAGES`, clamped 1..1000).
+  - Clicks: At most 8 clicks per page (`MAX_CLICKS_PER_PAGE`), at most 100 exploration clicks total (`MAX_EXPLORATION_CLICKS`).
+  - Modal openers: At most 6 interactive openers evaluated per page (`MAX_OPENERS_PER_PAGE`).
+  - Time budgets: Crawl limit 10 minutes (`QA_CRAWL_MAX_MINUTES`), discovery limit 20 minutes (`QA_DISCOVERY_MAX_MINUTES`), runner check-up timeout 40 minutes (`RUN_TIMEOUT_MS`).
+  - Context documents: At most 10 documents (`MAX_CONTEXT_DOCUMENTS`), at most 500 KB text each (`MAX_CONTEXT_DOC_BYTES`). Word files (.docx) up to 2 MB (`DOCX_MAX_BYTES`). Context URL fetch at most 20 pages (`DOCS_MAX_PAGES`), 1 MB total (`DOCS_MAX_BYTES`).
+  - Saved sessions: Up to 256 KB JSON (`MAX_SESSION_BYTES`), cookies scoped to target origin.
+  - Roles: Up to 10 roles (`MAX_ROLES`), string fields under 500 characters (`MAX_ROLE_FIELD_CHARS`).
+  - Custom headers: Up to 20 custom headers (`MAX_CUSTOM_HEADERS = 20`).
+- **Skip reasons (`pageCoverage.skipped[].why`):**
+  - `page-limit`: Reached the maximum page exploration limit.
+  - `did-not-load`: Page failed to load or did not answer within timeout.
+  - `robots`: Disallowed by the site's `robots.txt` rules.
+  - `sign-in`: Page gated by authentication where no valid session or credentials were provided.
+  - `http-error`: Main-frame navigation returned HTTP 4xx or 5xx status.
+  - `timeout`: Navigation timed out during page evaluation.
+  - `off-site-redirect`: Redirected to an external or third-party origin.
+  - `time-limit`: Crawl exceeded total allocated time budget.
+  - `trap-limit`: Repeated structural patterns flagged as a crawl trap.
+  - `session-lost`: Session expired or was invalidated during crawl.
+  - `duplicate`: Canonical or fingerprint duplicate of an already visited page.
+- **Robots behaviour:** The spider reads the target site's `robots.txt` and obeys disallow rules for public website scans. On a verified Test Copy (`QA_STAGING=true`), robots restrictions may be bypassed to ensure thorough test coverage.
 
 ## Wizard (front end)
 

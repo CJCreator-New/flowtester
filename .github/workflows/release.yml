@@ -32,5 +32,29 @@ jobs:
             exit 1
           fi
 
+      - name: Playwright version matches the Docker image tag
+        run: node scripts/check-playwright-version.mjs
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high
+
+      - name: Build the site
+        run: pnpm run vercel-build
+
+      - name: Build the runner and the packages it uses
+        run: pnpm --filter "@qa/runner..." run build
+
+      - name: Install Chromium (the browser tests drive it)
+        run: pnpm --filter @qa/core exec playwright install --with-deps chromium
+
+      - name: Tests
+        run: pnpm exec vitest run --exclude "**/wizard-e2e.test.ts"
+
       - name: Build
         run: pnpm build

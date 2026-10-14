@@ -12,6 +12,7 @@ import type {
 } from '@qa/types';
 import { normalizeTestIntents } from '@qa/types';
 import { PlanValidator } from './discovery/plan-validator.js';
+import { readJsonSafe, writeJsonAtomic } from './atomic-write.js';
 
 /**
  * The last approved Plan (ADR 0009), kept so the next run reuses it where the site hasn't changed:
@@ -58,6 +59,8 @@ export function siteContentKey(pages: PageInventoryItem[]): string {
  * there last time (so the next plan can flag what's new). Kept in the runner's data folder.
  */
 export interface SiteMemory {
+  /** Document schema version: missing or 0 = legacy, 1 = current. Higher = read-only. */
+  schemaVersion?: number;
   /** The site's host, e.g. "localhost:3050" or "shop.example.com". */
   host: string;
   updatedAt: string;
@@ -68,7 +71,16 @@ export interface SiteMemory {
   /** Whether to check how search engines see the site, as last chosen. */
   searchChecks?: boolean;
   /** Sign-ins the person asked to remember for the site. Passwords are kept in the OS keychain, never here. */
-  signIns?: Array<{ role: string; username: string; loginPath?: string }>;
+  signIns?: Array<{
+    role: string;
+    username: string;
+    loginPath?: string;
+    usernameSelector?: string;
+    passwordSelector?: string;
+    submitSelector?: string;
+    postLoginSelector?: string;
+    postLoginUrl?: string;
+  }>;
   /** Pages found in the last run. */
   pages: string[];
   /** Journeys in the last run, by journey key, with a fingerprint of their steps. */
@@ -105,6 +117,7 @@ function memoryFile(dataDir: string, host: string): string {
 
 export function emptySiteMemory(host: string): SiteMemory {
   return {
+    schemaVersion: 1,
     host,
     updatedAt: new Date().toISOString(),
     pages: [],
@@ -127,14 +140,13 @@ export function normalizeMemoryIntents(memory: SiteMemory): SiteMemory {
 }
 
 export async function loadSiteMemory(dataDir: string, host: string): Promise<SiteMemory | null> {
-  try {
-    return normalizeMemoryIntents({
-      ...emptySiteMemory(host),
-      ...(JSON.parse(await fs.readFile(memoryFile(dataDir, host), 'utf8')) as SiteMemory),
-    });
-  } catch {
-    return null;
-  }
+  const result = await readJsonSafe<SiteMemory>(memoryFile(dataDir, host), { currentVersion: 1 });
+  if (!result.data) return null;
+  return normalizeMemoryIntents({
+    ...emptySiteMemory(host),
+    ...result.data,
+    schemaVersion: result.version ?? 0,
+  });
 }
 
 /** Every site remembered on this computer. */
@@ -143,20 +155,31 @@ export async function listSiteMemories(dataDir: string): Promise<SiteMemory[]> {
   const names = await fs.readdir(dir).catch(() => [] as string[]);
   const sites: SiteMemory[] = [];
   for (const name of names.filter((n) => n.endsWith('.json'))) {
-    try {
-      const memory = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as SiteMemory;
-      if (memory.host) sites.push({ ...emptySiteMemory(memory.host), ...memory });
-    } catch {
-      // not a site's memory
+    const result = await readJsonSafe<SiteMemory>(path.join(dir, name), { currentVersion: 1 });
+    if (result.data?.host) {
+      sites.push({
+        ...emptySiteMemory(result.data.host),
+        ...result.data,
+        schemaVersion: result.version ?? 0,
+      });
     }
   }
   return sites.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function saveSiteMemory(dataDir: string, memory: SiteMemory): Promise<void> {
+  if (memory.schemaVersion !== undefined && memory.schemaVersion > 1) {
+    console.warn(
+      `[SiteMemory] Not saving ${memory.host}: schemaVersion ${memory.schemaVersion} is newer than supported 1.`
+    );
+    return;
+  }
   const file = memoryFile(dataDir, memory.host);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify({ ...memory, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
+  await writeJsonAtomic(file, {
+    ...memory,
+    schemaVersion: 1,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 export interface MemorySummary {

@@ -6,7 +6,7 @@ import { FlowTestOrchestrator } from '../src/orchestrator.js';
 import type { OrchestratorEvent } from '../src/orchestrator.js';
 import type { TestCase, TestStep } from '@qa/types';
 
-const PORT = 3541;
+let port = 0;
 const outputDir = path.join(process.cwd(), '.tmp-missing-element-report');
 
 const page = (body: string, script = ''): string =>
@@ -44,7 +44,12 @@ const server = http.createServer((req, res) => {
 });
 
 beforeAll(async () => {
-  await new Promise<void>((resolve) => server.listen(PORT, () => resolve()));
+  await new Promise<void>((resolve) =>
+    server.listen(0, () => {
+      port = (server.address() as any).port;
+      resolve();
+    })
+  );
 });
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -63,7 +68,7 @@ async function runSteps(startPage: string, steps: TestStep[], stepTimeoutMs?: nu
   };
   const events: OrchestratorEvent[] = [];
   const report = await new FlowTestOrchestrator().run({
-    targetUrl: `http://localhost:${PORT}`,
+    targetUrl: `http://localhost:${port}`,
     productId: 'missing-test',
     specTestCases: [testCase],
     outputDir,

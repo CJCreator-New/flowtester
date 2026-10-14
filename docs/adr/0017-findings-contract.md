@@ -2,7 +2,7 @@
 
 Status: Accepted 2026-10-08 (owner accepted all seven recommended answers in "Decisions for owner").
 
-Builds on [0004](0004-structural-fingerprint-dedup.md) (Structural Fingerprint), [0012](0012-hosted-runner-github-actions.md) (CI route) and [0018](0018-claim-wording.md) (claim wording). Redaction is owned by 0016 (T-20, pending); this ADR makes no redaction claim.
+Builds on [0004](0004-structural-fingerprint-deduplication.md) (Structural Fingerprint), [0012](0012-hosted-runner-github-actions.md) (CI route) and [0018](0018-claim-wording.md) (claim wording). Redaction is owned by 0016 (T-20, pending); this ADR makes no redaction claim.
 
 ## Context and Decision
 `findings.json` is read by other tools today (the suppressions delta, history, the wizard) with no version and no stable id per finding. People now want to feed it to CI and to coding agents. That makes its shape a public contract. We keep v1 small.

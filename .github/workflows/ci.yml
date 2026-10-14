@@ -36,6 +36,17 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
+      - name: Typecheck
+        continue-on-error: true
+        run: |
+          out=$(pnpm typecheck 2>&1) || true
+          echo "$out"
+          count=$(echo "$out" | grep -c "error TS" || echo "0")
+          if [ -n "$GITHUB_STEP_SUMMARY" ]; then
+            echo "### TypeScript Check" >> "$GITHUB_STEP_SUMMARY"
+            echo "Typecheck found **$count** error(s)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Build the site (also type-checks types and the wizard)
         run: pnpm run vercel-build
 
@@ -66,6 +77,48 @@ jobs:
           if (out) fs.appendFileSync(out, md);
           console.log(md);
           '
+
+  # Integration tests for authenticated crawls against the fixture app.
+  # Runs on PRs touching packages/core, packages/runner, fixtures, or packages/types.
+  auth-crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'packages/core/**'
+              - 'packages/runner/**'
+              - 'packages/types/**'
+              - 'fixtures/**'
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        if: steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+
+      - uses: actions/setup-node@v4
+        if: steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        if: steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the runner and the packages it uses
+        if: steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+        run: pnpm --filter "@qa/runner..." run build
+
+      - name: Install Chromium
+        if: steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+        run: pnpm --filter @qa/core exec playwright install --with-deps chromium
+
+      - name: Auth and crawl integration tests
+        if: steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+        run: pnpm exec vitest run packages/core/tests/auth-crawl-e2e.test.ts packages/runner/tests/auth-crawl-run.test.ts
 
   # Fails on any high or critical advisory in production dependencies. Reads the lockfile; no install needed.
   audit:

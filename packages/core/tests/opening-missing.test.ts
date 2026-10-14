@@ -6,7 +6,7 @@ import path from 'path';
 import { FlowTestOrchestrator } from '../src/orchestrator.js';
 import type { TestCase } from '@qa/types';
 
-const PORT = 3547;
+let port = 0;
 const outputDir = path.join(process.cwd(), '.tmp-opening-missing-report');
 
 const server = http.createServer((_req, res) => {
@@ -16,7 +16,12 @@ const server = http.createServer((_req, res) => {
   );
 });
 beforeAll(async () => {
-  await new Promise<void>((resolve) => server.listen(PORT, () => resolve()));
+  await new Promise<void>((resolve) =>
+    server.listen(0, () => {
+      port = (server.address() as any).port;
+      resolve();
+    })
+  );
 });
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -39,7 +44,7 @@ async function run(openingFlag: boolean) {
     kind: 'page-test',
   };
   return new FlowTestOrchestrator().run({
-    targetUrl: `http://localhost:${PORT}`,
+    targetUrl: `http://localhost:${port}`,
     productId: 'opening-test',
     specTestCases: [testCase],
     outputDir,

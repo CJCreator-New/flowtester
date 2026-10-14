@@ -4,7 +4,7 @@ The Wizard is the app, for everyone ([ADR 0010](../../docs/adr/0010-one-app-with
 written for people who don't test software for a living: product managers, founders, marketers. Engineers
 get their detail in the same app, under each finding, in a collapsed "Details for developers". QA Flow
 Studio (`packages/web`), the separate dashboard for engineers, is being retired
-([UX_IMPLEMENTATION_PLAN.md](../../UX_IMPLEMENTATION_PLAN.md)).
+([E2E_PLATFORM_IMPLEMENTATION_PLAN.md](../../docs/E2E_PLATFORM_IMPLEMENTATION_PLAN.md)).
 
 On screen the product is called **Release check-up**, and one pass over a site is a **check-up** (see
 [CONTEXT.md](../../CONTEXT.md)).
@@ -129,5 +129,5 @@ or event names. Errors say what happened and what to do next. The event-to-sente
   graded checks.
 - **Nothing technical on the plain-language layer:** no prototype labels, error codes, selectors, checker
   ids, event names or command lines. They go under "Details for developers". A test reads every screen for
-  them ([UX_IMPLEMENTATION_PLAN.md](../../UX_IMPLEMENTATION_PLAN.md), Wording).
+  them ([E2E_PLATFORM_IMPLEMENTATION_PLAN.md](../../docs/E2E_PLATFORM_IMPLEMENTATION_PLAN.md), Wording).
 - **One word per thing:** the settings are "Settings" everywhere.

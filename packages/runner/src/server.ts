@@ -129,6 +129,8 @@ import {
   type RunOptions,
   type AIProvider,
   type OrchestratorEvent,
+  writeJsonAtomic,
+  readJsonSafe,
 } from '@qa/core';
 import { BenchmarkStore, cleanFlowType, compareSites, siteName } from './benchmarks.js';
 import { SchedulerManager, type CheckupSchedule } from './scheduler.js';
@@ -512,6 +514,7 @@ function normalizeStoredPlan(record: StoredPlanRecord): StoredPlanRecord {
   const draftPlan = record.context.draft?.plan;
   return {
     ...record,
+    status: record.status ?? 'awaiting-review',
     plan: normalizePlanIntents(record.plan),
     context: {
       ...record.context,
@@ -523,6 +526,10 @@ function normalizeStoredPlan(record: StoredPlanRecord): StoredPlanRecord {
 }
 
 interface StoredPlanRecord {
+  /** Document schema version: missing or 0 = legacy, 1 = current. Higher = read-only. */
+  schemaVersion?: number;
+  /** Current state of the plan: awaiting-review, approved, or done. */
+  status?: 'awaiting-review' | 'approved' | 'done';
   plan: ReviewPlan;
   context: {
     targetUrl: string;
@@ -1731,12 +1738,45 @@ export class RunnerServer {
       });
       return;
     }
+    if (host && req.method === 'GET') {
+      const memory = await loadSiteMemory(this.siteDir(), host);
+      if (!memory) {
+        this.sendJson(res, 404, { error: 'That site isn’t remembered.' });
+        return;
+      }
+      const needsPassword: string[] = [];
+      for (const s of memory.signIns ?? []) {
+        const hasPw = await this.keyResolver.readSecret(this.signInAccount(memory.host, s.role));
+        if (!hasPw) needsPassword.push(s.role);
+      }
+      this.sendJson(res, 200, {
+        host: memory.host,
+        owner: memory.owner,
+        markedTestCopy: memory.staging || undefined,
+        searchChecks: memory.searchChecks,
+        signIns: memory.signIns ?? [],
+        needsPassword: needsPassword.length > 0 ? needsPassword : undefined,
+        updatedAt: memory.updatedAt,
+      });
+      return;
+    }
     if (host && req.method === 'POST') {
       let body: {
         searchChecks?: boolean | null;
         forgetSignIn?: string;
-        addSignIn?: { role?: string; username?: string; password?: string; loginPath?: string };
+        addSignIn?: {
+          role?: string;
+          username?: string;
+          password?: string;
+          loginPath?: string;
+          usernameSelector?: string;
+          passwordSelector?: string;
+          submitSelector?: string;
+          postLoginSelector?: string;
+          postLoginUrl?: string;
+        };
         testSignIn?: string;
+        rememberSignIns?: RoleCredential[];
       } = {};
       try {
         body = await this.readJsonBody(req);
@@ -1746,6 +1786,44 @@ export class RunnerServer {
       }
       if (body.addSignIn || body.testSignIn) {
         await this.handleSignInChange(host, body, res);
+        return;
+      }
+      if (Array.isArray(body.rememberSignIns)) {
+        const memory = (await loadSiteMemory(this.siteDir(), host)) ?? emptySiteMemory(host);
+        const notSaved: string[] = [];
+        const existingSignIns = [...(memory.signIns ?? [])];
+        for (const role of body.rememberSignIns) {
+          if (role.password) {
+            const saved = await this.keyResolver.saveSecret(this.signInAccount(host, role.role), role.password);
+            if (!saved) {
+              notSaved.push(role.role);
+              continue;
+            }
+          }
+          const idx = existingSignIns.findIndex((s) => s.role === role.role);
+          const entry = {
+            role: role.role,
+            username: role.username,
+            loginPath: role.loginPath,
+            usernameSelector: role.usernameSelector,
+            passwordSelector: role.passwordSelector,
+            submitSelector: role.submitSelector,
+            postLoginSelector: role.postLoginSelector,
+            postLoginUrl: role.postLoginUrl,
+          };
+          if (idx >= 0) {
+            existingSignIns[idx] = { ...existingSignIns[idx], ...entry };
+          } else {
+            existingSignIns.push(entry);
+          }
+        }
+        memory.signIns = existingSignIns;
+        await saveSiteMemory(this.siteDir(), memory);
+        this.sendJson(res, 200, {
+          saved: true,
+          signIns: memory.signIns,
+          notSaved: notSaved.length > 0 ? notSaved : undefined,
+        });
         return;
       }
       const memory = await loadSiteMemory(this.siteDir(), host);
@@ -1772,7 +1850,17 @@ export class RunnerServer {
   private async handleSignInChange(
     host: string,
     body: {
-      addSignIn?: { role?: string; username?: string; password?: string; loginPath?: string };
+      addSignIn?: {
+        role?: string;
+        username?: string;
+        password?: string;
+        loginPath?: string;
+        usernameSelector?: string;
+        passwordSelector?: string;
+        submitSelector?: string;
+        postLoginSelector?: string;
+        postLoginUrl?: string;
+      };
       testSignIn?: string;
     },
     res: http.ServerResponse
@@ -1795,6 +1883,11 @@ export class RunnerServer {
         username: body.addSignIn.username.trim(),
         password: body.addSignIn.password,
         loginPath: body.addSignIn.loginPath?.trim() || undefined,
+        usernameSelector: body.addSignIn.usernameSelector?.trim() || undefined,
+        passwordSelector: body.addSignIn.passwordSelector?.trim() || undefined,
+        submitSelector: body.addSignIn.submitSelector?.trim() || undefined,
+        postLoginSelector: body.addSignIn.postLoginSelector?.trim() || undefined,
+        postLoginUrl: body.addSignIn.postLoginUrl?.trim() || undefined,
       };
     } else {
       const saved = memory.signIns?.find((s) => s.role === body.testSignIn);
@@ -1860,10 +1953,24 @@ export class RunnerServer {
         });
         return;
       }
-      memory.signIns = [
-        ...(memory.signIns ?? []).filter((s) => s.role !== credential.role),
-        { role: credential.role, username: credential.username, loginPath: credential.loginPath },
-      ];
+      const existing = [...(memory.signIns ?? [])];
+      const idx = existing.findIndex((s) => s.role === credential.role);
+      const entry = {
+        role: credential.role,
+        username: credential.username,
+        loginPath: credential.loginPath,
+        usernameSelector: credential.usernameSelector,
+        passwordSelector: credential.passwordSelector,
+        submitSelector: credential.submitSelector,
+        postLoginSelector: credential.postLoginSelector,
+        postLoginUrl: credential.postLoginUrl,
+      };
+      if (idx >= 0) {
+        existing[idx] = { ...existing[idx], ...entry };
+      } else {
+        existing.push(entry);
+      }
+      memory.signIns = existing;
       await saveSiteMemory(this.siteDir(), memory);
     }
     this.sendJson(res, 200, { verified: true, saved: !!body.addSignIn, landingPath: result.landingPath });
@@ -1919,32 +2026,66 @@ export class RunnerServer {
   ): Promise<{ roles?: RoleCredential[]; memory: SiteMemory | null; note?: string }> {
     if (body.roles?.length) {
       if (!body.rememberSignIns) return { roles: body.roles, memory };
-      const saved: NonNullable<SiteMemory['signIns']> = [];
-      let unsaved = 0;
+      const currentSignIns = [...(memory?.signIns ?? [])];
+      const notSaved: string[] = [];
       for (const role of body.roles) {
         if (role.password && !(await this.keyResolver.saveSecret(this.signInAccount(host, role.role), role.password))) {
-          unsaved++;
+          notSaved.push(role.role);
           continue;
         }
-        saved.push({ role: role.role, username: role.username, loginPath: role.loginPath });
+        const idx = currentSignIns.findIndex((s) => s.role === role.role);
+        const entry = {
+          role: role.role,
+          username: role.username,
+          loginPath: role.loginPath,
+          usernameSelector: role.usernameSelector,
+          passwordSelector: role.passwordSelector,
+          submitSelector: role.submitSelector,
+          postLoginSelector: role.postLoginSelector,
+          postLoginUrl: role.postLoginUrl,
+        };
+        if (idx >= 0) {
+          currentSignIns[idx] = { ...currentSignIns[idx], ...entry };
+        } else {
+          currentSignIns.push(entry);
+        }
       }
-      const next = { ...(memory ?? emptySiteMemory(host)), signIns: saved };
+      const next = { ...(memory ?? emptySiteMemory(host)), signIns: currentSignIns };
       return {
         roles: body.roles,
         memory: next,
         note:
-          unsaved > 0
+          notSaved.length > 0
             ? 'This computer has no keychain to keep passwords in, so the sign-ins weren’t remembered.'
             : undefined,
       };
     }
     if (!body.useSavedSignIns || !memory?.signIns?.length) return { memory };
     const roles: RoleCredential[] = [];
+    const needsPassword: string[] = [];
     for (const s of memory.signIns) {
       const password = await this.keyResolver.readSecret(this.signInAccount(host, s.role));
-      if (password) roles.push({ role: s.role, username: s.username, password, loginPath: s.loginPath });
+      if (password) {
+        roles.push({
+          role: s.role,
+          username: s.username,
+          password,
+          loginPath: s.loginPath,
+          usernameSelector: s.usernameSelector,
+          passwordSelector: s.passwordSelector,
+          submitSelector: s.submitSelector,
+          postLoginSelector: s.postLoginSelector,
+          postLoginUrl: s.postLoginUrl,
+        });
+      } else {
+        needsPassword.push(s.role);
+      }
     }
-    return { roles: roles.length > 0 ? roles : undefined, memory };
+    return {
+      roles: roles.length > 0 ? roles : undefined,
+      memory,
+      note: needsPassword.length > 0 ? `Saved passwords were not found for: ${needsPassword.join(', ')}` : undefined,
+    };
   }
 
   /**
@@ -3742,6 +3883,7 @@ export class RunnerServer {
       }
       // Failed part-way: the plan stays, so it can be approved again once the site is working.
       const msg = this.redactedMessage(err);
+      console.error('[executeTesting failed stack]', (err as any)?.stack || err);
       await this.savePlan(record).catch(() => {});
       this.phase = 'awaiting-review';
       this.isRunning = true;
@@ -3758,9 +3900,14 @@ export class RunnerServer {
       return;
     }
     if (!current()) return;
-    // Tested: the plan no longer awaits review, so a restart mustn't bring it back. (If the runner
-    // dies mid-test the file stays, and the plan can be approved again.)
-    await this.clearPlan(context.runId);
+    // Tested: the plan no longer awaits review, so a restart mustn't bring it back.
+    record.status = 'done';
+    await this.savePlan(record).catch(() => {});
+    if (context.runId) {
+      this.savedSessions.delete(context.runId);
+      await this.cleanAuthDir(context.runId);
+    }
+    this.currentPlanRecord = null;
 
     // What the site was seen doing (the error it shows for an empty field) confirms a guessed rule next time.
     if (context.siteHost && context.draft) {
@@ -3838,21 +3985,21 @@ export class RunnerServer {
   }
 
   private async ensurePlanLoaded(): Promise<StoredPlanRecord | null> {
-    if (this.currentPlanRecord) return this.currentPlanRecord;
-    try {
-      const raw = await fs.readFile(this.planFile, 'utf8');
-      const record = normalizeStoredPlan(JSON.parse(raw) as StoredPlanRecord);
-      if (record?.plan && record?.context) {
-        this.currentPlanRecord = record;
-        if (this.phase === 'idle') {
-          this.phase = 'awaiting-review';
-          this.isRunning = true;
-          this.currentRunId = record.plan.runId;
-        }
-        return this.currentPlanRecord;
+    if (this.currentPlanRecord) {
+      if (this.currentPlanRecord.status === 'done') return null;
+      return this.currentPlanRecord;
+    }
+    const res = await readJsonSafe<StoredPlanRecord>(this.planFile, { currentVersion: 1 });
+    if (!res.data) return null;
+    const record = normalizeStoredPlan(res.data);
+    if (record?.plan && record?.context && record.status === 'awaiting-review') {
+      this.currentPlanRecord = record;
+      if (this.phase === 'idle') {
+        this.phase = 'awaiting-review';
+        this.isRunning = true;
+        this.currentRunId = record.plan.runId;
       }
-    } catch {
-      // file missing or invalid
+      return this.currentPlanRecord;
     }
     return null;
   }
@@ -3871,18 +4018,16 @@ export class RunnerServer {
     const host = this.hostOfPlan(record);
     this.parkedPlans.set(host, record);
     const file = this.parkedFile(host);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, JSON.stringify(this.planForDisk(record), null, 2), 'utf8');
+    await writeJsonAtomic(file, this.planForDisk(record));
   }
 
   /** Takes a site's kept-aside plan back out, or null when there's none. */
   private async unparkPlan(host: string): Promise<StoredPlanRecord | null> {
     let record = this.parkedPlans.get(host) ?? null;
     if (!record) {
-      try {
-        record = normalizeStoredPlan(JSON.parse(await fs.readFile(this.parkedFile(host), 'utf8')) as StoredPlanRecord);
-      } catch {
-        record = null;
+      const res = await readJsonSafe<StoredPlanRecord>(this.parkedFile(host), { currentVersion: 1 });
+      if (res.data) {
+        record = normalizeStoredPlan(res.data);
       }
     }
     this.parkedPlans.delete(host);
@@ -3897,8 +4042,10 @@ export class RunnerServer {
     const dir = path.join(this.dataDir, 'waiting-plans');
     const list: Array<{ host: string; targetUrl: string; runId: string; discoveredAt: string; pages: number }> = [];
     for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
-      try {
-        const record = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as StoredPlanRecord;
+      if (!name.endsWith('.json')) continue;
+      const res = await readJsonSafe<StoredPlanRecord>(path.join(dir, name), { currentVersion: 1 });
+      if (res.data?.plan && res.data?.context) {
+        const record = normalizeStoredPlan(res.data);
         list.push({
           host: this.hostOfPlan(record),
           targetUrl: record.plan.targetUrl,
@@ -3906,8 +4053,6 @@ export class RunnerServer {
           discoveredAt: record.plan.discoveredAt,
           pages: record.plan.planPages?.length ?? record.plan.pages.length,
         });
-      } catch {
-        // not a plan
       }
     }
     return list;
@@ -3959,8 +4104,7 @@ export class RunnerServer {
 
   private async savePlan(record: StoredPlanRecord): Promise<void> {
     this.currentPlanRecord = record;
-    await fs.mkdir(this.dataDir, { recursive: true });
-    await fs.writeFile(this.planFile, JSON.stringify(this.planForDisk(record), null, 2), 'utf8');
+    await writeJsonAtomic(this.planFile, this.planForDisk(record));
   }
 
   /**
@@ -3997,6 +4141,8 @@ export class RunnerServer {
       headerSecrets.push({ token: activeTunnel });
     }
     return new Redactor([...roles, ...sessionSecrets, ...headerSecrets]).deep({
+      schemaVersion: 1,
+      status: record.status ?? 'awaiting-review',
       plan: record.plan,
       context: {
         ...context,
@@ -4004,7 +4150,26 @@ export class RunnerServer {
         customHeaderNames: customHeaderNames.length > 0 ? customHeaderNames : undefined,
         profile: profile && {
           ...profile,
-          roles: roles.map(({ role, loginPath }) => ({ role, username: '', loginPath })),
+          roles: roles.map(
+            ({
+              role,
+              loginPath,
+              usernameSelector,
+              passwordSelector,
+              submitSelector,
+              postLoginSelector,
+              postLoginUrl,
+            }) => ({
+              role,
+              username: '',
+              loginPath,
+              usernameSelector,
+              passwordSelector,
+              submitSelector,
+              postLoginSelector,
+              postLoginUrl,
+            })
+          ),
         },
         signInNotSaved: notSaved.length > 0 ? notSaved : undefined,
         // An AI key sent with the request isn't kept either; a saved key is looked up again.
@@ -4864,16 +5029,54 @@ export class RunnerServer {
 
     // Sign-in details are never saved to disk, so a plan read back after a restart needs them again.
     const notSaved = record.context.signInNotSaved || [];
-    if (notSaved.length > 0 && Array.isArray(body?.roles) && record.context.profile) {
-      const sent = new Map(body.roles.map((r) => [r.role, r]));
-      record.context.profile.roles = record.context.profile.roles.map((r) => sent.get(r.role) ?? r);
-      record.context.signInNotSaved = notSaved.filter((role) => !sent.has(role));
+    if (!record.context.profile && notSaved.length > 0) {
+      record.context.profile = {
+        name: record.context.productId || 'default',
+        productId: record.context.productId || 'default',
+        roles: notSaved.map((r) => ({ role: r, username: '' })),
+      };
     }
+
+    if (Array.isArray(body?.roles) && record.context.profile) {
+      const knownRoleNames = new Set(record.context.profile.roles.map((r) => r.role));
+      const validSent = body.roles.filter((r) => r && typeof r.role === 'string' && knownRoleNames.has(r.role));
+      const sentMap = new Map(validSent.map((r) => [r.role, r]));
+
+      record.context.profile.roles = record.context.profile.roles.map((saved) => {
+        const sent = sentMap.get(saved.role);
+        if (!sent) return saved;
+        return {
+          ...saved,
+          username: sent.username !== undefined ? sent.username : saved.username,
+          password: sent.password !== undefined ? sent.password : saved.password,
+          loginPath: sent.loginPath || saved.loginPath,
+          usernameSelector: sent.usernameSelector || saved.usernameSelector,
+          passwordSelector: sent.passwordSelector || saved.passwordSelector,
+          submitSelector: sent.submitSelector || saved.submitSelector,
+          postLoginSelector: sent.postLoginSelector || saved.postLoginSelector,
+          postLoginUrl: sent.postLoginUrl || saved.postLoginUrl,
+        };
+      });
+
+      if (notSaved.length > 0) {
+        // Clear from signInNotSaved only roles that supplied passwords
+        record.context.signInNotSaved = notSaved.filter((role) => {
+          const sent = sentMap.get(role);
+          return !(sent && sent.password);
+        });
+      }
+    }
+
     const stillMissing = record.context.signInNotSaved || [];
     if (stillMissing.length > 0) {
       this.sendJson(res, 409, {
         error: `Release check-up restarted since this plan was made, and sign-in details are never saved to disk. Send them again for: ${stillMissing.join(', ')}.`,
+        code: 'ERR_SIGN_IN_REQUIRED',
         needsSignIn: stillMissing,
+        needsSignInDetails: stillMissing.map((r) => {
+          const saved = record.context.profile?.roles.find((x) => x.role === r);
+          return { role: r, loginPath: saved?.loginPath };
+        }),
       });
       return;
     }
@@ -4881,7 +5084,18 @@ export class RunnerServer {
     // Full testing was agreed to with test sign-in details (ADR 0022): without them there is no
     // consent left, so nothing is run (never a look-only or signed-out run in its place).
     if (record.context.signInConsent && !hasCompleteSignIn(record.context.profile?.roles)) {
-      this.sendJson(res, 409, { error: CONSENT_NEEDS_SIGN_IN, code: 'ERR_SIGN_IN_REQUIRED' });
+      const missing = (record.context.profile?.roles || [])
+        .filter((r) => !r.username || !r.password)
+        .map((r) => r.role);
+      this.sendJson(res, 409, {
+        error: CONSENT_NEEDS_SIGN_IN,
+        code: 'ERR_SIGN_IN_REQUIRED',
+        needsSignIn: missing.length > 0 ? missing : undefined,
+        needsSignInDetails: missing.map((r) => ({
+          role: r,
+          loginPath: record.context.profile?.roles.find((x) => x.role === r)?.loginPath,
+        })),
+      });
       return;
     }
 
@@ -4939,6 +5153,9 @@ export class RunnerServer {
       }
       this.recentApprovals.set(idempotencyKey, { timestamp: now, runId: record.plan.runId });
     }
+
+    record.status = 'approved';
+    await this.savePlan(record);
 
     this.sendJson(res, 200, { status: 'approved', runId: record.plan.runId });
 

@@ -2,7 +2,7 @@
 
 Status: Accepted, 2026-10-12.
 
-Builds on [0003](0003-deterministic-safety-filters.md) (Safety Filter) and [0024](0024-intent-and-refusal-rule.md) (Interactive States, Spider contract).
+Builds on [0003](0003-deterministic-safety-filters-for-ai-discovery.md) (Safety Filter) and [0024](0024-intent-and-refusal-rule.md) (Interactive States, Spider contract).
 
 ## Context
 Forms hidden in tabs, accordions, drawers and dialogs were never reached, and list pages gave the Plan no facts about Add, Edit and Delete. Finding them means clicking controls on a site we may not own. Delete is the one control the Safety Filter and the risky-name list refuse to touch.

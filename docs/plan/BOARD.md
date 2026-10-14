@@ -19,10 +19,10 @@ All tickets start `todo`. Update the Status column when a ticket is picked up (`
 | 3 | T-114 | Orchestrator: reuse sign-in, detect session loss, real status for Permission Matrix | M | T-102, T-103, T-107, T-110 | G-008, G-011, G-014, G-004 | done |
 | 4 | T-113 | Discovery agent: headers everywhere, one sign-in, session-drop reporting, telemetry | M | T-102, T-103, T-105, T-110, T-111, T-112 | G-004, G-014, G-006, G-007, G-010 | done |
 | 5 | T-115 | Runner integration: headers to every stage, reuse sign-in, per-run auth dir, redacted errors | L | T-103, T-104, T-105, T-110, T-113, T-114 | G-004, G-014, G-022, G-036 | done |
-| 6 | T-116 | Persistence integrity and re-approval | M | T-108, T-115 | G-013, G-017, G-024, G-048 | todo |
-| 6 | T-117 | End-to-end proof on the fixture | M | T-102, T-112, T-113, T-114, T-115 | G-012, G-028, G-027 | todo |
-| 7 | T-118 | CI gates: login+crawl on PRs, nightly wizard-e2e, release and deploy parity | S | T-106, T-117 | G-029, G-025, G-026 | todo |
-| 7 | T-119 | Docs and ADR 0026 | M | T-104, T-105, T-107, T-110, T-112, T-113, T-114, T-115, T-116 | G-032 | todo |
+| 6 | T-116 | Persistence integrity and re-approval | M | T-108, T-115 | G-013, G-017, G-024, G-048 | done |
+| 6 | T-117 | End-to-end proof on the fixture | M | T-102, T-112, T-113, T-114, T-115 | G-012, G-028, G-027 | done |
+| 7 | T-118 | CI gates: login+crawl on PRs, nightly wizard-e2e, release and deploy parity | S | T-106, T-117 | G-029, G-025, G-026 | done |
+| 7 | T-119 | Docs and ADR 0026 | M | T-104, T-105, T-107, T-110, T-112, T-113, T-114, T-115, T-116 | G-032 | done |
 
 ## Dependency graph
 

@@ -41,7 +41,17 @@ The tool drives real browsers against real sites, so safety is enforced in code,
 
 ## Headless sign-in (CI)
 
-`QA_USERNAME` and `QA_PASSWORD` (optional `QA_LOGIN_PATH`) are read from the environment only: there is no command-line flag, so the password does not land in shell history or process lists. Setting both is the consent to sign in and test fully (ADR 0022). Use a test account on a test copy, and keep both in repository secrets. The check-up never prints them, never writes them to the job summary or report. The signed-in session (cookies) is kept only in a temporary folder outside the report folder while the run works, so it is never part of the uploaded `qa-report` artifact, and that folder is deleted when the run ends, however it ends.
+`QA_USERNAME` and `QA_PASSWORD` (optional `QA_LOGIN_PATH`) are read from the environment only: there is no command-line flag, so the password does not land in shell history or process lists. Setting both is the consent to sign in and test fully (ADR 0022). Use a test account on a test copy, and keep both in repository secrets. The check-up never prints them, never writes them to the job summary or report. The signed-in session (cookies) is kept only in a temporary folder outside the report folder while the run works, so it is never part of the uploaded `qa-report` artifact, and that per-run auth directory is deleted at run end, however it ends.
+
+`loginPath` must stay strictly on the target origin (apex and `www` hostnames are matched; cross-host URLs and protocol-relative paths like `//evil.com` are refused with `ERR_INVALID_LOGIN_PATH`).
+
+## Custom headers and tokens
+
+Custom headers (`QA_CUSTOM_HEADERS`, `customHeaders` API field, or `--header` flags) pass bypass tokens (such as `X-QA-Bypass-Token`) or authentication headers to crawler and test requests. Header values are treated as sensitive secrets:
+
+- They are never written to disk plans or reports (plans reloaded after a runner restart require re-sending them via `ERR_HEADERS_NOT_SAVED`).
+- They are never printed in logs or SSE event streams.
+- They are scoped strictly to the target origin and explicit allowlisted hosts (`headerHosts`); requests to third-party domains never receive custom headers.
 
 ## Verified Domains (shared machines)
 

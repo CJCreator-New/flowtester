@@ -2,7 +2,7 @@
 
 Status: Accepted by plan approval, 2026-10-10 (the owner chose "credentials = consent" for the URL + test credentials Check-up).
 
-Amends [0014](0014-verified-domains-and-safe-host-classification.md) (safe host classification). Builds on [0003](0003-deterministic-safety-filters.md) (Safety Filter), [0016](0016-evidence-redaction.md) (redaction) and [0021](0021-saved-sessions-memory-only-and-confined-docs-fetch.md) (secrets in memory).
+Amends [0014](0014-verified-domains-and-safe-host-classification.md) (safe host classification). Builds on [0003](0003-deterministic-safety-filters-for-ai-discovery.md) (Safety Filter), [0016](0016-evidence-redaction.md) (redaction) and [0021](0021-saved-sessions-memory-only-and-confined-docs-fetch.md) (secrets in memory).
 
 ## Context
 A person who gives only an App address and test sign-in details expects the tool to crawl and test everything. Today an App that is not a Test Copy is only looked at, so the extra step of marking it blocks that path.

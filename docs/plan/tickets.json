@@ -520,7 +520,7 @@
         "packages/wizard/src/lib/form.ts",
         "packages/runner/src/run-inputs.ts"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-117",
@@ -553,7 +553,7 @@
         "packages/*/src/**",
         "fixtures/test-app/server.js"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-118",
@@ -582,7 +582,7 @@
         "package.json",
         "packages/**"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-119",
@@ -625,7 +625,7 @@
         "packages/**/src",
         "docs/plan/**"
       ],
-      "status": "todo"
+      "status": "done"
     }
   ]
 }
