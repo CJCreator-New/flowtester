@@ -673,33 +673,40 @@ export class DeterministicSpider {
         }
 
         // Redirected within the site: the page is recorded once, under the address it really has.
-        const landedNorm = normRoute(landed.toString());
-        const requestedNorm = normRoute(requestedPath);
-        if (landedNorm.key !== requestedNorm.key) {
-          redirects.set(requestedPath, landedNorm.path);
-          if (frontier.has(landedNorm.key)) {
-            telemetry.outcome = 'skipped';
-            telemetry.skipReason = 'duplicate';
-            routes.push(telemetry);
-            debugLog('crawl', 'route redirected to already-visited path', {
-              path: telemetry.requestedPath,
-              status: telemetry.status,
-              finalPath: telemetry.finalPath,
-              outcome: 'skipped',
-              reason: 'duplicate',
-              attempts: telemetry.attempts,
-              ms: telemetry.durationMs,
-            });
-            return;
-          }
-          frontier.markVisited(landedNorm.key);
-        }
-
-        const pageUrl = page.url();
-        // Recorded without secrets: some sign-in forms put the password in the address.
         const currentPath = redactUrl(
           landed.pathname + landed.search + (options.includeHash && landed.hash ? landed.hash : '')
         );
+        const landedNorm = normRoute(landed.toString());
+        const requestedNorm = normRoute(requestedPath);
+        if (landedNorm.key !== requestedNorm.key || navRes.redirectChain.length > 0) {
+          redirects.set(requestedPath, currentPath);
+          for (const fromUrl of navRes.redirectChain) {
+            try {
+              const fromU = new URL(fromUrl);
+              redirects.set(fromU.pathname, currentPath);
+            } catch {}
+          }
+          if (landedNorm.key !== requestedNorm.key) {
+            if (frontier.has(landedNorm.key)) {
+              telemetry.outcome = 'skipped';
+              telemetry.skipReason = 'duplicate';
+              routes.push(telemetry);
+              debugLog('crawl', 'route redirected to already-visited path', {
+                path: telemetry.requestedPath,
+                status: telemetry.status,
+                finalPath: telemetry.finalPath,
+                outcome: 'skipped',
+                reason: 'duplicate',
+                attempts: telemetry.attempts,
+                ms: telemetry.durationMs,
+              });
+              return;
+            }
+            frontier.markVisited(landedNorm.key);
+          }
+        }
+
+        const pageUrl = page.url();
         const title = await page.title().catch(() => currentPath);
 
         // Dismiss overlays (cookie banners) before link extraction

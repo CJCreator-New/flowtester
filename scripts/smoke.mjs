@@ -38,11 +38,7 @@ const checks = [
     '/api/runner/status',
     (res, body) => res.status === 200 && 'phase' in JSON.parse(body),
   ],
-  [
-    '"Hub not connected" at /api/v1/',
-    '/api/v1/health',
-    (res, body) => res.status === 503 && JSON.parse(body).hubConnected === false,
-  ],
+  ['the health endpoint at /healthz', '/healthz', (res, body) => res.status === 200 && body.trim() === 'ok'],
 ];
 
 let failed = false;

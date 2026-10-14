@@ -700,13 +700,17 @@ export class FlowTestOrchestrator {
               who: testCase.role,
             });
             startPageNavResult = navRes;
+            if (!navRes.ok) {
+              throw new Error(`Failed to load ${testCase.startPage} (${navRes.error?.kind || 'net error'})`);
+            }
 
             const credential = options.profile?.roles?.find((r) => r.role === testCase.role);
             const isRoleSignedIn = !!credential && roleStorageStates[testCase.role] !== undefined;
 
             if (isRoleSignedIn) {
               const loginPath = credential.loginPath || '/login';
-              const isLogin = await looksLikeLogin(page, [loginPath]);
+              const targetIsLogin = testCase.startPage.replace(/\/$/, '') === loginPath.replace(/\/$/, '');
+              const isLogin = !targetIsLogin && (await looksLikeLogin(page, [loginPath]));
               const isBounced = navRes.status === 401 || isLogin;
               startPageBounced = isBounced;
 

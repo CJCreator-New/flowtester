@@ -28,11 +28,11 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  build-and-smoke:
     # The copy of this workflow in the mirror repo does nothing: only the source repo publishes.
     if: github.repository == 'CJCreator/qa-flow-tester'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -60,28 +60,12 @@ jobs:
       - name: Build the runner
         run: pnpm --filter "@qa/runner..." run build
 
-      - name: Cache Playwright browser
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('**/pnpm-lock.yaml') }}
-
-      - name: Install Chromium (the browser tests drive it)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm --filter @qa/core exec playwright install --with-deps chromium
-
-      - name: Install Playwright system dependencies
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: pnpm --filter @qa/core exec playwright install-deps chromium
-
-      # Every package test except wizard-e2e (takes minutes, run it before a release). Same command as the CI workflow.
-      # Chromium is installed above for the browser-driven checker and core tests.
-      - name: Tests
-        run: pnpm exec vitest run --exclude "**/wizard-e2e.test.ts"
+      # Fast production smoke check: boots the app on a test port and verifies the Wizard and API endpoints
+      - name: Smoke check
+        run: pnpm run smoke
 
   publish:
-    needs: test
+    needs: build-and-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
