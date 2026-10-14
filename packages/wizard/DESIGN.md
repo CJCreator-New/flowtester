@@ -30,6 +30,11 @@ reading systematic. Findings appear as red/amber left-border annotations on the 
 **What stays the same:** Atkinson Hyperlegible Next for body text. The same pass/warn/fail colour
 meanings. The stamp animation on the report. Writing rules (plain verbs, no jargon).
 
+**Polish pass, 2026-10-13:** shared classes in `src/index.css` gained depth (two-layer shadows, 1px inner
+highlight on `.btn-primary`, hover lift, press settle), one focus ring on `.field`, a `.screen-in` mount
+fade, and slightly rounder radii. Palette hex values unchanged. No gradient on buttons, so text contrast
+equals the flat fill. Reduced motion is handled by the global rule.
+
 The direction names are for this document only. None of them ("Direction B", "Blueprint",
 "Architectural") appear on screen.
 
