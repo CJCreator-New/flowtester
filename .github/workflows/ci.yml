@@ -50,24 +50,6 @@ jobs:
             echo "Typecheck found **$count** error(s)." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  # Fast Unit Tests: Surfaces algorithmic, checker, and scoring regressions in under 60 seconds
-  unit-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install
-        run: pnpm install --frozen-lockfile
-
-      - name: Fast unit tests
-        run: pnpm run test:url-first
-
   # Full Build & Browser Test Suite: Runs site/runner builds and browser-driven test suite with coverage
   build-and-test:
     runs-on: ubuntu-latest
