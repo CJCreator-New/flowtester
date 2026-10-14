@@ -78,9 +78,11 @@ if (!built('packages/wizard/dist/index.html')) {
 }
 
 // 2. The browser the QA Tool drives.
-const { chromium } = createRequire(path.join(root, 'packages/core/package.json'))('playwright');
-if (!existsSync(chromium.executablePath())) {
-  fail('The browser the QA Tool drives isn’t installed. Run pnpm bootstrap, which installs it.');
+if (process.env.SKIP_BROWSER_CHECK !== '1') {
+  const { chromium } = createRequire(path.join(root, 'packages/core/package.json'))('playwright');
+  if (!existsSync(chromium.executablePath())) {
+    fail('The browser the QA Tool drives isn’t installed. Run pnpm bootstrap, which installs it.');
+  }
 }
 
 // 3. Start, unless it is already running.

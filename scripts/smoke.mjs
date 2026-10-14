@@ -14,6 +14,7 @@ const scratch = mkdtempSync(path.join(os.tmpdir(), 'qa-smoke-'));
 
 const env = {
   ...process.env,
+  SKIP_BROWSER_CHECK: '1',
   RUNNER_PORT: String(port),
   RUNNER_DATA_DIR: path.join(scratch, 'data'),
   RUNNER_OUTPUT_DIR: path.join(scratch, 'report'),
