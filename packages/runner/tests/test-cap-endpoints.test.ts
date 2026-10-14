@@ -47,6 +47,8 @@ const RUNNER_PORT = 3723;
 const runnerUrl = `http://localhost:${RUNNER_PORT}`;
 const outputDir = path.join(process.cwd(), '.tmp-test-cap-endpoints');
 const dataDir = `${outputDir}-data`;
+let fixturePort = 0;
+const getFixtureUrl = () => `http://localhost:${fixturePort}`;
 
 class QuietAI {
   readonly providerType: AIProviderType = 'mock';
@@ -77,7 +79,22 @@ describe('Test cap on a Waiting Plan', () => {
   };
 
   beforeAll(async () => {
-    await new Promise<void>((resolve) => fixtureServer.listen(FIXTURE_PORT, () => resolve()));
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: Error) => {
+        reject(err);
+      };
+      fixtureServer.once('error', onError);
+      fixtureServer.listen(0, () => {
+        const address = fixtureServer.address();
+        if (!address || typeof address === 'string') {
+          reject(new Error('Unable to determine fixture server port'));
+          return;
+        }
+        fixturePort = address.port;
+        fixtureServer.off('error', onError);
+        resolve();
+      });
+    });
     await start();
   });
   afterAll(async () => {
@@ -89,7 +106,7 @@ describe('Test cap on a Waiting Plan', () => {
 
   it('echoes the cap, validates intentsOff, and expands a saved plan again after a restart', async () => {
     const res = await post('/api/runner/run', {
-      targetUrl: `http://localhost:${FIXTURE_PORT}/`,
+      targetUrl: `${getFixtureUrl()}/`,
       owner: false,
       useAI: true,
       aiProvider: 'mock',
