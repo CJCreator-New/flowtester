@@ -382,19 +382,11 @@ export function LandingScreen() {
           <nav aria-label="Help">
             <p className="font-bold text-ink">Help</p>
             <ul className="mt-2">
-              {contact.supportEmail ? (
-                <li>
-                  <a href={`mailto:${contact.supportEmail}`} className="btn-link text-sm no-underline hover:underline">
-                    Contact & Support
-                  </a>
-                </li>
-              ) : (
-                <li>
-                  <a href={`${REPO_URL}/issues`} className="btn-link text-sm no-underline hover:underline" rel="noreferrer">
-                    Contact & Support
-                  </a>
-                </li>
-              )}
+              <li>
+                <a href={contact.contactHref} className="btn-link text-sm no-underline hover:underline" rel="noreferrer">
+                  Contact & Support
+                </a>
+              </li>
               <li>
                 <a href={`${REPO_URL}/blob/main/PRIVACY.md`} className="btn-link text-sm no-underline hover:underline" rel="noreferrer">
                   Privacy & Terms
