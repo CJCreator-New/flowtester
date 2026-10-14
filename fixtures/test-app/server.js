@@ -128,18 +128,17 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/signin') return html('Sign in', `<h1>Sign in</h1>${SIGN_IN_FORM}`);
 
   if (url.pathname === '/login') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Fixture App - Login</title></head><body>
-      <header><nav><a href="/">Home</a></nav></header>
-      <main>
-        <h2>Sign In</h2>
-        <form action="/dashboard" method="GET">
-          <div><label for="email">Email</label><input type="email" id="email" data-testid="email-input" name="email" value="admin@example.com" /></div>
-          <div><label for="password">Password</label><input type="password" id="password" data-testid="password-input" name="password" value="secret" /></div>
-          <button type="submit" data-testid="submit-btn">Sign In</button>
-        </form>
-      </main></body></html>`);
-    return;
+    return html(
+      'Sign in',
+      `<h1>Sign in</h1>
+      <form action="/dashboard" method="GET">
+        <div><label for="email">Email</label><input type="email" id="email" data-testid="email-input" name="email" value="admin@example.com" /></div>
+        <div><label for="password">Password</label><input type="password" id="password" data-testid="password-input" name="password" value="secret" /></div>
+        <button type="submit" data-testid="submit-btn">Sign In</button>
+      </form>`,
+      200,
+      'Sign in to access your dashboard and manage company invoices.'
+    );
   }
 
   // --- /lab/* routes for auth and crawler failure modes (T-102) ---
