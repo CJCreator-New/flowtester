@@ -31,11 +31,11 @@ export function StepBar({ current, links = {} }: { current: Step; links?: Partia
               <>
                 <span
                   aria-hidden="true"
-                  className={`flex h-6 w-6 items-center justify-center rounded-full border-2 text-xs font-bold ${
+                  className={`flex h-6 w-6 items-center justify-center rounded-full border-2 text-xs font-bold transition-colors duration-200 ${
                     state === 'done'
                       ? 'border-stamp bg-stamp text-surface'
                       : state === 'current'
-                        ? 'border-stamp text-stamp'
+                        ? 'border-stamp bg-surface text-stamp ring-2 ring-stamp/30'
                         : 'border-edge text-ink-soft'
                   }`}
                 >
@@ -54,13 +54,13 @@ export function StepBar({ current, links = {} }: { current: Step; links?: Partia
                 aria-current={state === 'current' ? 'step' : undefined}
               >
                 {href ? (
-                  <Link to={href} className="inline-flex min-h-[36px] items-center gap-2 rounded px-1 hover:underline">
+                  <Link to={href} className="inline-flex min-h-[36px] items-center gap-2 rounded px-1 transition-colors hover:underline">
                     {content}
                   </Link>
                 ) : (
                   <span className="inline-flex min-h-[36px] items-center gap-2 px-1">{content}</span>
                 )}
-                {i < STEPS.length - 1 && <span aria-hidden="true" className="h-px w-6 bg-edge" />}
+                {i < STEPS.length - 1 && <span aria-hidden="true" className={`h-px w-6 transition-colors duration-200 ${i < index ? 'bg-stamp' : 'bg-edge'}`} />}
               </li>
             );
           })}

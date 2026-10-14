@@ -87,15 +87,15 @@ export default {
         question: ['clamp(1.875rem, 1.4rem + 2vw, 2.75rem)', { lineHeight: '1.1', letterSpacing: '-0.015em' }],
       },
       boxShadow: {
-        'level-1': '0 1px 2px 0 rgb(0 0 0 / 0.3)',
-        'level-2': '0 4px 6px -1px rgb(0 0 0 / 0.4)',
-        'level-3': '0 10px 15px -3px rgb(0 0 0 / 0.4)',
-        'level-4': '0 20px 25px -5px rgb(0 0 0 / 0.5)',
+        'level-1': '0 1px 2px 0 rgb(0 0 0 / 0.3), 0 0 0 1px rgb(0 0 0 / 0.04)',
+        'level-2': '0 1px 2px 0 rgb(0 0 0 / 0.25), 0 4px 8px -2px rgb(0 0 0 / 0.4)',
+        'level-3': '0 2px 4px 0 rgb(0 0 0 / 0.25), 0 10px 18px -4px rgb(0 0 0 / 0.42)',
+        'level-4': '0 4px 6px 0 rgb(0 0 0 / 0.25), 0 22px 30px -6px rgb(0 0 0 / 0.5)',
       },
       borderRadius: {
-        control: '6px',
-        card: '8px',
-        panel: '12px',
+        control: '8px',
+        card: '10px',
+        panel: '14px',
         pill: '9999px',
       },
       maxWidth: {
