@@ -23,7 +23,11 @@ class QuietAI {
 }
 
 const post = (route: string, body: unknown = {}, method = 'POST') =>
-  fetch(`${runnerUrl}${route}`, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  fetch(`${runnerUrl}${route}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 const target = `http://localhost:${FIXTURE_PORT}/`;
 
 async function waitForPhase(wanted: string[], seconds = 200): Promise<void> {
@@ -55,7 +59,10 @@ describe('Sources on the run route', () => {
   });
 
   it('refuses a PDF with a plain message', async () => {
-    const res = await post('/api/runner/run', { targetUrl: target, contextDocuments: [{ name: 'spec.pdf', text: 'x' }] });
+    const res = await post('/api/runner/run', {
+      targetUrl: target,
+      contextDocuments: [{ name: 'spec.pdf', text: 'x' }],
+    });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string; code: string };
     expect(body.code).toBe('ERR_INVALID_CONTEXT');

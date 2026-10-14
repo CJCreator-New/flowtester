@@ -72,7 +72,11 @@ class ScriptedAI {
 }
 
 const post = (route: string, body: unknown = {}, method = 'POST') =>
-  fetch(`${runnerUrl}${route}`, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  fetch(`${runnerUrl}${route}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 
 async function waitForPhase(wanted: string[], seconds = 200): Promise<void> {
   for (let i = 0; i < seconds * 2; i++) {
@@ -84,8 +88,7 @@ async function waitForPhase(wanted: string[], seconds = 200): Promise<void> {
   throw new Error('timed out');
 }
 
-const documented = (plan: ReviewPlan) =>
-  (plan.planPages ?? []).flatMap((pg) => pg.tests).filter((t) => t.docSource);
+const documented = (plan: ReviewPlan) => (plan.planPages ?? []).flatMap((pg) => pg.tests).filter((t) => t.docSource);
 
 describe('Source items survive a Waiting Plan reload', () => {
   let runner: RunnerServer;
@@ -113,7 +116,9 @@ describe('Source items survive a Waiting Plan reload', () => {
       aiProvider: 'mock',
       skipReview: false,
       breakpoints: ['1440px'],
-      contextDocuments: [{ name: 'guide.md', text: '# Guide\n## 1 Pages\n### 1.1 First control\nPressing the first control works.' }],
+      contextDocuments: [
+        { name: 'guide.md', text: '# Guide\n## 1 Pages\n### 1.1 First control\nPressing the first control works.' },
+      ],
     });
     expect(res.status).toBe(202);
     await waitForPhase(['awaiting-review']);

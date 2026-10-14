@@ -59,7 +59,10 @@ describe('headers propagation & per-run auth isolation', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         targetUrl: fixtureUrl,
-        roles: [{ role: 'admin', username: 'admin' }, { role: 'admin', username: 'admin2' }],
+        roles: [
+          { role: 'admin', username: 'admin' },
+          { role: 'admin', username: 'admin2' },
+        ],
       }),
     });
     expect(res2.status).toBe(400);
@@ -137,7 +140,10 @@ describe('headers propagation & per-run auth isolation', () => {
 
     // Verify per-run auth directory was cleaned up and does not linger
     const runAuthFolder = runner.runAuthDir(runId);
-    const authDirExists = await fs.stat(runAuthFolder).then(() => true, () => false);
+    const authDirExists = await fs.stat(runAuthFolder).then(
+      () => true,
+      () => false
+    );
     expect(authDirExists).toBe(false);
 
     // Verify zero secret leak in run directory
@@ -250,7 +256,10 @@ describe('headers propagation & per-run auth isolation', () => {
 
     // Verify authDir/<runId> is cleaned up after testing finishes
     const runAuthFolder = runner.runAuthDir(runId);
-    const authDirExists = await fs.stat(runAuthFolder).then(() => true, () => false);
+    const authDirExists = await fs.stat(runAuthFolder).then(
+      () => true,
+      () => false
+    );
     expect(authDirExists).toBe(false);
   }, 180000);
 });

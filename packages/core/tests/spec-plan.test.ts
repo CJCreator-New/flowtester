@@ -110,7 +110,9 @@ describe('planFromSpec', () => {
 
   it('matrix and non-route negative clauses are judgement only', () => {
     const out = plan(hints);
-    expect(out.judgement.some((j) => j.role === 'Employee' && j.text.startsWith('Run payroll: not allowed'))).toBe(true);
+    expect(out.judgement.some((j) => j.role === 'Employee' && j.text.startsWith('Run payroll: not allowed'))).toBe(
+      true
+    );
     expect(out.judgement.some((j) => j.text.startsWith('cannot edit others'))).toBe(true);
   });
 
@@ -132,7 +134,13 @@ describe('planFromSpec', () => {
 
   it('sensitive control never becomes a step; state-changing click sets needsTestCopy', () => {
     const out = plan([
-      hint({ id: 'REQ-1', kind: 'journey', name: 'J', persona: 'Employee', steps: ['click `Finalize run`', 'click `Submit`'] }),
+      hint({
+        id: 'REQ-1',
+        kind: 'journey',
+        name: 'J',
+        persona: 'Employee',
+        steps: ['click `Finalize run`', 'click `Submit`'],
+      }),
     ]);
     const f = out.flows[0];
     expect(f.steps.filter((s) => s.action === 'click').map((s) => s.selector)).toEqual(['#submit']);

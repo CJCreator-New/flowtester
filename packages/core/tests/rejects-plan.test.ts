@@ -50,14 +50,17 @@ describe('deriveRejects', () => {
   it('breaks one rule at a time: other fields get values they accept', () => {
     const out = deriveRejects([page('/lab/signup')], [signup]);
     const emptyEmail = out.find((o) => o.test.name === 'Rejects: “Email” left empty')!.test;
-    const fills = Object.fromEntries(emptyEmail.steps.filter((s) => s.action === 'fill').map((s) => [s.selector, s.value]));
+    const fills = Object.fromEntries(
+      emptyEmail.steps.filter((s) => s.action === 'fill').map((s) => [s.selector, s.value])
+    );
     expect(fills['#email']).toBe('');
     expect(fills['#code']).toMatch(/^[A-Z]{3}[0-9]{2}$/);
   });
 
   it('breaks min and max by one', () => {
     const out = deriveRejects([page('/lab/signup')], [signup]);
-    const val = (name: string) => out.find((o) => o.test.name === name)!.test.steps.find((s) => s.selector === '#age')!.value;
+    const val = (name: string) =>
+      out.find((o) => o.test.name === name)!.test.steps.find((s) => s.selector === '#age')!.value;
     expect(val('Rejects: “Age” is below the minimum')).toBe('17');
     expect(val('Rejects: “Age” is above the maximum')).toBe('100');
   });
@@ -68,7 +71,10 @@ describe('deriveRejects', () => {
     const b = deriveRejects([roles], [signup]);
     expect(a.map((o) => o.test.id)).toEqual(b.map((o) => o.test.id));
     expect(new Set(a.map((o) => o.test.id)).size).toBe(a.length);
-    expect(a.filter((o) => o.test.name === 'Rejects: “Email” left empty').map((o) => o.test.role)).toEqual(['visitor', 'Admin']);
+    expect(a.filter((o) => o.test.name === 'Rejects: “Email” left empty').map((o) => o.test.role)).toEqual([
+      'visitor',
+      'Admin',
+    ]);
     expect(a[0].test.id).toMatch(/^rejects:\/lab\/signup:0:#email:required:visitor$/);
   });
 

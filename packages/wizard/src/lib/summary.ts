@@ -179,7 +179,10 @@ export interface ProblemGroup {
  * marked as intended or false positives are left out.
  */
 export function groupProblems(findings: Finding[]): Record<Bucket, ProblemGroup[]> {
-  const result: Record<Bucket, ProblemGroup[]> = { 'must-fix': [], 'should-fix': [], suggestion: [],
+  const result: Record<Bucket, ProblemGroup[]> = {
+    'must-fix': [],
+    'should-fix': [],
+    suggestion: [],
     'to-confirm': [],
     judgement: [],
   };

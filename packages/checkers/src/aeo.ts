@@ -43,7 +43,11 @@ export class AeoChecker {
         const parsed = JSON.parse(scriptContent);
         if (Array.isArray(parsed)) {
           parsedSchemas.push(...parsed);
-        } else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>)['@graph'])) {
+        } else if (
+          parsed &&
+          typeof parsed === 'object' &&
+          Array.isArray((parsed as Record<string, unknown>)['@graph'])
+        ) {
           parsedSchemas.push(...((parsed as Record<string, unknown>)['@graph'] as Array<Record<string, unknown>>));
         } else if (parsed && typeof parsed === 'object') {
           parsedSchemas.push(parsed as Record<string, unknown>);

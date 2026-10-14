@@ -485,11 +485,7 @@ export function PlanReviewScreen({
           </p>
         )}
         {needsSignIn && (
-          <SignInAgain
-            busy={busy || approving}
-            needsSignIn={needsSignIn}
-            onSubmit={(roles) => onApprove(roles)}
-          />
+          <SignInAgain busy={busy || approving} needsSignIn={needsSignIn} onSubmit={(roles) => onApprove(roles)} />
         )}
       </div>
     </div>
@@ -532,9 +528,7 @@ function SignInAgain({
       <p className="text-sm font-bold text-ink">{SIGN_IN_AGAIN_TEXT}</p>
       {pendingRoles.map((role) => (
         <fieldset key={role} className="flex flex-wrap items-end gap-3 rounded-md border border-rule p-3">
-          {pendingRoles.length > 1 && (
-            <legend className="px-1 text-sm font-bold">Role: {role}</legend>
-          )}
+          {pendingRoles.length > 1 && <legend className="px-1 text-sm font-bold">Role: {role}</legend>}
           <label className="text-sm font-bold text-ink">
             Sign-in username
             <input

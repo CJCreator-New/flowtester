@@ -270,7 +270,10 @@ describe('PreFlightChecker deterministic sign-in (T-110)', () => {
     expect(files).toContain('___x.json');
     // Ensure no file was written to parent directory
     const escapedFile = path.join(tmpDir, 'x.json');
-    const exists = await fs.stat(escapedFile).then(() => true).catch(() => false);
+    const exists = await fs
+      .stat(escapedFile)
+      .then(() => true)
+      .catch(() => false);
     expect(exists).toBe(false);
   }, 60000);
 

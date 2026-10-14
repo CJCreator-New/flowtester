@@ -77,7 +77,13 @@ describe('Plan Review: Sources', () => {
       ],
       navigation: [],
       notFound: [
-        { id: 'n1', docSource: { document: 'guide.md', section: 'Billing' }, roles: [], reason: 'No Billing page found', skipped: false },
+        {
+          id: 'n1',
+          docSource: { document: 'guide.md', section: 'Billing' },
+          roles: [],
+          reason: 'No Billing page found',
+          skipped: false,
+        },
       ],
       documentedItems: { total: 2, reached: 1 },
       rolesNotTested: [{ role: 'viewer', reason: 'wrong-details', text: 'The username or password was not accepted.' }],
@@ -146,13 +152,31 @@ describe('Report: Sources', () => {
       results: [],
       findings: [finding],
       grades: { aspects: {} },
-      coverage: { totalTestPoints: 0, passed: 0, failed: 0, blocked: 0, skipped: 0, couldNotVerify: 0, completionRate: 0 },
+      coverage: {
+        totalTestPoints: 0,
+        passed: 0,
+        failed: 0,
+        blocked: 0,
+        skipped: 0,
+        couldNotVerify: 0,
+        completionRate: 0,
+      },
       recommendations: [],
-      rolesNotTested: [{ role: 'manager', reason: 'wrong-details', text: 'The username or password was not accepted.' }],
+      rolesNotTested: [
+        { role: 'manager', reason: 'wrong-details', text: 'The username or password was not accepted.' },
+      ],
       documentedItems: {
         total: 3,
         reached: 2,
-        notFound: [{ id: 'n1', docSource: { document: 'guide.md', section: 'Billing' }, roles: [], reason: 'No Billing page', skipped: false }],
+        notFound: [
+          {
+            id: 'n1',
+            docSource: { document: 'guide.md', section: 'Billing' },
+            roles: [],
+            reason: 'No Billing page',
+            skipped: false,
+          },
+        ],
       },
     };
     const html = renderToStaticMarkup(

@@ -13,7 +13,8 @@ const tc = (over: Partial<TestCase> = {}): TestCase => ({
   expectations: { origin: 'user', text: { contains: 'Create user' } },
   ...over,
 });
-const spec = (over = {}) => finding({ id: 'F-SPEC-1', checker: 'spec-conformance', title: 'Expected text not found', ...over });
+const spec = (over = {}) =>
+  finding({ id: 'F-SPEC-1', checker: 'spec-conformance', title: 'Expected text not found', ...over });
 const source = { document: 'Admin guide', section: 'Users > Create' };
 
 describe('mismatch wording (ADR 0020)', () => {

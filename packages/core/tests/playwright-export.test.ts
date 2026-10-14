@@ -434,7 +434,9 @@ describe('playwright export', () => {
       const files = planToPlaywrightProject(
         planOf([
           rejects({
-            expectations: { refusal: { formPath: '/signup', submitSelector: '#go', message: 'Enter an email', probeOnly: true } },
+            expectations: {
+              refusal: { formPath: '/signup', submitSelector: '#go', message: 'Enter an email', probeOnly: true },
+            },
           }),
         ])
       );

@@ -17,7 +17,9 @@ export function withSourceWording(f: Finding, testCase: TestCase): Finding {
   if (f.checker !== 'spec-conformance') return f;
   const guess = testCase.expectations?.origin === 'ai-guess';
   if (guess) {
-    return f.needsConfirmation ? { ...f, needsJudgement: true, ...(testCase.docSource ? { docSource: testCase.docSource } : {}) } : f;
+    return f.needsConfirmation
+      ? { ...f, needsJudgement: true, ...(testCase.docSource ? { docSource: testCase.docSource } : {}) }
+      : f;
   }
   if (!testCase.docSource || f.needsConfirmation) return f;
   const named = describeSource(testCase.docSource);

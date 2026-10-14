@@ -3,7 +3,10 @@ import { ContextParser, isSupportedContextName } from '../src/discovery/context-
 
 describe('ContextParser.parseDocuments', () => {
   const docs = [
-    { name: 'admin-guide.md', text: '# Admin\nIntro line\n## Users\n- Admin can create a user\n## Billing\n- Invoices list' },
+    {
+      name: 'admin-guide.md',
+      text: '# Admin\nIntro line\n## Users\n- Admin can create a user\n## Billing\n- Invoices list',
+    },
     { name: 'product.txt', text: '# Profile\n- Anyone can edit their name' },
   ];
 
@@ -11,9 +14,16 @@ describe('ContextParser.parseDocuments', () => {
     const out = new ContextParser().parseDocuments(docs);
     expect(out.requirements.map((r) => r.id)).toEqual(['REQ-1', 'REQ-2', 'REQ-3', 'REQ-4']);
     const users = out.requirements.find((r) => r.name === 'Users');
-    expect(users).toMatchObject({ document: 'admin-guide.md', section: 'Admin > Users', rules: ['Admin can create a user'] });
+    expect(users).toMatchObject({
+      document: 'admin-guide.md',
+      section: 'Admin > Users',
+      rules: ['Admin can create a user'],
+    });
     expect(out.requirements.find((r) => r.name === 'Billing')?.section).toBe('Admin > Billing');
-    expect(out.requirements.find((r) => r.name === 'Profile')).toMatchObject({ document: 'product.txt', section: 'Profile' });
+    expect(out.requirements.find((r) => r.name === 'Profile')).toMatchObject({
+      document: 'product.txt',
+      section: 'Profile',
+    });
     expect(out.rawContent).toContain('# Document: admin-guide.md');
     expect(out.rawContent).toContain('# Document: product.txt');
   });

@@ -46,10 +46,7 @@ export function headersNotice(names: string[]): string {
  * Computes how many seconds the crawl has been stalled without finding new pages.
  * Returns 0 if history is empty or if growth just occurred.
  */
-export function stalledForSeconds(
-  history: Array<{ at: number; pagesFound: number }>,
-  now: number
-): number {
+export function stalledForSeconds(history: Array<{ at: number; pagesFound: number }>, now: number): number {
   if (!history || history.length === 0) return 0;
   const latest = history[history.length - 1];
   let lastGrowthAt = latest.at;

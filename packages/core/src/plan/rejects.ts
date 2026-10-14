@@ -16,7 +16,20 @@ type FormInput = PlannerForm['inputs'][number];
 type RejectRule = 'required' | 'email' | 'url' | 'pattern' | 'min' | 'max' | 'minlength';
 
 /** Field types a test can type into. */
-const TEXT_TYPES = new Set(['', 'text', 'email', 'url', 'tel', 'number', 'search', 'password', 'textarea', 'date', 'time', 'month']);
+const TEXT_TYPES = new Set([
+  '',
+  'text',
+  'email',
+  'url',
+  'tel',
+  'number',
+  'search',
+  'password',
+  'textarea',
+  'date',
+  'time',
+  'month',
+]);
 const CHECK_TYPES = new Set(['checkbox']);
 
 /** Values tried, in order, for a field with a pattern, until one matches the whole pattern. */
@@ -47,7 +60,10 @@ function sampleFor(pattern: string): string | undefined {
     if (c === '[') {
       const end = pattern.indexOf(']', i + 1);
       if (end < 0 || pattern[i + 1] === '^') return undefined;
-      unit = pattern[i + 1] === BACKSLASH ? ({ d: '1', w: 'a', s: ' ' } as Record<string, string>)[pattern[i + 2]] ?? pattern[i + 2] : pattern[i + 1];
+      unit =
+        pattern[i + 1] === BACKSLASH
+          ? (({ d: '1', w: 'a', s: ' ' } as Record<string, string>)[pattern[i + 2]] ?? pattern[i + 2])
+          : pattern[i + 1];
       i = end + 1;
     } else if (c === BACKSLASH) {
       const n = pattern[i + 1];
@@ -99,7 +115,9 @@ function validValue(input: FormInput): string | undefined {
   } else value = guessFillValue(`${input.selector} ${input.label ?? ''}`);
   if (input.pattern && wholeMatch(input.pattern, value) !== true) {
     const built = sampleFor(input.pattern);
-    const fit = [...(built ? [built] : []), ...PATTERN_CANDIDATES].find((c) => c !== '' && wholeMatch(input.pattern!, c) === true);
+    const fit = [...(built ? [built] : []), ...PATTERN_CANDIDATES].find(
+      (c) => c !== '' && wholeMatch(input.pattern!, c) === true
+    );
     if (fit === undefined) return undefined;
     value = fit;
   }

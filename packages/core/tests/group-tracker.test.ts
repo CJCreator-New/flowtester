@@ -47,7 +47,8 @@ describe('GroupTracker', () => {
     );
     const count = (m: typeof mine.coverage, c: string) => site.filter((p) => m.get(p.urlPath)!.coverage === c).length;
     for (const c of ['tested', 'sample', 'covered']) expect(count(mine.coverage, c)).toBe(count(theirs.coverage, c));
-    for (const p of site) expect(mine.coverage.get(p.urlPath)!.layoutGroup).toBe(theirs.coverage.get(p.urlPath)!.layoutGroup);
+    for (const p of site)
+      expect(mine.coverage.get(p.urlPath)!.layoutGroup).toBe(theirs.coverage.get(p.urlPath)!.layoutGroup);
   });
 
   it('keeps the first three as samples (never replaced) and a group of 2 or 3 all tested', () => {

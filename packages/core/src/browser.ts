@@ -114,16 +114,17 @@ export class BrowserManager {
       const pinned = Object.entries(browserPolicy?.pinned ?? {}).map(
         ([host, ip]) => `MAP ${host} ${ip.includes(':') ? `[${ip.replace(/^\[|\]$/g, '')}]` : ip}`
       );
-      const args = engine === 'chromium'
-        ? [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--disable-extensions',
-            ...(pinned.length ? [`--host-resolver-rules=${pinned.join(', ')}`] : []),
-          ]
-        : [];
+      const args =
+        engine === 'chromium'
+          ? [
+              '--no-sandbox',
+              '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage',
+              '--disable-gpu',
+              '--disable-extensions',
+              ...(pinned.length ? [`--host-resolver-rules=${pinned.join(', ')}`] : []),
+            ]
+          : [];
       b = await launcher.launch({
         headless: isHeadless,
         args,
@@ -225,10 +226,13 @@ export class BrowserManager {
         const msg = err instanceof Error ? err.message : String(err);
         const b = this.browsers.get(engine);
         const isClosed =
-          /Target (page, context or browser )?has been closed|Browser has been closed|browser has disconnected/i.test(msg) ||
-          (b ? !b.isConnected() : false);
+          /Target (page, context or browser )?has been closed|Browser has been closed|browser has disconnected/i.test(
+            msg
+          ) || (b ? !b.isConnected() : false);
         if (!isClosed) throw err;
-        console.warn(`[Browser] Restarting the browser (${engine}): ${err instanceof Error ? err.message.split('\n')[0] : err}`);
+        console.warn(
+          `[Browser] Restarting the browser (${engine}): ${err instanceof Error ? err.message.split('\n')[0] : err}`
+        );
         const dead = this.browsers.get(engine);
         await dead?.close().catch(() => {});
         this.browsers.delete(engine);
@@ -240,12 +244,7 @@ export class BrowserManager {
   async close(): Promise<void> {
     const closes: Promise<void>[] = [];
     for (const b of this.browsers.values()) {
-      closes.push(
-        Promise.race([
-          b.close().catch(() => {}),
-          new Promise<void>((resolve) => setTimeout(resolve, 3000)),
-        ])
-      );
+      closes.push(Promise.race([b.close().catch(() => {}), new Promise<void>((resolve) => setTimeout(resolve, 3000))]));
     }
     await Promise.all(closes);
     this.browsers.clear();

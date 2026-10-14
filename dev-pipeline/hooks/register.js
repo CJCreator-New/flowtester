@@ -63,36 +63,36 @@ const PIPELINE = [
   'PHASE 7, REPORT',
   '- Write REPORT.md with: summary; spec and assumptions; changes with commit hashes; test table; regression results; review findings; risks; run commands.',
   '- Show me the summary and the path to REPORT.md.',
-].join('\n')
+].join('\n');
 
-const USAGE = 'Usage: /build <rough idea>\nExample: /build add CSV export to the report page'
+const USAGE = 'Usage: /build <rough idea>\nExample: /build add CSV export to the report page';
 
-export const register = on => {
+export const register = (on) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'build',
       description: 'Enhance, plan, build, test, verify regressions, and report on an idea',
       argumentHint: '<rough idea>',
-    })
+    });
 
-    return next(e)
-  })
+    return next(e);
+  });
 
   on('command.run', { command: 'build' }, async ($, e) => {
-    const idea = e.args.trim()
-    if (!idea) return { text: USAGE }
+    const idea = e.args.trim();
+    if (!idea) return { text: USAGE };
 
     // split/join, not replace: an idea holding "$&" must stay literal.
-    const text = PIPELINE.split('{{IDEA}}').join(idea)
+    const text = PIPELINE.split('{{IDEA}}').join(idea);
     // The host refuses a submit made while this hook holds the turn, so let the hook return first.
     setTimeout(() => {
-      $.prompt.submit({ text, asUser: true }).catch(err => {
-        $.ui.toast('build: could not start the pipeline: ' + String(err))
-      })
-    }, 0)
+      $.prompt.submit({ text, asUser: true }).catch((err) => {
+        $.ui.toast('build: could not start the pipeline: ' + String(err));
+      });
+    }, 0);
 
     return {
       text: 'Pipeline started. It will plan first and wait for your approval after the plan is reviewed.',
-    }
-  })
-}
+    };
+  });
+};

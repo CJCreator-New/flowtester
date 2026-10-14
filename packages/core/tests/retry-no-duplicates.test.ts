@@ -159,10 +159,11 @@ document.querySelector('[data-testid="submit"]').addEventListener('click', () =>
 
   it('namespacing: {{password}} fill types the real password, not namespaced, on a Test Copy', async () => {
     const report = await run(
-      makeCase('TC-NS-5', [
-        { action: 'fill', selector: '[data-testid="secret"]', name: 'Type secret', value: '{{password}}' },
-        submit,
-      ], 'member'),
+      makeCase(
+        'TC-NS-5',
+        [{ action: 'fill', selector: '[data-testid="secret"]', name: 'Type secret', value: '{{password}}' }, submit],
+        'member'
+      ),
       {
         profile: {
           name: 'p',

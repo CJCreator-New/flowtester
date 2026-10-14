@@ -1,6 +1,14 @@
 import type { FindingSeverity, CheckerType, Breakpoint, TestPointStatus } from './test-case.js';
 import type { StepEvidence, Finding, RoleNotTested } from './evidence-finding.js';
-import type { MarketingReview, SiteAspectGrades, RankedRecommendation, SiteHistoryDiff, SlowerThanLastTime, SiteMapSummary, VisitedPage } from './aspects.js';
+import type {
+  MarketingReview,
+  SiteAspectGrades,
+  RankedRecommendation,
+  SiteHistoryDiff,
+  SlowerThanLastTime,
+  SiteMapSummary,
+  VisitedPage,
+} from './aspects.js';
 import type { AIStage } from './ai.js';
 import type { RetryTelemetryEntry } from './hub.js';
 import type { AIStageUsage, DocSource, SpecGapCode } from './plan.js';

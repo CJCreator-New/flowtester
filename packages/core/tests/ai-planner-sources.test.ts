@@ -1,6 +1,12 @@
 /** Sources in the AI Planner (ADR 0020): role binding, Denial Plan Items, Not found in app. No browser. */
 import { describe, it, expect } from 'vitest';
-import type { AIMessage, AICompletionOptions, AIProviderType, ElementInventoryItem, PageInventoryItem } from '@qa/types';
+import type {
+  AIMessage,
+  AICompletionOptions,
+  AIProviderType,
+  ElementInventoryItem,
+  PageInventoryItem,
+} from '@qa/types';
 import type { AIProvider } from '../src/ai/ai-provider.js';
 import { buildSiteGraph } from '../src/plan/site-graph.js';
 import { sampleLayoutGroups } from '../src/plan/sampling.js';
@@ -31,8 +37,22 @@ const users: PageInventoryItem = {
 };
 
 const reqs: ParsedRequirementHint[] = [
-  { id: 'REQ-1', name: 'Create user', description: 'Only Admin can create users', rules: [], document: 'spec.md', section: 'Users' },
-  { id: 'REQ-2', name: 'Export invoices', description: 'Admin can export invoices', rules: [], document: 'spec.md', section: 'Billing' },
+  {
+    id: 'REQ-1',
+    name: 'Create user',
+    description: 'Only Admin can create users',
+    rules: [],
+    document: 'spec.md',
+    section: 'Users',
+  },
+  {
+    id: 'REQ-2',
+    name: 'Export invoices',
+    description: 'Admin can export invoices',
+    rules: [],
+    document: 'spec.md',
+    section: 'Billing',
+  },
 ];
 
 class Scripted implements AIProvider {
@@ -106,7 +126,17 @@ describe('Sources in the planner', () => {
       reason: 'No page or control matching “Export invoices” was found as Admin',
     });
     expect(out.documentedItems).toEqual({ reached: 1, total: 2 });
-    const draft = { version: '1.0', productId: 'p', targetUrl: 'https://app.example/', timestamp: '2026-09-30T00:00:00Z', pages: [], flows: [], sensitiveActions: [], ambiguityQuestions: [], plan: { pages: out.pages, navigation: out.navigation, layoutGroups: [], otherHosts: [] } } as any;
+    const draft = {
+      version: '1.0',
+      productId: 'p',
+      targetUrl: 'https://app.example/',
+      timestamp: '2026-09-30T00:00:00Z',
+      pages: [],
+      flows: [],
+      sensitiveActions: [],
+      ambiguityQuestions: [],
+      plan: { pages: out.pages, navigation: out.navigation, layoutGroups: [], otherHosts: [] },
+    } as any;
     const expanded = expandPlan(draft, { readOnly: false, screenSizes: [] });
     expect(expanded.testCases.some((c) => c.name.includes('Export invoices'))).toBe(false);
     expect(expanded.wontRun.some((w) => w.what.includes('Export invoices'))).toBe(false);
@@ -123,12 +153,21 @@ describe('Sources in the planner', () => {
   it('User Flows reach the AI with persona, steps and assertions (up to 600 chars)', async () => {
     const long = 'x'.repeat(900);
     const flow: ParsedRequirementHint = {
-      id: 'REQ-9', name: 'Leave', description: '', rules: [], kind: 'journey', persona: 'Employee',
-      steps: ['open `/requests`', long], assert: ['status "Applied"'],
+      id: 'REQ-9',
+      name: 'Leave',
+      description: '',
+      rules: [],
+      kind: 'journey',
+      persona: 'Employee',
+      steps: ['open `/requests`', long],
+      assert: ['status "Applied"'],
     };
     const ai = new Scripted(goodBind);
     await planPagesAndMenus(input({ requirements: [...reqs, flow] }), ai);
-    const line = ai.prompts.join('\n').split('\n').find((l) => l.includes('"REQ-9"') && l.includes('detail'))!;
+    const line = ai.prompts
+      .join('\n')
+      .split('\n')
+      .find((l) => l.includes('"REQ-9"') && l.includes('detail'))!;
     const detail = JSON.parse(line).detail as string;
     expect(detail).toContain('Persona: Employee');
     expect(detail).toContain('Steps: open `/requests`');
@@ -136,7 +175,15 @@ describe('Sources in the planner', () => {
   });
 
   it('documents with units no longer note that fixed rules cannot match them', async () => {
-    const route: ParsedRequirementHint = { id: 'REQ-8', name: 'Users', description: '', rules: [], kind: 'route', route: '/users', rolesText: 'all' };
+    const route: ParsedRequirementHint = {
+      id: 'REQ-8',
+      name: 'Users',
+      description: '',
+      rules: [],
+      kind: 'route',
+      route: '/users',
+      rolesText: 'all',
+    };
     const out = await planPagesAndMenus(input({ requirements: [route] }), undefined);
     expect(out.notes.join(' ')).not.toContain('could not be matched');
   });

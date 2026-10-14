@@ -150,7 +150,12 @@ function call(port: number, body: unknown): Promise<Answer> {
 }
 
 const spec = makeDocx(
-  para('Site Map', 'Heading1') + tableXml([['Route', 'Roles'], ['/report', 'lead / manager / HR']]) + para('Login with password: hunter2 today')
+  para('Site Map', 'Heading1') +
+    tableXml([
+      ['Route', 'Roles'],
+      ['/report', 'lead / manager / HR'],
+    ]) +
+    para('Login with password: hunter2 today')
 );
 
 // The first conversion loads mammoth (several seconds cold).

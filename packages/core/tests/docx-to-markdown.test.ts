@@ -117,7 +117,7 @@ describe('docxToMarkdown', { timeout: 30_000 }, () => {
         tableXml([
           ['Route', 'Roles'],
           ['/report', 'lead / manager | HR'],
-        ]),
+        ])
     );
     const { text, warnings } = await docxToMarkdown(bytes);
     expect(text).toContain('# Site Map');
@@ -141,9 +141,7 @@ describe('docxToMarkdown', { timeout: 30_000 }, () => {
   });
 
   it('refuses bytes that are not a ZIP', async () => {
-    await expect(docxToMarkdown(new TextEncoder().encode('# just markdown named .docx'))).rejects.toThrow(
-      /not a Word/,
-    );
+    await expect(docxToMarkdown(new TextEncoder().encode('# just markdown named .docx'))).rejects.toThrow(/not a Word/);
   });
 
   it('refuses a ZIP that is not a Word document with a plain message', async () => {
@@ -177,7 +175,7 @@ describe('htmlToMarkdown', () => {
   it('handles headings, lists, links and entities', () => {
     const md = htmlToMarkdown(
       '<h2>Flows</h2><p>Go to <a href="https://example.com/x">site</a> &amp; <em>look</em></p>' +
-        '<ul><li>one</li><li>two<ul><li>nested</li></ul></li></ul><ol><li>first</li><li>second</li></ol>',
+        '<ul><li>one</li><li>two<ul><li>nested</li></ul></li></ul><ol><li>first</li><li>second</li></ol>'
     );
     expect(md).toBe(
       [
@@ -190,7 +188,7 @@ describe('htmlToMarkdown', () => {
         '  - nested',
         '1. first',
         '2. second',
-      ].join('\n'),
+      ].join('\n')
     );
   });
 

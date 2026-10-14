@@ -17,7 +17,15 @@ describe('intent', () => {
 
   it('normalizePlanIntents sets intent, drops legacy kind, and does not mutate', () => {
     const plan = {
-      planPages: [{ urlPath: '/a', tests: [{ id: 't1', ...legacy }, { id: 't2', intent: 'works' as const }] }],
+      planPages: [
+        {
+          urlPath: '/a',
+          tests: [
+            { id: 't1', ...legacy },
+            { id: 't2', intent: 'works' as const },
+          ],
+        },
+      ],
       flows: [{ id: 'f1', ...legacy }],
     };
     const out = normalizePlanIntents(plan);

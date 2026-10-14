@@ -34,10 +34,14 @@
   /* Depth without a gradient: a 1px inner highlight on the top edge keeps text contrast identical to the flat fill. */
   .btn-primary {
     @apply btn bg-stamp text-surface shadow-level-2 hover:-translate-y-px hover:bg-stamp-dark hover:shadow-level-3 active:translate-y-0 active:shadow-level-1 disabled:translate-y-0 disabled:bg-edge disabled:shadow-none;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18), theme('boxShadow.level-2');
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.18),
+      theme('boxShadow.level-2');
   }
   .btn-primary:hover:not(:disabled) {
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18), theme('boxShadow.level-3');
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.18),
+      theme('boxShadow.level-3');
   }
   .btn-primary:active:not(:disabled) {
     box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.25);

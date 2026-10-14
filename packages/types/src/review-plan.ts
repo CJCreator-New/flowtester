@@ -2,7 +2,17 @@ import type { PlanNotFound } from './plan.js';
 import type { RoleNotTested } from './evidence-finding.js';
 import type { Breakpoint, RuleOrigin, TestCase } from './test-case.js';
 import type { AmbiguityQuestion, PageInventoryItem, DiscoveredFlow } from './discovery.js';
-import type { PlanPage, NavigationCheck, PlanGradedCheck, PlanLayoutGroup, AIRequestBudget, PlanWontRun, PlanSummary, PlanIntent, PlanOtherHost } from './plan.js';
+import type {
+  PlanPage,
+  NavigationCheck,
+  PlanGradedCheck,
+  PlanLayoutGroup,
+  AIRequestBudget,
+  PlanWontRun,
+  PlanSummary,
+  PlanIntent,
+  PlanOtherHost,
+} from './plan.js';
 
 // --- Phase 1: Plan review types (Tasks 1.2 & 1.3) ---
 

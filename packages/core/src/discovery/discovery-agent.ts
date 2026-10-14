@@ -403,7 +403,12 @@ export class DiscoveryAgent {
     };
     // Pages are planned while the Spider crawls, when there is an AI to ask.
     let crawling = true;
-    let planningProgress: (done: number, what: string, asking?: { attempt?: number }, total?: number) => void = () => {};
+    let planningProgress: (
+      done: number,
+      what: string,
+      asking?: { attempt?: number },
+      total?: number
+    ) => void = () => {};
     const pipeline =
       paced && !options.sequentialPlanning
         ? new PlanPipeline({
@@ -424,11 +429,12 @@ export class DiscoveryAgent {
     const defaultBudgetMinutes = process.env.QA_DISCOVERY_MAX_MINUTES
       ? Number(process.env.QA_DISCOVERY_MAX_MINUTES)
       : 20;
-    const deadlineAt = options.deadlineAt ?? (Date.now() + defaultBudgetMinutes * 60 * 1000);
+    const deadlineAt = options.deadlineAt ?? Date.now() + defaultBudgetMinutes * 60 * 1000;
 
     const crawlOptions: CrawlOptions = {
       robots: ownMachine ? undefined : await RobotsPolicy.fetch(targetOrigin.origin, CRAWLER_TOKEN),
-      pageDelayMs: options.crawlDelayMs !== undefined ? options.crawlDelayMs : (ownMachine ? 0 : PUBLIC_SITE_PAGE_DELAY_MS),
+      pageDelayMs:
+        options.crawlDelayMs !== undefined ? options.crawlDelayMs : ownMachine ? 0 : PUBLIC_SITE_PAGE_DELAY_MS,
       concurrency: options.crawlConcurrency,
       customHeaders: options.customHeaders,
       screenshotDir: path.join(outputDir, 'plan-pages'),
@@ -459,28 +465,27 @@ export class DiscoveryAgent {
     const signInFailures: Record<string, SignInFailureReason> = {};
     const droppedSessionRoles: string[] = [];
 
-    const onPage = (who: string) => (page: PageInventoryItem, _n: number, forms: SpiderResult['forms'] = []) => {
-      pipeline?.push(page, who, forms);
-      options.onProgress?.({
-        stage: 'crawling',
-        pagesFound: ++pagesFound,
-        urlPath: page.urlPath,
-        who,
-        plannedSoFar: pipeline?.plannedSoFar,
-        signedInAs: who !== 'visitor' ? who : undefined,
-        signInFailedFor: signInFailed.length > 0 ? signInFailed : undefined,
-      });
-    };
+    const onPage =
+      (who: string) =>
+      (page: PageInventoryItem, _n: number, forms: SpiderResult['forms'] = []) => {
+        pipeline?.push(page, who, forms);
+        options.onProgress?.({
+          stage: 'crawling',
+          pagesFound: ++pagesFound,
+          urlPath: page.urlPath,
+          who,
+          plannedSoFar: pipeline?.plannedSoFar,
+          signedInAs: who !== 'visitor' ? who : undefined,
+          signInFailedFor: signInFailed.length > 0 ? signInFailed : undefined,
+        });
+      };
     // Pages the person added by address last time: no link leads there, so they're visited directly.
     const addedBefore = Object.entries(options.remembered?.pages || {})
       .filter(([, page]) => page.added)
       .map(([urlPath]) => urlPath);
 
     const totalMaxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
-    const visitorSpider = new DeterministicSpider(
-      options.profile?.forbiddenActions || [],
-      totalMaxPages
-    );
+    const visitorSpider = new DeterministicSpider(options.profile?.forbiddenActions || [], totalMaxPages);
     const visitorContext = await newContext();
     crawls.push({
       who: 'visitor',
@@ -510,10 +515,7 @@ export class DiscoveryAgent {
       );
       const roleContext = await newContext(storageState);
       const roleMaxPages = Math.min(totalMaxPages, Math.max(20, Math.floor(totalMaxPages / 2)));
-      const roleSpider = new DeterministicSpider(
-        options.profile?.forbiddenActions || [],
-        roleMaxPages
-      );
+      const roleSpider = new DeterministicSpider(options.profile?.forbiddenActions || [], roleMaxPages);
       const roleResult = await roleSpider.crawl(roleContext, options.targetUrl, {
         ...crawlOptions,
         startPaths: [...(landing ? [landing] : []), ...addedBefore],
@@ -644,8 +646,7 @@ export class DiscoveryAgent {
         remembered: options.remembered,
         requirements: parsedContext.requirements,
         roles: roleNames,
-      }) +
-      (reuseJourneys ? 0 : 1);
+      }) + (reuseJourneys ? 0 : 1);
     crawling = false;
     planningProgress = (done: number, what: string, asking?: { attempt?: number }, total = requestsNeeded) =>
       options.onProgress?.({
@@ -733,7 +734,9 @@ export class DiscoveryAgent {
         readOnly: !!options.readOnly,
         safety: new SafetyFilter(options.profile?.forbiddenActions || []),
         skipRequirementIds: paced ? aiReached : undefined,
-        fallbackReason: paced ? (synthesizedFlows.find((f) => f.fallbackReason)?.fallbackReason ?? 'unusable') : 'no-ai',
+        fallbackReason: paced
+          ? (synthesizedFlows.find((f) => f.fallbackReason)?.fallbackReason ?? 'unusable')
+          : 'no-ai',
       });
       const have = new Set(synthesizedFlows.map((f) => f.id));
       synthesizedFlows.push(...spec.flows.filter((f) => !have.has(f.id)));
@@ -769,7 +772,11 @@ export class DiscoveryAgent {
 
     // Rejects and Limits items that would press a Safety Filter control are asked about, once per form.
     ambiguityQuestions.push(
-      ...intentQuestionsFor(pagePlan.pages, new SafetyFilter(options.profile?.forbiddenActions || []), ambiguityQuestions.length + 1)
+      ...intentQuestionsFor(
+        pagePlan.pages,
+        new SafetyFilter(options.profile?.forbiddenActions || []),
+        ambiguityQuestions.length + 1
+      )
     );
 
     const draft: DiscoveryDraft = {

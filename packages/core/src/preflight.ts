@@ -118,7 +118,10 @@ export class PreFlightChecker {
     url: string,
     tunnelAuth?: string,
     /** Shared machine: fetches with the address checks on every hop instead of plain fetch (ADR 0014). */
-    get?: (url: string, headers: Record<string, string>) => Promise<{ status: number; headers: Record<string, string> }>,
+    get?: (
+      url: string,
+      headers: Record<string, string>
+    ) => Promise<{ status: number; headers: Record<string, string> }>,
     customHeaders?: Record<string, string>,
     headerHosts?: string[]
   ): Promise<{ ok: boolean; status?: number; error?: string; testCopyHeader?: boolean; startWarning?: 'start-4xx' }> {
@@ -419,11 +422,9 @@ export class PreFlightChecker {
         const settled = Promise.race([
           live.waitForURL((url) => url.toString() !== urlBefore, { timeout: 10000 }),
           password.waitFor({ state: 'hidden', timeout: 10000 }),
-          live.waitForFunction(
-            () => document.cookie.length > 0 || localStorage.length > 0,
-            undefined,
-            { timeout: 10000 }
-          ),
+          live.waitForFunction(() => document.cookie.length > 0 || localStorage.length > 0, undefined, {
+            timeout: 10000,
+          }),
         ]).catch(() => {});
 
         await submit.click().catch(() => {});
@@ -477,14 +478,17 @@ export class PreFlightChecker {
         // Verify storageState has cookies or localStorage entries
         const state = await context.storageState();
         const hasSession =
-          (state.cookies?.length ?? 0) > 0 ||
-          (state.origins?.some((o) => (o.localStorage?.length ?? 0) > 0) ?? false);
+          (state.cookies?.length ?? 0) > 0 || (state.origins?.some((o) => (o.localStorage?.length ?? 0) > 0) ?? false);
 
         const isSamePathAsLogin = landed.pathname === resolvedLoginUrl.pathname;
 
         let postLoginOk = true;
         if (credential.postLoginSelector) {
-          const visible = await live.locator(credential.postLoginSelector).first().isVisible().catch(() => false);
+          const visible = await live
+            .locator(credential.postLoginSelector)
+            .first()
+            .isVisible()
+            .catch(() => false);
           if (!visible) postLoginOk = false;
         }
         if (credential.postLoginUrl) {

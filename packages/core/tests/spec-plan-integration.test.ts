@@ -32,8 +32,16 @@ describe('url expectation negate', () => {
 describe('spec items reach the test cases', () => {
   const hints = [
     {
-      id: 'REQ-1', name: 'Leave', description: '', rules: [], document: 'spec.md', section: 'S > Leave', kind: 'journey' as const,
-      persona: 'Employee', steps: ['open `/home`'], assert: ['land on /home'],
+      id: 'REQ-1',
+      name: 'Leave',
+      description: '',
+      rules: [],
+      document: 'spec.md',
+      section: 'S > Leave',
+      kind: 'journey' as const,
+      persona: 'Employee',
+      steps: ['open `/home`'],
+      assert: ['land on /home'],
     },
   ];
   const pages = [page('/home', [el('Save', '#s')])];
@@ -41,11 +49,19 @@ describe('spec items reach the test cases', () => {
 
   it('flow docSource and role reach the journey test case', () => {
     const draft: any = {
-      version: '1', productId: 'p', targetUrl: 'http://x', timestamp: '', pages: [], sensitiveActions: [],
-      ambiguityQuestions: [], flows: out.flows,
+      version: '1',
+      productId: 'p',
+      targetUrl: 'http://x',
+      timestamp: '',
+      pages: [],
+      sensitiveActions: [],
+      ambiguityQuestions: [],
+      flows: out.flows,
       plan: { pages: [], navigation: [], layoutGroups: [], otherHosts: [] },
     };
-    const tc = expandPlan(draft, { readOnly: false, screenSizes: ['1440px'] }).testCases.find((t) => t.kind === 'journey')!;
+    const tc = expandPlan(draft, { readOnly: false, screenSizes: ['1440px'] }).testCases.find(
+      (t) => t.kind === 'journey'
+    )!;
     expect(tc.docSource?.requirementId).toBe('REQ-1');
     expect(tc.role).toBe('Employee');
   });
@@ -53,7 +69,13 @@ describe('spec items reach the test cases', () => {
   it('units the AI reached are left out and counted once', () => {
     const reached = reachedRequirementIds([], out.flows);
     expect([...reached]).toEqual(['REQ-1']);
-    const again = planFromSpec({ hints, roles: ['Employee'], crawls: [crawlOf('Employee', pages)], readOnly: false, skipRequirementIds: reached });
+    const again = planFromSpec({
+      hints,
+      roles: ['Employee'],
+      crawls: [crawlOf('Employee', pages)],
+      readOnly: false,
+      skipRequirementIds: reached,
+    });
     expect(again.flows).toEqual([]);
     expect(documentedUnits(hints)).toHaveLength(1);
   });

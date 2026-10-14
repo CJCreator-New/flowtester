@@ -9,7 +9,9 @@ describe('Intent and opening-step types', () => {
   it('opening steps and CRUD facts type-check on their carriers', () => {
     const open: TestCaseStep = { action: 'click', selector: '[role=tab]', name: 'Open tab', opening: true };
     const t: Partial<PlanPageTest> = { openingSteps: [open] };
-    const p: Pick<PageInventoryItem, 'crud'> = { crud: { list: true, add: 'Add', editFromRow: true, deleteConfirm: false } };
+    const p: Pick<PageInventoryItem, 'crud'> = {
+      crud: { list: true, add: 'Add', editFromRow: true, deleteConfirm: false },
+    };
     expect(t.openingSteps?.[0].opening).toBe(true);
     expect(p.crud?.deleteConfirm).toBe(false);
   });

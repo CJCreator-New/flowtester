@@ -8,8 +8,7 @@ const MAX_REDIRECTS = 5;
 const ROBOTS_TOKEN = 'qa-flow-tester';
 
 export type DocsGetResult =
-  | { ok: true; status: number; finalUrl: string; contentType: string; body: string }
-  | { ok: false; why: string };
+  { ok: true; status: number; finalUrl: string; contentType: string; body: string } | { ok: false; why: string };
 
 /** One GET. Must follow redirects itself and enforce `maxBytes`; fetchDocsPages re-checks the final address. */
 export type DocsGet = (url: string, opts: { maxBytes: number }) => Promise<DocsGetResult>;
@@ -36,7 +35,11 @@ function headerText(v: string | string[] | undefined): string {
 /** Beta-safe getter: every hop resolves to a public address (safe-net). Used when this machine is shared. */
 export function makeGuardedDocsGet(deps?: NetDeps): DocsGet {
   return async (url, opts) => {
-    const res = await safeGet(url, { maxBytes: opts.maxBytes, headers: { Accept: 'text/html, text/markdown, text/plain' } }, deps);
+    const res = await safeGet(
+      url,
+      { maxBytes: opts.maxBytes, headers: { Accept: 'text/html, text/markdown, text/plain' } },
+      deps
+    );
     if (!res.ok) return { ok: false, why: `blocked (${res.reason})` };
     return {
       ok: true,
@@ -57,10 +60,15 @@ export const localDocsGet: DocsGet = async (url, opts) => {
     return { ok: false, why: 'not a web address' };
   }
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    if (current.protocol !== 'http:' && current.protocol !== 'https:') return { ok: false, why: 'only http and https addresses are read' };
+    if (current.protocol !== 'http:' && current.protocol !== 'https:')
+      return { ok: false, why: 'only http and https addresses are read' };
     let res: Response;
     try {
-      res = await fetch(current, { redirect: 'manual', signal: AbortSignal.timeout(10000), headers: { Accept: 'text/html, text/markdown, text/plain' } });
+      res = await fetch(current, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10000),
+        headers: { Accept: 'text/html, text/markdown, text/plain' },
+      });
     } catch {
       return { ok: false, why: 'could not be reached' };
     }
@@ -95,7 +103,13 @@ export const localDocsGet: DocsGet = async (url, opts) => {
     } catch {
       return { ok: false, why: 'could not be read' };
     }
-    return { ok: true, status: res.status, finalUrl: current.toString(), contentType: res.headers.get('content-type') ?? '', body };
+    return {
+      ok: true,
+      status: res.status,
+      finalUrl: current.toString(),
+      contentType: res.headers.get('content-type') ?? '',
+      body,
+    };
   }
   return { ok: false, why: 'too many redirects' };
 };
@@ -111,11 +125,12 @@ function decodeEntities(s: string): string {
 
 /** Reduces a docs page to text. Headings become `#` lines (so they act as sections), list items become `- ` lines. */
 export function htmlToDoc(html: string): string {
-  let s = html
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(script|style|noscript|svg|head)\b[\s\S]*?<\/\1\s*>/gi, ' ');
+  let s = html.replace(/<!--[\s\S]*?-->/g, ' ').replace(/<(script|style|noscript|svg|head)\b[\s\S]*?<\/\1\s*>/gi, ' ');
   s = s.replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi, (_m, level: string, inner: string) => {
-    const text = inner.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    const text = inner
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     return text ? `\n${'#'.repeat(Number(level))} ${text}\n` : '\n';
   });
   s = s
@@ -184,7 +199,10 @@ export async function fetchDocsPages(startUrl: string, options: DocsFetchOptions
   let robots = options.robots;
   if (!robots) {
     const r = await get(new URL('/robots.txt', start).toString(), { maxBytes }).catch(() => null);
-    robots = r && r.ok && r.status >= 200 && r.status < 300 ? RobotsPolicy.parse(r.body, ROBOTS_TOKEN) : RobotsPolicy.allowAll();
+    robots =
+      r && r.ok && r.status >= 200 && r.status < 300
+        ? RobotsPolicy.parse(r.body, ROBOTS_TOKEN)
+        : RobotsPolicy.allowAll();
   }
 
   const seen = new Set<string>([start.toString()]);

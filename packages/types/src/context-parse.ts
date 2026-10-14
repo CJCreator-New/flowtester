@@ -82,7 +82,7 @@ const JID = String.raw`(?:\d[\w.]*|[A-Za-z]\d[\w.]*|[A-Z]\b)`;
 /** "J1 — title", "Journey 2: title", "Flow A - title", "Scenario: title", "User story 3 — title". */
 const JOURNEY_HEADING = new RegExp(
   String.raw`^(J\d+|Journey\s+${JID}|Flow\s+${JID}|Scenario(?:\s+${JID})?|User story(?:\s+${JID})?)(?:\s*[—–:-]\s*(.*))?$`,
-  'i',
+  'i'
 );
 const JOURNEY = /^\*\*\s*Journey\b([^*]*:[^*]*)\*\*(.*)$/i;
 const NEGATIVE = /^\*\*\s*Negative specs?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
@@ -150,7 +150,11 @@ export function parseDocumentText(text: string, options: ParseDocumentOptions = 
   let fence: string[] | null = null;
 
   const path = (): string => stack.map((s) => s.title).join(' > ');
-  const make = (name: string, sectionPath: string, extra: Partial<ParsedRequirementHint> = {}): ParsedRequirementHint => {
+  const make = (
+    name: string,
+    sectionPath: string,
+    extra: Partial<ParsedRequirementHint> = {}
+  ): ParsedRequirementHint => {
     const hint: ParsedRequirementHint = { id: `REQ-${counter++}`, name, description: '', rules: [], ...extra };
     if (document !== undefined) {
       hint.document = document;
@@ -172,7 +176,9 @@ export function parseDocumentText(text: string, options: ParseDocumentOptions = 
     const rolesCol = lower.findIndex((h) => /^(roles?|who|access)$/.test(h));
     const sectionPath = path();
     if (routeCol >= 0 && rolesCol >= 0) {
-      const pageCol = lower.findIndex((h, i) => i !== routeCol && i !== rolesCol && /^(page|screen|name|title)$/.test(h));
+      const pageCol = lower.findIndex(
+        (h, i) => i !== routeCol && i !== rolesCol && /^(page|screen|name|title)$/.test(h)
+      );
       for (const row of body) {
         const route = (row[routeCol] ?? '').replace(/`/g, '').trim();
         if (!route) continue;
@@ -350,7 +356,13 @@ export function parseDocumentText(text: string, options: ParseDocumentOptions = 
       if (asA) current.persona = asA[1].trim();
       continue;
     }
-    if (line.length > 0 && current && current.kind !== 'journey' && current.kind !== 'negative' && !current.description) {
+    if (
+      line.length > 0 &&
+      current &&
+      current.kind !== 'journey' &&
+      current.kind !== 'negative' &&
+      !current.description
+    ) {
       current.description = line;
     }
   }

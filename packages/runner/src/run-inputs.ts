@@ -64,7 +64,10 @@ export function checkContextUrl(input: unknown): Checked<string | undefined> {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('scheme');
     return { ok: true, value: url.toString() };
   } catch {
-    return bad('ERR_INVALID_CONTEXT_URL', 'The docs address must be a web address that starts with http:// or https://.');
+    return bad(
+      'ERR_INVALID_CONTEXT_URL',
+      'The docs address must be a web address that starts with http:// or https://.'
+    );
   }
 }
 
@@ -134,7 +137,10 @@ export function checkSavedSessions(
     if (!role.trim() || role.length > 80) return bad('ERR_INVALID_SESSION', 'A saved session needs a role name.');
     const s = raw as { cookies?: unknown; origins?: unknown } | null;
     if (!s || typeof s !== 'object' || !Array.isArray(s.cookies) || !Array.isArray(s.origins)) {
-      return bad('ERR_INVALID_SESSION', `The saved session for ${role} isn’t a Playwright storage state (cookies and origins).`);
+      return bad(
+        'ERR_INVALID_SESSION',
+        `The saved session for ${role} isn’t a Playwright storage state (cookies and origins).`
+      );
     }
     let size = 0;
     try {
@@ -357,4 +363,3 @@ export function checkLoginPath(value: unknown, targetUrl: string): Checked<strin
     return bad('ERR_INVALID_LOGIN_PATH', 'The login path is not valid.');
   }
 }
-

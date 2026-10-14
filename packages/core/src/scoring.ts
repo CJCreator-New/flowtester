@@ -85,10 +85,7 @@ export interface ScoringOptions {
  * of the overall score: an aspect that was never looked at isn't an A. A checker that found
  * something always counts as having run.
  */
-export function calculateSiteAspectGrades(
-  findings: Finding[],
-  options: ScoringOptions = {}
-): SiteAspectGrades {
+export function calculateSiteAspectGrades(findings: Finding[], options: ScoringOptions = {}): SiteAspectGrades {
   const aspects: Record<AspectType, AspectScore> = {
     Works: { grade: 'A', score: 100, findings: [] },
     Accessible: { grade: 'A', score: 100, findings: [] },

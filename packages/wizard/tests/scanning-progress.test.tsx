@@ -146,7 +146,9 @@ describe('T-109: ScanningScreen crawl health and accessible regions', () => {
     );
 
     // Polite live region contains stage announcement only
-    expect(html).toMatch(/<div[^>]*role="status"[^>]*aria-live="polite"[^>]*class="sr-only"[^>]*>Exploring the site…<\/div>/);
+    expect(html).toMatch(
+      /<div[^>]*role="status"[^>]*aria-live="polite"[^>]*class="sr-only"[^>]*>Exploring the site…<\/div>/
+    );
 
     // The visible path container is NOT aria-live / role="status"
     expect(html).toContain('Exploring the site: just looked at /contact');

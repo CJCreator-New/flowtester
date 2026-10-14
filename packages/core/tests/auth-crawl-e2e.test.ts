@@ -112,9 +112,7 @@ describe('T-117 Auth and crawl end-to-end (auth-crawl-e2e.test.ts)', () => {
         name: 'Protected Area Verification',
         role: 'manager',
         startPage: '/account',
-        steps: [
-          { action: 'wait', name: 'Wait on protected page' },
-        ],
+        steps: [{ action: 'wait', name: 'Wait on protected page' }],
         expectations: {},
       };
 
@@ -296,9 +294,7 @@ describe('T-117 Auth and crawl end-to-end (auth-crawl-e2e.test.ts)', () => {
         name: 'Access Expiring Page',
         role: 'manager',
         startPage: '/lab/expiring',
-        steps: [
-          { action: 'wait', name: 'Wait on expiring area' },
-        ],
+        steps: [{ action: 'wait', name: 'Wait on expiring area' }],
         expectations: {},
       };
 
@@ -339,9 +335,7 @@ describe('T-117 Auth and crawl end-to-end (auth-crawl-e2e.test.ts)', () => {
       name: 'Header verification flow',
       role: 'anonymous',
       startPage: '/lab/headers',
-      steps: [
-        { action: 'wait', name: 'Wait on lab headers page' },
-      ],
+      steps: [{ action: 'wait', name: 'Wait on lab headers page' }],
       expectations: {},
     };
 

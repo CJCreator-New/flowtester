@@ -19,7 +19,12 @@ describe('readContextFiles', () => {
     expect(rejected[1]).toMatch(/is an old Word document/);
   });
   it('converts a .docx through the converter and returns its text', async () => {
-    const docx = { name: 'spec.docx', size: 10, text: async () => '', arrayBuffer: async () => new TextEncoder().encode('PK').buffer };
+    const docx = {
+      name: 'spec.docx',
+      size: 10,
+      text: async () => '',
+      arrayBuffer: async () => new TextEncoder().encode('PK').buffer,
+    };
     const calls: Array<[string, string]> = [];
     const convertDocx = async (name: string, base64: string) => {
       calls.push([name, base64]);
@@ -28,7 +33,11 @@ describe('readContextFiles', () => {
     const { accepted, rejected } = await readContextFiles([docx], 0, { convertDocx });
     expect(rejected).toEqual([]);
     expect(calls).toEqual([['spec.docx', 'UEs=']]);
-    expect(accepted[0]).toMatchObject({ name: 'spec.docx', content: '# Admin\n- Can delete users', warnings: ['skipped an image'] });
+    expect(accepted[0]).toMatchObject({
+      name: 'spec.docx',
+      content: '# Admin\n- Can delete users',
+      warnings: ['skipped an image'],
+    });
   });
   it('says so when a .docx cannot be converted', async () => {
     const docx = { name: 'spec.docx', size: 10, text: async () => '', arrayBuffer: async () => new ArrayBuffer(2) };

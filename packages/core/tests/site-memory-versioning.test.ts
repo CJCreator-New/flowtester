@@ -71,9 +71,7 @@ describe('site-memory-versioning (schemaVersion and safe recovery)', () => {
     loaded!.owner = false;
     await saveSiteMemory(tmpDir, loaded!);
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('schemaVersion 99 is newer than supported 1')
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('schemaVersion 99 is newer than supported 1'));
 
     // File on disk must remain intact and NOT overwritten
     const contentOnDisk = JSON.parse(await fs.readFile(memoryFile, 'utf8'));

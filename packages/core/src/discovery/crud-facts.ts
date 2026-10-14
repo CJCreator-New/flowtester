@@ -41,7 +41,8 @@ export async function readCrudStructure(
     .evaluate(
       ({ rowDelete }) => {
         const clean = (s: string | null | undefined) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 80);
-        const visible = (el: Element) => el.getClientRects().length > 0 && el.checkVisibility({ checkVisibilityCSS: true });
+        const visible = (el: Element) =>
+          el.getClientRects().length > 0 && el.checkVisibility({ checkVisibilityCSS: true });
         const nameOf = (el: Element) =>
           clean(el.getAttribute('aria-label')) || clean(el.textContent) || clean(el.getAttribute('title'));
         const controlsIn = (root: Element) =>

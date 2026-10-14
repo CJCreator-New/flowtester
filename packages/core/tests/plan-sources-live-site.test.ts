@@ -31,7 +31,17 @@ function expand(readOnly: boolean, shown: boolean) {
   const page = planPage([source]);
   for (const d of deriveDenials([page], binding, { controlShownTo: () => shown })) page.tests.push(d.test);
   return expandPlan(
-    { version: '1.0', productId: 'p', targetUrl: 'https://app.example/', timestamp: '2026-09-30T00:00:00Z', pages: [], flows: [], sensitiveActions: [], ambiguityQuestions: [], plan: { pages: [page], navigation: [], layoutGroups: [], otherHosts: [] } } as any,
+    {
+      version: '1.0',
+      productId: 'p',
+      targetUrl: 'https://app.example/',
+      timestamp: '2026-09-30T00:00:00Z',
+      pages: [],
+      flows: [],
+      sensitiveActions: [],
+      ambiguityQuestions: [],
+      plan: { pages: [page], navigation: [], layoutGroups: [], otherHosts: [] },
+    } as any,
     { readOnly, screenSizes: [] }
   );
 }

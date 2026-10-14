@@ -20,7 +20,19 @@ beforeAll(async () => {
       res.end(b);
     };
     if (url === '/robots.txt') return html('User-agent: *\nDisallow: /private', 'text/plain');
-    if (url === '/docs') return html(page('Docs home', ['/docs/a', '/docs/b', '/private/x', `${offHost}/elsewhere`, 'file:///etc/passwd', '/docs/redir', '/docs/big', '/docs/img']));
+    if (url === '/docs')
+      return html(
+        page('Docs home', [
+          '/docs/a',
+          '/docs/b',
+          '/private/x',
+          `${offHost}/elsewhere`,
+          'file:///etc/passwd',
+          '/docs/redir',
+          '/docs/big',
+          '/docs/img',
+        ])
+      );
     if (url === '/docs/a') return html(page('Guide A', ['/docs']));
     if (url === '/docs/b') return html('# Guide B\n- md rule', 'text/markdown');
     if (url === '/docs/redir') {
@@ -101,7 +113,10 @@ describe('fetchDocsPages', () => {
         return { status: 200, headers: { 'content-type': 'text/html' }, body: '<h1>no</h1>' };
       },
     });
-    const r = await fetchDocsPages('http://docs.example.com/', { get, robots: (await import('../src/competitive/robots.js')).RobotsPolicy.allowAll() });
+    const r = await fetchDocsPages('http://docs.example.com/', {
+      get,
+      robots: (await import('../src/competitive/robots.js')).RobotsPolicy.allowAll(),
+    });
     expect(r.docs).toEqual([]);
     expect(r.skipped[0].why).toMatch(/private-address/);
   });

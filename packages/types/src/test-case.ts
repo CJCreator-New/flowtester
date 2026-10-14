@@ -1,6 +1,6 @@
 import type { DocSource, PlanIntent } from './plan.js';
 
-export type FindingSeverity ='Blocker' | 'Major' | 'Minor' | 'Suggestion';
+export type FindingSeverity = 'Blocker' | 'Major' | 'Minor' | 'Suggestion';
 
 export type CheckerType =
   | 'bug-detection'

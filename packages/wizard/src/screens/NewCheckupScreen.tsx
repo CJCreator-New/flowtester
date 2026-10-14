@@ -919,8 +919,8 @@ function ReferenceDocuments({
         </label>
       </div>
       <p className="text-sm text-ink-soft">
-        Markdown, text or Word files, up to {MAX_CONTEXT_FILES}. Plan Items link back to the document and section they came
-        from.
+        Markdown, text or Word files, up to {MAX_CONTEXT_FILES}. Plan Items link back to the document and section they
+        came from.
       </p>
       {form.contextFiles.length > 0 && (
         <ul className="space-y-1 text-sm">
@@ -1214,7 +1214,8 @@ function ImportRoles({ onFormChange }: { onFormChange: (update: (form: CheckupFo
       onFormChange((f) => ({ ...f, signIns: fillRoleRows(f.signIns, roles) }));
       setText('');
     }
-    const done = roles.length > 0 ? `${roles.length} ${roles.length === 1 ? 'role' : 'roles'} filled in.` : 'No roles found.';
+    const done =
+      roles.length > 0 ? `${roles.length} ${roles.length === 1 ? 'role' : 'roles'} filled in.` : 'No roles found.';
     setNote([done, ...skipped].join(' '));
   };
   if (!open) {

@@ -134,7 +134,10 @@ export class DesignStandardsChecker {
                   expected: toks.fontSize.base,
                 });
               }
-            } else if ((toks.fontSize.lg || toks.fontSize.xl) && (testId.includes('heading') || testId.includes('title'))) {
+            } else if (
+              (toks.fontSize.lg || toks.fontSize.xl) &&
+              (testId.includes('heading') || testId.includes('title'))
+            ) {
               const expectedFs = (toks.fontSize.lg || toks.fontSize.xl)!.toLowerCase();
               const fs = computed.fontSize;
               if (fs && fs.toLowerCase() !== expectedFs) {

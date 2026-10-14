@@ -63,7 +63,8 @@ const aTest = (intent?: string) => ({
   ...(intent ? { intent } : {}),
 });
 
-const fromAi = (out: Awaited<ReturnType<typeof planPagesAndMenus>>) => out.pages[0].tests.filter((t) => t.source === 'ai');
+const fromAi = (out: Awaited<ReturnType<typeof planPagesAndMenus>>) =>
+  out.pages[0].tests.filter((t) => t.source === 'ai');
 
 describe('Limits in the AI Planner', () => {
   it('plans Limits from the AI answer: needs a Test Copy, a guess, never failing on its own', async () => {

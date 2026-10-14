@@ -540,7 +540,12 @@ export default function App() {
       refreshRecent();
       navigate(PATHS.plan);
     } catch (err) {
-      if (err instanceof RunnerError && err.code === 'ERR_HEADERS_NOT_SAVED' && err.needsHeaders && err.needsHeaders.length > 0) {
+      if (
+        err instanceof RunnerError &&
+        err.code === 'ERR_HEADERS_NOT_SAVED' &&
+        err.needsHeaders &&
+        err.needsHeaders.length > 0
+      ) {
         setStartError(headersNotice(err.needsHeaders));
         return;
       }
@@ -647,7 +652,12 @@ export default function App() {
         setApproveError(SIGN_IN_AGAIN_TEXT);
         return;
       }
-      if (err instanceof RunnerError && err.code === 'ERR_HEADERS_NOT_SAVED' && err.needsHeaders && err.needsHeaders.length > 0) {
+      if (
+        err instanceof RunnerError &&
+        err.code === 'ERR_HEADERS_NOT_SAVED' &&
+        err.needsHeaders &&
+        err.needsHeaders.length > 0
+      ) {
         setApproveError(headersNotice(err.needsHeaders));
         return;
       }

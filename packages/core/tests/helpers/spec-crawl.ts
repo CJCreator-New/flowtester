@@ -10,7 +10,11 @@ export const el = (name: string, selector: string, role = 'button'): ElementInve
   enabled: true,
 });
 
-export const page = (urlPath: string, elements: ElementInventoryItem[] = [], reachedBy = ['visitor']): PageInventoryItem => ({
+export const page = (
+  urlPath: string,
+  elements: ElementInventoryItem[] = [],
+  reachedBy = ['visitor']
+): PageInventoryItem => ({
   urlPath,
   title: urlPath,
   interactiveElementsCount: elements.length,

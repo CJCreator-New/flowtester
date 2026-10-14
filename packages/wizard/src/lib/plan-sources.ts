@@ -42,7 +42,14 @@ export function rolesLine(test: Pick<PlanPageTest, 'proposedRoles' | 'rolesConfi
 
 /** The roles a person typed ("admin, manager") as a clean list; empty when nothing usable. */
 export function parseRoles(typed: string): string[] {
-  return [...new Set(typed.split(/[,;\n]/).map((r) => r.trim().toLowerCase()).filter(Boolean))];
+  return [
+    ...new Set(
+      typed
+        .split(/[,;\n]/)
+        .map((r) => r.trim().toLowerCase())
+        .filter(Boolean)
+    ),
+  ];
 }
 
 export function confirmRolesEdit(itemId: string, roles?: string[]): NonNullable<PatchPlanBody['sourceEdits']> {

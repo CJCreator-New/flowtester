@@ -565,15 +565,11 @@ function AddSignIn({ actions }: { actions: PlanActions }) {
         />
       </label>
       <details className="col-span-full space-y-3">
-        <summary className="cursor-pointer text-sm font-bold text-stamp hover:underline">
-          Advanced
-        </summary>
+        <summary className="cursor-pointer text-sm font-bold text-stamp hover:underline">Advanced</summary>
         <div className="grid gap-3 pt-2 sm:grid-cols-2">
           <label className="text-sm">
             <span className="mb-1 block font-bold">Sign-in page</span>
-            <span className="mb-1 block text-xs text-ink-soft">
-              Where the sign-in form is, for example /login
-            </span>
+            <span className="mb-1 block text-xs text-ink-soft">Where the sign-in form is, for example /login</span>
             <input
               className="field py-2 text-sm"
               placeholder="/login"
@@ -1574,7 +1570,10 @@ function SortableJourneyItem({ flow, actions }: { flow: DiscoveredFlow; actions:
 function JourneysSection({ plan, actions }: { plan: ReviewPlan; actions: PlanActions }) {
   const view = useContext(ViewContext);
   const flows = plan.flows.filter(
-    (f) => matches(view, `${f.name} ${f.description} ${f.startPage}`) && (!view.needsMe || flowNeedsMe(f)) && (!view.intent || intentKey(f) === view.intent)
+    (f) =>
+      matches(view, `${f.name} ${f.description} ${f.startPage}`) &&
+      (!view.needsMe || flowNeedsMe(f)) &&
+      (!view.intent || intentKey(f) === view.intent)
   );
 
   const sensors = useSensors(
@@ -1650,7 +1649,8 @@ function WontRunSection({ plan }: { plan: ReviewPlan }) {
           {items.map((item, i) => (
             <li key={i} className="flex items-start justify-between gap-3">
               <span>
-                <strong className="text-ink">{item.what}</strong> <span className="text-ink-soft">— {wontRunReason(item.reason)}</span>
+                <strong className="text-ink">{item.what}</strong>{' '}
+                <span className="text-ink-soft">— {wontRunReason(item.reason)}</span>
               </span>
               {item.itemId && (
                 <button type="button" className="btn-link shrink-0 text-sm" onClick={() => showItem(item.itemId!)}>
@@ -1778,7 +1778,12 @@ function IntentChips({ plan, view, setView }: { plan: ReviewPlan; view: View; se
   const present = intentsInPlan(plan);
   if (present.length === 0) return null;
   return (
-    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Show by Intent" data-testid="intent-chips">
+    <div
+      className="flex flex-wrap items-center gap-2"
+      role="group"
+      aria-label="Show by Intent"
+      data-testid="intent-chips"
+    >
       {present.map((c) => {
         const pressed = view.intent === c.intent;
         return (

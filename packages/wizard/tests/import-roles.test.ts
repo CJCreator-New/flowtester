@@ -13,7 +13,11 @@ describe('parseRoleList', () => {
   });
   it('keeps commas in the password and accepts tabs', () => {
     expect(parseRoleList('admin,a@x.test,pa,ss').roles[0].password).toBe('pa,ss');
-    expect(parseRoleList('admin\ta@x.test\tpw').roles[0]).toEqual({ role: 'admin', username: 'a@x.test', password: 'pw' });
+    expect(parseRoleList('admin\ta@x.test\tpw').roles[0]).toEqual({
+      role: 'admin',
+      username: 'a@x.test',
+      password: 'pw',
+    });
   });
   it('skips bad and repeated lines by line number, never echoing values', () => {
     const r = parseRoleList('admin,a@x.test,secret-one\nonlyone\nadmin,b@x.test,secret-two\nx,,pw');
@@ -32,10 +36,7 @@ describe('parseRoleList', () => {
 
 describe('fillRoleRows', () => {
   it('updates a row with the same role, fills an empty row, then adds', () => {
-    const rows = [
-      { role: 'admin', username: '', password: '', loginPath: '/login' },
-      { ...EMPTY_SIGN_IN },
-    ];
+    const rows = [{ role: 'admin', username: '', password: '', loginPath: '/login' }, { ...EMPTY_SIGN_IN }];
     const out = fillRoleRows(rows, [
       { role: 'admin', username: 'a', password: 'pa' },
       { role: 'member', username: 'm', password: 'pm' },

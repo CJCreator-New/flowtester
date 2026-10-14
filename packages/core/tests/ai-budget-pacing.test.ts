@@ -45,12 +45,17 @@ describe('pacingFor', () => {
     expect(p).toEqual({ gapMs: 100, concurrency: 4 });
     expect(pacingFor({ requestsPerInterval: 2, intervalMs: 1000 }, 'openrouter').concurrency).toBe(2);
     // Little left today: headroom limits concurrency.
-    expect(pacingFor({ requestsPerInterval: 100, intervalMs: 1000, remainingRequests: 1 }, 'openrouter').concurrency).toBe(1);
+    expect(
+      pacingFor({ requestsPerInterval: 100, intervalMs: 1000, remainingRequests: 1 }, 'openrouter').concurrency
+    ).toBe(1);
   });
 
   it('other providers: no gap, one at a time unless reported', () => {
     expect(pacingFor({}, 'openai')).toEqual({ gapMs: 0, concurrency: 1 });
-    expect(pacingFor({ requestsPerInterval: 60, intervalMs: 60000 }, 'openai')).toEqual({ gapMs: 1000, concurrency: 4 });
+    expect(pacingFor({ requestsPerInterval: 60, intervalMs: 60000 }, 'openai')).toEqual({
+      gapMs: 1000,
+      concurrency: 4,
+    });
   });
 });
 
@@ -156,7 +161,11 @@ describe('PacedAI cap', () => {
 
   it('a free model (price 0) never reaches a dollar cap', async () => {
     const { provider } = slowProvider('openai', { promptTokens: 5000, completionTokens: 5000 });
-    const ai = new PacedAI(provider, Infinity, { gapMs: 0, cap: { dollars: 0.01 }, price: { prompt: 0, completion: 0 } });
+    const ai = new PacedAI(provider, Infinity, {
+      gapMs: 0,
+      cap: { dollars: 0.01 },
+      price: { prompt: 0, completion: 0 },
+    });
     for (let i = 0; i < 3; i++) await ai.complete([]);
     expect(ai.used).toBe(3);
   });

@@ -92,10 +92,11 @@ describe('headless Check-up and API run report the same Issues (AC5)', () => {
 
   it('same fingerprints from both paths', async () => {
     const { runCheckup, parseArgs, buildRunBody } = await import('../src/checkup.js');
-    const args = parseArgs(
-      [siteUrl, '--fail-on', 'none', '--max-pages', '8', '--output', ciOut],
-      { QA_USERNAME: USER, QA_PASSWORD: PASSWORD, QA_LOGIN_PATH: '/signin' } as NodeJS.ProcessEnv
-    );
+    const args = parseArgs([siteUrl, '--fail-on', 'none', '--max-pages', '8', '--output', ciOut], {
+      QA_USERNAME: USER,
+      QA_PASSWORD: PASSWORD,
+      QA_LOGIN_PATH: '/signin',
+    } as NodeJS.ProcessEnv);
     expect(await runCheckup(args)).toBe(0);
     const headless = JSON.parse(await fs.readFile(path.join(ciOut, 'known-findings.json'), 'utf8')) as {
       findings: Array<{ fingerprint: string }>;

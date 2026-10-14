@@ -66,7 +66,9 @@ export function countsTowardVerdict(f: Pick<Finding, 'triageStatus' | 'needsConf
 }
 
 export function releaseVerdict(
-  findings?: Array<Pick<Finding, 'severity' | 'triageStatus' | 'needsConfirmation' | 'title'> & Partial<Finding>> | null,
+  findings?: Array<
+    Pick<Finding, 'severity' | 'triageStatus' | 'needsConfirmation' | 'title'> & Partial<Finding>
+  > | null,
   gate?: ReleaseGateCriteria,
   grades?: SiteAspectGrades
 ): ReleaseVerdict {
@@ -105,7 +107,9 @@ export function releaseVerdict(
     const gradeRanks: Record<AspectGrade, number> = { A: 4, B: 3, C: 2, D: 1, F: 0 };
     const minRank = gate.minAreaGrade ? gradeRanks[gate.minAreaGrade] : undefined;
 
-    for (const [name, scoreInfo] of Object.entries(aspects || {}) as Array<[AspectType, typeof aspects[AspectType]]>) {
+    for (const [name, scoreInfo] of Object.entries(aspects || {}) as Array<
+      [AspectType, (typeof aspects)[AspectType]]
+    >) {
       if (!scoreInfo || scoreInfo.checked === false) continue;
       if (gate.advisoryAreas?.includes(name)) continue;
 

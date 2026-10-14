@@ -125,9 +125,12 @@ function parseRoles(env: NodeJS.ProcessEnv): RoleSignIn[] {
         username: r.username,
         password: r.password,
         loginPath: typeof r.loginPath === 'string' && r.loginPath.trim() ? r.loginPath.trim() : undefined,
-        usernameSelector: typeof r.usernameSelector === 'string' && r.usernameSelector.trim() ? r.usernameSelector.trim() : undefined,
-        passwordSelector: typeof r.passwordSelector === 'string' && r.passwordSelector.trim() ? r.passwordSelector.trim() : undefined,
-        submitSelector: typeof r.submitSelector === 'string' && r.submitSelector.trim() ? r.submitSelector.trim() : undefined,
+        usernameSelector:
+          typeof r.usernameSelector === 'string' && r.usernameSelector.trim() ? r.usernameSelector.trim() : undefined,
+        passwordSelector:
+          typeof r.passwordSelector === 'string' && r.passwordSelector.trim() ? r.passwordSelector.trim() : undefined,
+        submitSelector:
+          typeof r.submitSelector === 'string' && r.submitSelector.trim() ? r.submitSelector.trim() : undefined,
       });
     }
   }
@@ -216,7 +219,9 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   }
 
   const flagValues = new Set<string>([
-    ...(['--fail-on', '--provider', '--max-pages', '--output', '--test-cap', '--concurrency', '--delay', '--header'].map((f) => flag(f)).filter(Boolean) as string[]),
+    ...(['--fail-on', '--provider', '--max-pages', '--output', '--test-cap', '--concurrency', '--delay', '--header']
+      .map((f) => flag(f))
+      .filter(Boolean) as string[]),
     ...(debugValue && debugValue !== 'all' ? [debugValue] : []),
     ...flagDocs,
   ]);

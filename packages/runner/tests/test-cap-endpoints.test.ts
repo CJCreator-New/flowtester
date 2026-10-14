@@ -18,7 +18,8 @@ describe('checkTestCap', () => {
     expect(checkTestCap('300')).toBe(300);
     expect(checkTestCap(12.9)).toBe(12);
     expect(checkTestCap(5_000_000)).toBe(100000);
-    for (const v of [0, -3, 0.5, NaN, Infinity, 'abc', '', null, undefined, {}]) expect(checkTestCap(v)).toBeUndefined();
+    for (const v of [0, -3, 0.5, NaN, Infinity, 'abc', '', null, undefined, {}])
+      expect(checkTestCap(v)).toBeUndefined();
   });
 });
 
@@ -58,7 +59,11 @@ class QuietAI {
 }
 
 const post = (route: string, body: unknown = {}, method = 'POST') =>
-  fetch(`${runnerUrl}${route}`, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  fetch(`${runnerUrl}${route}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 const getPlan = async () => (await (await fetch(`${runnerUrl}/api/runner/plan`)).json()) as ReviewPlan;
 
 async function waitForPhase(wanted: string[], seconds = 200): Promise<void> {

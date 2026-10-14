@@ -18,7 +18,9 @@ describe('T-103 browser context scoped headers and restart guard', () => {
       if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         // loads a script from Server B
-        res.end(`<!DOCTYPE html><html><head><script src="http://127.0.0.1:${portB}/script.js"></script></head><body><h1>Host A</h1></body></html>`);
+        res.end(
+          `<!DOCTYPE html><html><head><script src="http://127.0.0.1:${portB}/script.js"></script></head><body><h1>Host A</h1></body></html>`
+        );
         return;
       }
       res.writeHead(200, { 'Content-Type': 'text/plain' });

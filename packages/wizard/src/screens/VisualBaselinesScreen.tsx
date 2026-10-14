@@ -217,7 +217,9 @@ export function VisualBaselinesScreen() {
                       <div>
                         {hasDiff ? (
                           <span className="inline-flex items-center rounded-full bg-fail/15 px-2 py-0.5 text-xs font-bold text-fail">
-                            {item.diffPercent != null && Number.isFinite(item.diffPercent) ? `${item.diffPercent.toFixed(1)}% diff` : 'Changed'}
+                            {item.diffPercent != null && Number.isFinite(item.diffPercent)
+                              ? `${item.diffPercent.toFixed(1)}% diff`
+                              : 'Changed'}
                           </span>
                         ) : (
                           <span className="inline-flex items-center rounded-full bg-pass/15 px-2 py-0.5 text-xs font-bold text-pass">
@@ -250,7 +252,8 @@ export function VisualBaselinesScreen() {
                       </span>
                     </h3>
                     <p className="text-xs text-ink-soft">
-                      Updated {formatWhen(activeItem.updatedAt)} · {(Number(activeItem.fileSizeBytes || 0) / 1024).toFixed(1)} KB
+                      Updated {formatWhen(activeItem.updatedAt)} ·{' '}
+                      {(Number(activeItem.fileSizeBytes || 0) / 1024).toFixed(1)} KB
                     </p>
                   </div>
 

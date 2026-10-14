@@ -91,9 +91,11 @@ describe('T-108: scanBlockedHint and Start button blocking', () => {
     );
 
     expect(html).toContain('id="scan-blocked-hint"');
-    expect(html).toContain("Tick &#x27;I accept this&#x27; to scan with sign-in");
+    expect(html).toContain('Tick &#x27;I accept this&#x27; to scan with sign-in');
     expect(html).toMatch(/aria-describedby="[^"]*scan-blocked-hint[^"]*"/);
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-describedby="[^"]*scan-blocked-hint[^"]*"[^>]*>Scan the site<\/button>/);
+    expect(html).toMatch(
+      /<button[^>]*disabled=""[^>]*aria-describedby="[^"]*scan-blocked-hint[^"]*"[^>]*>Scan the site<\/button>/
+    );
   });
 
   it('disables Scan the site button and renders error when header is invalid', () => {
@@ -213,11 +215,9 @@ describe('T-108: testSiteSignIn error handling with known failure reasons', () =
     for (const reason of SIGN_IN_FAILURE_REASONS) {
       vi.stubGlobal(
         'fetch',
-        vi.fn(async () =>
-          new Response(
-            JSON.stringify({ verified: false, reason, error: 'internal server text' }),
-            { status: 422 }
-          )
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ verified: false, reason, error: 'internal server text' }), { status: 422 })
         )
       );
 
@@ -290,16 +290,17 @@ describe('T-108: approvePlan customHeaders and RunnerError needsHeaders', () => 
   it('exposes needsHeaders and needsSignIn from 409 body on RunnerError', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            error: 'Headers needed',
-            code: 'ERR_HEADERS_NOT_SAVED',
-            needsHeaders: ['Authorization', 'X-Api-Key'],
-            needsSignIn: ['admin'],
-          }),
-          { status: 409 }
-        )
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: 'Headers needed',
+              code: 'ERR_HEADERS_NOT_SAVED',
+              needsHeaders: ['Authorization', 'X-Api-Key'],
+              needsSignIn: ['admin'],
+            }),
+            { status: 409 }
+          )
       )
     );
 

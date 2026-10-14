@@ -38,7 +38,11 @@ const docsServer = http.createServer((req, res) => {
 });
 
 const post = (body: unknown) =>
-  fetch(`${runnerUrl}/api/runner/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  fetch(`${runnerUrl}/api/runner/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 async function waitForPhase(wanted: string[], seconds = 240): Promise<void> {
   for (let i = 0; i < seconds * 2; i++) {
     const s = (await (await fetch(`${runnerUrl}/api/runner/status`)).json()) as { phase: string; lastRunError: string };
@@ -90,7 +94,11 @@ describe('Docs address', () => {
   }, 240000);
 
   it('a site on this machine reads the docs, stops at 20 pages and ignores the other host', async () => {
-    await fetch(`${runnerUrl}/api/runner/abort`, { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } });
+    await fetch(`${runnerUrl}/api/runner/abort`, {
+      method: 'POST',
+      body: '{}',
+      headers: { 'Content-Type': 'application/json' },
+    });
     const res = await post({
       targetUrl: `http://localhost:${FIXTURE_PORT}/`,
       owner: true,

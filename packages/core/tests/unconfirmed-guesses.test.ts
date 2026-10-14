@@ -28,6 +28,7 @@ const INVOICE = `<!doctype html><html lang="en"><head><title>Create Invoice</tit
   </form></main></body></html>`;
 
 const PAGES: Record<string, string> = {
+  '/': LOGIN,
   '/login': LOGIN,
   '/invoices/new': INVOICE,
   '/saved':
@@ -111,18 +112,27 @@ describe('Validation expander with guessed rules', () => {
 });
 
 describe('Unconfirmed guesses never fail a site', () => {
-  const PORT = 3503;
-  const baseUrl = `http://localhost:${PORT}`;
+  let port = 0;
+  let baseUrl = '';
   const outputDir = path.join(process.cwd(), '.tmp-unconfirmed-guesses');
   let server: http.Server;
 
   beforeAll(async () => {
     server = http.createServer((req, res) => {
-      const page = PAGES[new URL(req.url || '/', baseUrl).pathname];
+      const page = PAGES[new URL(req.url || '/', baseUrl || 'http://localhost').pathname];
       res.writeHead(page ? 200 : 404, { 'Content-Type': 'text/html' });
       res.end(page || 'Not found');
     });
-    await new Promise<void>((resolve) => server.listen(PORT, resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => {
+        const addr = server.address();
+        if (addr && typeof addr !== 'string') {
+          port = addr.port;
+          baseUrl = `http://localhost:${port}`;
+        }
+        resolve();
+      });
+    });
   });
 
   afterAll(async () => {

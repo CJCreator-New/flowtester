@@ -53,13 +53,25 @@ jobs:
       - name: Build the runner and the packages it uses
         run: pnpm --filter "@qa/runner..." run build
 
+      - name: Cache Playwright browser
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/pnpm-lock.yaml') }}
+
       - name: Install Chromium (the browser tests drive it)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: pnpm --filter @qa/core exec playwright install --with-deps chromium
 
-      # Every package test except wizard-e2e (takes minutes, run it before a release). Same command as the deploy workflow.
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @qa/core exec playwright install-deps chromium
+
+      # Every package test except wizard-e2e (takes minutes, run it before a release) and auth-crawl (tested in parallel in auth-crawl job).
       # Chromium is installed above for the browser-driven checker and core tests.
       - name: Tests
-        run: pnpm exec vitest run --exclude "**/wizard-e2e.test.ts" --coverage
+        run: pnpm exec vitest run --exclude "**/wizard-e2e.test.ts" --exclude "**/auth-crawl-*.test.ts" --coverage
 
       # Totals from the coverage run, shown on the workflow summary page. Print only; no threshold.
       - name: Coverage summary
@@ -112,9 +124,21 @@ jobs:
         if: steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
         run: pnpm --filter "@qa/runner..." run build
 
-      - name: Install Chromium
+      - name: Cache Playwright browser
+        id: playwright-cache
         if: steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        if: (steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch') && steps.playwright-cache.outputs.cache-hit != 'true'
         run: pnpm --filter @qa/core exec playwright install --with-deps chromium
+
+      - name: Install Playwright system dependencies
+        if: (steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch') && steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @qa/core exec playwright install-deps chromium
 
       - name: Auth and crawl integration tests
         if: steps.filter.outputs.relevant == 'true' || github.event_name == 'workflow_dispatch'

@@ -109,13 +109,14 @@ export function expandPlan(
     }
     for (const test of page.tests) {
       const intentOff = (plan.intentsOff ?? []).some((i) => i === intentOf(test));
-      const reason = test.skipped || intentOff
-        ? SWITCHED_OFF
-        : test.needsHelp?.length
-          ? test.needsHelp[0]
-          : options.readOnly && test.needsTestCopy
-            ? NEEDS_TEST_COPY
-            : undefined;
+      const reason =
+        test.skipped || intentOff
+          ? SWITCHED_OFF
+          : test.needsHelp?.length
+            ? test.needsHelp[0]
+            : options.readOnly && test.needsTestCopy
+              ? NEEDS_TEST_COPY
+              : undefined;
       if (reason) {
         wontRun.push({ itemId: test.id, what: `${page.urlPath}: ${test.name}`, reason });
         if (reason === NEEDS_TEST_COPY)
@@ -123,7 +124,10 @@ export function expandPlan(
         continue;
       }
       // Rejects and Limits that press a Safety Filter control follow the answer to their question.
-      let steps = [...(test.openingSteps ?? []).map((s) => ({ ...s, opening: true })), ...test.steps.map((s) => ({ ...s }))];
+      let steps = [
+        ...(test.openingSteps ?? []).map((s) => ({ ...s, opening: true })),
+        ...test.steps.map((s) => ({ ...s })),
+      ];
       let expectations = test.expectations ?? {};
       const submit = test.expectations?.refusal?.submitSelector;
       const asked = submit ? questionList.find((q) => q.key === intentQuestionKey(page.urlPath, submit)) : undefined;
@@ -219,17 +223,13 @@ export function expandPlan(
   const flowIntents = new Map(draft.flows.filter((f) => f.intent).map((f) => [f.id, f.intent]));
   const flowSources = new Map(draft.flows.filter((f) => f.docSource).map((f) => [f.id, f.docSource]));
   const journeys = expandValidationTestCases(
-    new TestPlanner()
-      .plan(draft, { readOnly: options.readOnly })
-      .testCases.map(
-        (tc): TestCase => ({
-          ...tc,
-          kind: 'journey',
-          ...(flowIntents.get(tc.flowId) ? { intent: flowIntents.get(tc.flowId) } : {}),
-          planItemId: `journey:${tc.flowId}`,
-          ...(flowSources.get(tc.flowId) ? { docSource: flowSources.get(tc.flowId) } : {}),
-        })
-      )
+    new TestPlanner().plan(draft, { readOnly: options.readOnly }).testCases.map((tc): TestCase => ({
+      ...tc,
+      kind: 'journey',
+      ...(flowIntents.get(tc.flowId) ? { intent: flowIntents.get(tc.flowId) } : {}),
+      planItemId: `journey:${tc.flowId}`,
+      ...(flowSources.get(tc.flowId) ? { docSource: flowSources.get(tc.flowId) } : {}),
+    }))
   );
   testCases.push(...journeys);
   const ranJourneys = new Set(journeys.map((tc) => tc.flowId));

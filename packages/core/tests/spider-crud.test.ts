@@ -8,7 +8,8 @@ import { server } from '../../../fixtures/test-app/server.js';
 
 let browser: Browser;
 let base: string;
-const stats = async () => (await fetch(`${base}/lab/stats`)).json() as Promise<{ posts: number; deletes: number; cancelledDeletes: number }>;
+const stats = async () =>
+  (await fetch(`${base}/lab/stats`)).json() as Promise<{ posts: number; deletes: number; cancelledDeletes: number }>;
 
 describe('Spider: CRUD facts and Delete probe', () => {
   beforeAll(async () => {

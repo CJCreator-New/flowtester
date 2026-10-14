@@ -164,7 +164,9 @@ export function contextUrlOf(form: Pick<CheckupForm, 'contextUrl'>): string | un
 }
 
 /** The saved sessions keyed by role (a role name is made up when none was given); undefined when none. */
-export function savedSessionsOf(form: Pick<CheckupForm, 'savedSessions'>): Record<string, StorageStateData> | undefined {
+export function savedSessionsOf(
+  form: Pick<CheckupForm, 'savedSessions'>
+): Record<string, StorageStateData> | undefined {
   if (form.savedSessions.length === 0) return undefined;
   const sessions: Record<string, StorageStateData> = {};
   form.savedSessions.forEach((s, i) => {
@@ -187,9 +189,7 @@ export function testCapOf(form: Pick<CheckupForm, 'testCap'>): number | undefine
 }
 
 /** The sign-ins filled in, as the runner takes them: a role name is made up when none was given. */
-export function rolesOf(
-  form: Pick<CheckupForm, 'signIns'>
-): RoleCredential[] {
+export function rolesOf(form: Pick<CheckupForm, 'signIns'>): RoleCredential[] {
   return form.signIns
     .filter((s) => s.username.trim() && s.password)
     .map((s, i) => {
@@ -260,11 +260,7 @@ export function withoutConsent(form: CheckupForm): CheckupForm {
 export const SIGN_IN_AGAIN_TEXT = 'Type the sign-in details again to approve this plan.';
 
 /** The sign-ins typed again at approval: one per role in pending, or member if none specified. */
-export function approveRolesOf(
-  username: string,
-  password: string,
-  pending?: string[]
-): RoleCredential[] {
+export function approveRolesOf(username: string, password: string, pending?: string[]): RoleCredential[] {
   if (!username.trim() || !password) return [];
   const u = username.trim();
   if (pending && pending.length > 0) {
@@ -279,7 +275,11 @@ export function settleConsent(form: CheckupForm): CheckupForm {
 }
 
 /** A new address; consent given for another host does not carry over. */
-export function withAddress(form: CheckupForm, address: string, hostOf: (address: string) => string | null): CheckupForm {
+export function withAddress(
+  form: CheckupForm,
+  address: string,
+  hostOf: (address: string) => string | null
+): CheckupForm {
   const next = { ...form, address };
   return hostOf(form.address) === hostOf(address) ? next : withoutConsent(next);
 }
@@ -310,7 +310,13 @@ export function rememberSignInsOf(form: CheckupForm, consentFlow: boolean): bool
 export function consentRequestOf(
   form: CheckupForm,
   stagingHost: boolean | undefined
-): { owner: boolean; signInConsent?: true; skipReview?: boolean; stagingHost: boolean | undefined; rememberSignIns: boolean } {
+): {
+  owner: boolean;
+  signInConsent?: true;
+  skipReview?: boolean;
+  stagingHost: boolean | undefined;
+  rememberSignIns: boolean;
+} {
   const consent = signInConsentGiven(form);
   const roles = rolesOf(form);
   return {

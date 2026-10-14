@@ -355,7 +355,7 @@ export class SecurityChecker {
       );
     }
 
-      // Strict-Transport-Security (HSTS) - only checked if HTTPS
+    // Strict-Transport-Security (HSTS) - only checked if HTTPS
     if (context.isHttps && !normalized['strict-transport-security']) {
       findings.push(
         this.finding(`F-SEC-${context.testCaseId || 'GEN'}-HSTS`, context, context.urlPath, {
@@ -378,10 +378,7 @@ export class SecurityChecker {
   /**
    * Check CORS headers for insecure wildcard origins with credentials or permitted "null" origin (FR-6.5).
    */
-  checkCors(
-    headers: Record<string, string>,
-    context: SecurityContext & { urlPath: string }
-  ): Finding[] {
+  checkCors(headers: Record<string, string>, context: SecurityContext & { urlPath: string }): Finding[] {
     const findings: Finding[] = [];
     const normalized: Record<string, string> = {};
     for (const [k, v] of Object.entries(headers)) {
@@ -398,9 +395,14 @@ export class SecurityChecker {
           title: 'Insecure CORS configuration: Wildcard origin with credentials allowed',
           severity: 'Major',
           expected: 'Access-Control-Allow-Origin cannot be "*" when Access-Control-Allow-Credentials is true',
-          actual: 'Access-Control-Allow-Origin is "*" while Access-Control-Allow-Credentials is true, creating CSRF and credential theft vulnerability',
-          steps: [`Request ${context.urlPath}`, 'Inspect Access-Control-Allow-Origin and Access-Control-Allow-Credentials headers'],
-          resolution: 'Specify an explicit, trusted origin in Access-Control-Allow-Origin instead of wildcard "*", or disable Access-Control-Allow-Credentials.',
+          actual:
+            'Access-Control-Allow-Origin is "*" while Access-Control-Allow-Credentials is true, creating CSRF and credential theft vulnerability',
+          steps: [
+            `Request ${context.urlPath}`,
+            'Inspect Access-Control-Allow-Origin and Access-Control-Allow-Credentials headers',
+          ],
+          resolution:
+            'Specify an explicit, trusted origin in Access-Control-Allow-Origin instead of wildcard "*", or disable Access-Control-Allow-Credentials.',
         })
       );
     }
@@ -412,9 +414,11 @@ export class SecurityChecker {
           title: 'Insecure CORS configuration: "null" origin allowed',
           severity: 'Major',
           expected: 'Access-Control-Allow-Origin should never allow "null" origin',
-          actual: 'Access-Control-Allow-Origin is configured to allow "null", which can be exploited via sandboxed iframes',
+          actual:
+            'Access-Control-Allow-Origin is configured to allow "null", which can be exploited via sandboxed iframes',
           steps: [`Request ${context.urlPath}`, 'Inspect Access-Control-Allow-Origin header'],
-          resolution: 'Remove "null" from allowed origins and validate incoming Origin headers against an explicit whitelist.',
+          resolution:
+            'Remove "null" from allowed origins and validate incoming Origin headers against an explicit whitelist.',
         })
       );
     }

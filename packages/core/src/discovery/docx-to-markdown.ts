@@ -124,7 +124,12 @@ export function htmlToMarkdown(html: string): string {
     const tag = m[2].toLowerCase();
     const attrs = m[3];
     switch (tag) {
-      case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6':
+      case 'h1':
+      case 'h2':
+      case 'h3':
+      case 'h4':
+      case 'h5':
+      case 'h6':
         if (closing) flushBlock();
         else {
           flushBlock();
@@ -137,7 +142,8 @@ export function htmlToMarkdown(html: string): string {
           else inline += ' ';
         } else if (liPrefix === null && !inCell) flushBlock();
         break;
-      case 'ul': case 'ol':
+      case 'ul':
+      case 'ol':
         if (!closing) {
           if (lists.length === 0) flushBlock();
           lists.push({ ordered: tag === 'ol', count: 0 });
@@ -156,10 +162,12 @@ export function htmlToMarkdown(html: string): string {
           liPrefix = `${indent}${cur?.ordered ? `${cur.count}. ` : '- '}`;
         }
         break;
-      case 'strong': case 'b':
+      case 'strong':
+      case 'b':
         inline += '**';
         break;
-      case 'em': case 'i':
+      case 'em':
+      case 'i':
         inline += '*';
         break;
       case 'a':
@@ -197,7 +205,8 @@ export function htmlToMarkdown(html: string): string {
         if (!closing) row = [];
         else if (rows) rows.push(row);
         break;
-      case 'td': case 'th':
+      case 'td':
+      case 'th':
         if (!closing) {
           inCell = true;
           inline = '';
@@ -239,7 +248,7 @@ function hideSecrets(text: string): string {
 interface MammothLike {
   convertToHtml(
     input: { buffer: Buffer },
-    options?: Record<string, unknown>,
+    options?: Record<string, unknown>
   ): Promise<{ value: string; messages: Array<{ type?: string; message?: string }> }>;
   images: { imgElement(fn: () => Promise<{ src: string }>): unknown };
 }
@@ -261,12 +270,12 @@ export async function docxToMarkdown(bytes: Uint8Array): Promise<{ text: string;
   try {
     const converted = mammoth.convertToHtml(
       { buffer: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength) },
-      { convertImage: mammoth.images.imgElement(async () => ({ src: '' })) },
+      { convertImage: mammoth.images.imgElement(async () => ({ src: '' })) }
     );
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(
         () => reject(new Error('Reading this Word file took too long. Split it into smaller files.')),
-        DOCX_TIMEOUT_MS,
+        DOCX_TIMEOUT_MS
       );
     });
     const result = await Promise.race([converted, timeout]);

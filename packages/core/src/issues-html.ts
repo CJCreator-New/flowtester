@@ -49,14 +49,19 @@ export async function renderIssuesHtml(
   const budget = { remaining: budgetBytes };
   const body: string[] = [`<h1>Issues</h1>`, `<h2>Roles not tested and why</h2>`];
   if (model.rolesNotTested.length === 0) body.push(`<p>All roles were tested.</p>`);
-  else body.push(`<ul>${model.rolesNotTested.map((r) => `<li><code>${t(r.role)}</code>: ${t(r.text)}</li>`).join('')}</ul>`);
+  else
+    body.push(
+      `<ul>${model.rolesNotTested.map((r) => `<li><code>${t(r.role)}</code>: ${t(r.text)}</li>`).join('')}</ul>`
+    );
   const documented = documentedItemsLine(model.documentedItems);
   if (documented) body.push(`<p>${escapeHtml(documented)}</p>`);
   const coverage = pageCoverageEntries(model.pageCoverage);
   if (coverage) {
     body.push(`<h2>Page coverage</h2>`, `<p>${escapeHtml(coverage.summary)}.</p>`);
     if (coverage.skipped.length > 0) {
-      body.push(`<ul>${coverage.skipped.map((s) => `<li><code>${t(s.urlPath)}</code>: ${escapeHtml(s.why)}</li>`).join('')}</ul>`);
+      body.push(
+        `<ul>${coverage.skipped.map((s) => `<li><code>${t(s.urlPath)}</code>: ${escapeHtml(s.why)}</li>`).join('')}</ul>`
+      );
     }
   }
 
@@ -83,7 +88,10 @@ export async function renderIssuesHtml(
 
   const judgementRoles = Object.keys(model.judgement).sort((a, b) => a.localeCompare(b));
   if (judgementRoles.length > 0) {
-    body.push(`<h2>Needs your judgement</h2>`, `<p>These are not counted in the release verdict until you accept them.</p>`);
+    body.push(
+      `<h2>Needs your judgement</h2>`,
+      `<p>These are not counted in the release verdict until you accept them.</p>`
+    );
     for (const role of judgementRoles) {
       body.push(`<h3>Role: ${t(role)}</h3>`);
       for (const i of model.judgement[role]) body.push(await renderIssue(i, reportDir, budget));

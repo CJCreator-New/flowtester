@@ -1,5 +1,11 @@
 /** Why a sign-in test failed. Browser-safe: the runner and the wizard both import this. */
-export const SIGN_IN_FAILURE_REASONS = ['wrong-details', 'no-form', 'unreachable', 'needs-more', 'session-expired'] as const;
+export const SIGN_IN_FAILURE_REASONS = [
+  'wrong-details',
+  'no-form',
+  'unreachable',
+  'needs-more',
+  'session-expired',
+] as const;
 
 export type SignInFailureReason = (typeof SIGN_IN_FAILURE_REASONS)[number];
 

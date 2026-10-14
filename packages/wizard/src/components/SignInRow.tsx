@@ -54,15 +54,11 @@ export function SignInRow({
         />
       </label>
       <details className="col-span-full space-y-3">
-        <summary className="cursor-pointer text-sm font-bold text-stamp hover:underline">
-          Advanced
-        </summary>
+        <summary className="cursor-pointer text-sm font-bold text-stamp hover:underline">Advanced</summary>
         <div className="grid gap-3 pt-2 sm:grid-cols-2">
           <label className="text-sm">
             <span className="mb-1 block font-bold">Sign-in page</span>
-            <span className="mb-1 block text-xs text-ink-soft">
-              Where the sign-in form is, for example /login
-            </span>
+            <span className="mb-1 block text-xs text-ink-soft">Where the sign-in form is, for example /login</span>
             <input
               className="field py-2 text-sm"
               value={value.loginPath}
@@ -100,11 +96,7 @@ export function SignInRow({
         </div>
       </details>
       {onRemove && (
-        <button
-          type="button"
-          className="btn-link justify-self-start text-sm"
-          onClick={onRemove}
-        >
+        <button type="button" className="btn-link justify-self-start text-sm" onClick={onRemove}>
           Remove this sign-in
         </button>
       )}

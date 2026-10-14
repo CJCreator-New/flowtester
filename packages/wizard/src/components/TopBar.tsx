@@ -42,8 +42,10 @@ export function TopBar({
   showDeveloperShortcuts?: boolean;
 }) {
   const current = (names: Route['name'][]) => (names.includes(route.name) ? 'page' : undefined);
-  const item = 'inline-flex min-h-[44px] items-center rounded-control px-2.5 text-sm font-bold transition-colors duration-150 hover:bg-panel hover:text-ink';
-  const tone = (active?: string) => (active ? 'bg-panel text-ink underline decoration-stamp decoration-2 underline-offset-8' : 'text-ink-soft');
+  const item =
+    'inline-flex min-h-[44px] items-center rounded-control px-2.5 text-sm font-bold transition-colors duration-150 hover:bg-panel hover:text-ink';
+  const tone = (active?: string) =>
+    active ? 'bg-panel text-ink underline decoration-stamp decoration-2 underline-offset-8' : 'text-ink-soft';
   return (
     <header className="sticky top-0 z-50 border-b border-rule/60 bg-surface/80 backdrop-blur-md supports-[backdrop-filter]:bg-surface/70">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-1 px-4 py-1 sm:px-6">

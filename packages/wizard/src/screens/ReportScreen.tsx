@@ -1007,7 +1007,13 @@ function Problems({
                     <h4 className="mb-1 font-bold text-ink">As {byRole.role}</h4>
                     <ul className="space-y-2">
                       {byRole.groups.map((group) => (
-                        <ProblemItem key={group.key} group={group} report={report} onTriage={triage} onAccept={accept} />
+                        <ProblemItem
+                          key={group.key}
+                          group={group}
+                          report={report}
+                          onTriage={triage}
+                          onAccept={accept}
+                        />
                       ))}
                     </ul>
                   </div>
@@ -1080,7 +1086,10 @@ function PageCoverageSection({ report }: { report: ReleaseReport }) {
 
   const skipped = coverage.skipped ?? [];
   return (
-    <section aria-labelledby="coverage-title" className="space-y-4 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm">
+    <section
+      aria-labelledby="coverage-title"
+      className="space-y-4 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
         <h2 id="coverage-title" className="text-xl font-bold">
           Crawl coverage
@@ -1122,7 +1131,10 @@ function RolesNotTestedSection({ report }: { report: ReleaseReport }) {
   if (roles.length === 0) return null;
 
   return (
-    <section aria-labelledby="roles-not-tested-title" className="space-y-3 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm">
+    <section
+      aria-labelledby="roles-not-tested-title"
+      className="space-y-3 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm"
+    >
       <h2 id="roles-not-tested-title" className="text-xl font-bold">
         Roles not tested, and why
         <span className="sr-only">Roles not tested and why</span>
@@ -1181,16 +1193,15 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
   };
 
   return (
-    <section aria-labelledby="sources-title" className="space-y-4 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm">
+    <section
+      aria-labelledby="sources-title"
+      className="space-y-4 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
         <h2 id="sources-title" className="text-xl font-bold">
           Living Spec Conformance
         </h2>
-        {line && (
-          <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">
-            {line}
-          </span>
-        )}
+        {line && <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">{line}</span>}
       </div>
 
       {notFound.length > 0 && (
@@ -1205,10 +1216,7 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
               const isEditing = activeOverride === reqId;
 
               return (
-                <div
-                  key={i}
-                  className="rounded-lg border border-rule/80 bg-surface p-4 text-sm transition-all"
-                >
+                <div key={i} className="rounded-lg border border-rule/80 bg-surface p-4 text-sm transition-all">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <div className="flex items-center gap-2">
@@ -1261,7 +1269,9 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-ink-soft mb-1">New Route / URL (optional)</label>
+                          <label className="block text-xs font-medium text-ink-soft mb-1">
+                            New Route / URL (optional)
+                          </label>
                           <input
                             type="text"
                             placeholder="/new-path"
@@ -1271,7 +1281,9 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-ink-soft mb-1">New CSS Selector (optional)</label>
+                          <label className="block text-xs font-medium text-ink-soft mb-1">
+                            New CSS Selector (optional)
+                          </label>
                           <input
                             type="text"
                             placeholder="button[data-testid='save']"
@@ -1291,9 +1303,7 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
                           className="w-full rounded border border-rule bg-surface px-2 py-1 text-xs text-ink"
                         />
                       </div>
-                      {overrideError && (
-                        <p className="text-xs text-danger">{overrideError}</p>
-                      )}
+                      {overrideError && <p className="text-xs text-danger">{overrideError}</p>}
                       <div className="flex items-center gap-2 justify-end pt-1">
                         <button
                           type="button"
@@ -1319,7 +1329,6 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
           </div>
         </div>
       )}
-
     </section>
   );
 }

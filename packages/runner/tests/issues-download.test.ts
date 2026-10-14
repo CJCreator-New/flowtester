@@ -73,7 +73,9 @@ describe('Issues files', () => {
       body: JSON.stringify({ titles: [finding.title] }),
     });
     expect(res.status, await res.clone().text()).toBe(200);
-    const report = (await res.json()) as { findings: Array<{ needsConfirmation?: boolean; judgementAccepted?: boolean }> };
+    const report = (await res.json()) as {
+      findings: Array<{ needsConfirmation?: boolean; judgementAccepted?: boolean }>;
+    };
     expect(report.findings[0].judgementAccepted).toBe(true);
     expect(report.findings[0].needsConfirmation).toBeUndefined();
     const md = await fs.readFile(path.join(outputDir, 'runs', runId, 'issues.md'), 'utf8');

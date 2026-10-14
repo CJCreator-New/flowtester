@@ -15,13 +15,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cleanDist = process.argv.includes('--dist') || process.argv.includes('--all');
 
-const PROTECTED = new Set([
-  '.env',
-  '.git',
-  '.github',
-  '.pipeline',
-  'node_modules',
-]);
+const PROTECTED = new Set(['.env', '.git', '.github', '.pipeline', 'node_modules']);
 
 const EPHEMERAL_DIRS = [
   '.scratch',

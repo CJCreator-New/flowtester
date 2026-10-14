@@ -67,14 +67,14 @@ export async function settlePage(
   const needLinks = options?.needLinks ?? false;
 
   // Race networkidle with the settle cap
-  await Promise.race([
-    page.waitForLoadState('networkidle').catch(() => {}),
-    page.waitForTimeout(settleMs),
-  ]);
+  await Promise.race([page.waitForLoadState('networkidle').catch(() => {}), page.waitForTimeout(settleMs)]);
 
   let linkCount = 0;
   try {
-    linkCount = await page.locator('a[href]').count().catch(() => 0);
+    linkCount = await page
+      .locator('a[href]')
+      .count()
+      .catch(() => 0);
   } catch {
     linkCount = 0;
   }
@@ -83,13 +83,22 @@ export async function settlePage(
     if (linkCount === 0) {
       // First wait for interactive or link element
       const candidates = page.locator('a[href], button, [role=link], [role=button]');
-      await candidates.first().waitFor({ state: 'visible', timeout: Math.min(settleMs, 2000) }).catch(() => {});
-      linkCount = await page.locator('a[href]').count().catch(() => 0);
+      await candidates
+        .first()
+        .waitFor({ state: 'visible', timeout: Math.min(settleMs, 2000) })
+        .catch(() => {});
+      linkCount = await page
+        .locator('a[href]')
+        .count()
+        .catch(() => 0);
 
       // Zero-link retry: if still zero links, wait once more up to settleMs for SPA hydration
       if (linkCount === 0) {
         await page.waitForTimeout(Math.min(settleMs, 2000));
-        linkCount = await page.locator('a[href]').count().catch(() => 0);
+        linkCount = await page
+          .locator('a[href]')
+          .count()
+          .catch(() => 0);
       }
     }
   }
@@ -118,7 +127,12 @@ export async function looksLikeLogin(page: Page, loginPaths?: string[]): Promise
     const pw = page.locator('input[type="password"]');
     const count = await pw.count();
     for (let i = 0; i < count; i++) {
-      if (await pw.nth(i).isVisible().catch(() => false)) {
+      if (
+        await pw
+          .nth(i)
+          .isVisible()
+          .catch(() => false)
+      ) {
         return true;
       }
     }
@@ -209,11 +223,7 @@ export async function navigate(page: Page, url: string, options?: NavigateOption
 /**
  * Maps a NavigateResult to RouteTelemetry, redacting paths and queries.
  */
-export function toTelemetry(
-  r: NavigateResult,
-  requestedPath: string,
-  extra?: Partial<RouteTelemetry>
-): RouteTelemetry {
+export function toTelemetry(r: NavigateResult, requestedPath: string, extra?: Partial<RouteTelemetry>): RouteTelemetry {
   let finalPath: string | undefined;
   try {
     const u = new URL(r.finalUrl);

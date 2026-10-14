@@ -25,11 +25,17 @@ class QuietAI {
 }
 
 const session = (domain: string) => ({
-  cookies: [{ name: 'sid', value: SENTINEL, domain, path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Lax' }],
+  cookies: [
+    { name: 'sid', value: SENTINEL, domain, path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Lax' },
+  ],
   origins: [],
 });
 const post = (route: string, body: unknown = {}) =>
-  fetch(`${runnerUrl}${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  fetch(`${runnerUrl}${route}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 
 async function waitForPhase(wanted: string[], seconds = 240): Promise<void> {
   for (let i = 0; i < seconds * 2; i++) {
@@ -74,7 +80,10 @@ describe('Saved sessions stay in memory', () => {
   });
 
   it('refuses a cookie for another site, and an oversize session, without echoing them', async () => {
-    const foreign = await post('/api/runner/run', { targetUrl: target, savedSessions: { member: session('evil.example.com') } });
+    const foreign = await post('/api/runner/run', {
+      targetUrl: target,
+      savedSessions: { member: session('evil.example.com') },
+    });
     expect(foreign.status).toBe(400);
     expect(await foreign.text()).not.toContain(SENTINEL);
     const huge = session('localhost');

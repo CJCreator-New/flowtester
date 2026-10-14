@@ -22,7 +22,9 @@ function money(n: number): string {
  */
 export function capLine(estimate: Pick<AiEstimate, 'low' | 'high' | 'estimatedUsd'>, cap?: RunCap): string {
   const about = Math.round((estimate.low + estimate.high) / 2);
-  const parts: string[] = [cap?.requests ? `About ${about} requests of your ${cap.requests} cap` : `About ${about} requests`];
+  const parts: string[] = [
+    cap?.requests ? `About ${about} requests of your ${cap.requests} cap` : `About ${about} requests`,
+  ];
   if (estimate.estimatedUsd != null && Number.isFinite(estimate.estimatedUsd)) {
     parts.push(
       cap?.dollars

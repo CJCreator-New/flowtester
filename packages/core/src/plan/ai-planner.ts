@@ -948,8 +948,7 @@ export async function planBatch(
         return problems;
       };
       const paths = batch.map((p) => p.urlPath);
-      const what =
-        paths.length > 2 ? `${paths.slice(0, 2).join(', ')} and ${paths.length - 2} more` : paths.join(', ');
+      const what = paths.length > 2 ? `${paths.slice(0, 2).join(', ')} and ${paths.length - 2} more` : paths.join(', ');
       readAll(
         await askWithOneRepair(ai, pagesPrompt(input, facts), {
           redact: input.redact,
@@ -1163,10 +1162,14 @@ export async function assemblePlan(
     } else {
       // Documents with User Flows, route rows or Negative specs are mapped by the spec rules (spec-plan.ts).
       if (!requirements.some((r) => r.kind && ['journey', 'route', 'negative'].includes(r.kind)))
-        notes.push('The documents could not be matched to the app because fixed rules planned some pages, so nothing is listed as not found.');
+        notes.push(
+          'The documents could not be matched to the app because fixed rules planned some pages, so nothing is listed as not found.'
+        );
     }
     if (bound.failed)
-      notes.push('The AI could not work out which roles the documents are for, so every role is allowed and no Denial items were added.');
+      notes.push(
+        'The AI could not work out which roles the documents are for, so every role is allowed and no Denial items were added.'
+      );
   }
 
   const items = [...pages.filter((p) => p.coverage !== 'covered'), ...navigation];

@@ -29,13 +29,7 @@ export class RunnerError extends Error {
   suggestion?: string;
   needsSignIn?: string[];
   needsHeaders?: string[];
-  constructor(
-    message: string,
-    code?: string,
-    suggestion?: string,
-    needsSignIn?: string[],
-    needsHeaders?: string[]
-  ) {
+  constructor(message: string, code?: string, suggestion?: string, needsSignIn?: string[], needsHeaders?: string[]) {
     super(message);
     this.name = 'RunnerError';
     this.code = code;

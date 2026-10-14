@@ -27,7 +27,13 @@ export interface SpecCrawl {
   who: string;
   result: {
     pages: PageInventoryItem[];
-    forms?: Array<{ urlPath: string; method?: string; submitButtonSelector?: string; inputs: PlannerForm['inputs']; opening?: PlannerForm['opening'] }>;
+    forms?: Array<{
+      urlPath: string;
+      method?: string;
+      submitButtonSelector?: string;
+      inputs: PlannerForm['inputs'];
+      opening?: PlannerForm['opening'];
+    }>;
   };
 }
 
@@ -85,7 +91,8 @@ const cleanRoute = (r: string): string => {
 /** `/route` tokens in a text, in order, without the ones after "redirect to" or "land on". */
 function routesIn(text: string, dropDestinations = false): string[] {
   let scan = text.replace(/\([^)]*\)/g, ' ');
-  if (dropDestinations) scan = scan.replace(/\b(?:redirect(?:s|ed)?|goes?|sent|land(?:s|ed)?|back)\s+(?:to|on)\s+`?\/[\w\-./]*`?/gi, ' ');
+  if (dropDestinations)
+    scan = scan.replace(/\b(?:redirect(?:s|ed)?|goes?|sent|land(?:s|ed)?|back)\s+(?:to|on)\s+`?\/[\w\-./]*`?/gi, ' ');
   const out: string[] = [];
   for (const m of scan.matchAll(ROUTE_TOKEN)) {
     const route = cleanRoute(m[1]);
@@ -155,7 +162,8 @@ export function planFromSpec(input: PlanFromSpecInput): PlanFromSpecOutput {
     if (h.kind !== 'negative') continue;
     const role = roleFor(h.persona);
     if (!role) continue;
-    for (const clause of h.rules) if (NEGATION.test(clause)) for (const r of routesIn(clause, true)) negativeKeys.add(`${role}|${r}`);
+    for (const clause of h.rules)
+      if (NEGATION.test(clause)) for (const r of routesIn(clause, true)) negativeKeys.add(`${role}|${r}`);
   }
 
   const denialDone = new Set<string>();
@@ -224,7 +232,8 @@ export function planFromSpec(input: PlanFromSpecInput): PlanFromSpecOutput {
     if (h.kind === 'route') {
       const route = cleanRoute(h.route ?? '');
       if (!h.route || !route.startsWith('/') || DYNAMIC_OR_API.test(route)) {
-        if (h.route && !/^\/api(\/|$)/.test(route)) note(`Skipped the route “${h.route}”: it has a parameter or a wildcard.`);
+        if (h.route && !/^\/api(\/|$)/.test(route))
+          note(`Skipped the route “${h.route}”: it has a parameter or a wildcard.`);
         continue;
       }
       if (seenRoutes.has(route)) {
@@ -240,8 +249,14 @@ export function planFromSpec(input: PlanFromSpecInput): PlanFromSpecOutput {
       for (const role of allowed) addReach(h, role, route);
       if (unresolved.length > 0) {
         const where = docSourceOf(h);
-        note(`Roles “${unresolved.join(', ')}” for ${route} were not matched to a role of this Check-up, so no Denial Plan Items were made for it.`);
-        looseJudgement('Any role', where, `Who may open ${route} is unclear: “${h.rolesText}” (${describeWhere(where)})`);
+        note(
+          `Roles “${unresolved.join(', ')}” for ${route} were not matched to a role of this Check-up, so no Denial Plan Items were made for it.`
+        );
+        looseJudgement(
+          'Any role',
+          where,
+          `Who may open ${route} is unclear: “${h.rolesText}” (${describeWhere(where)})`
+        );
       } else {
         // Every named role matched: the others are not allowed.
         for (const role of configured) {
@@ -259,7 +274,9 @@ export function planFromSpec(input: PlanFromSpecInput): PlanFromSpecOutput {
       const role = roleFor(h.persona);
       const where = docSourceOf(h);
       if (!role) {
-        note(`No role of this Check-up is named “${personaName(h.persona ?? '') || 'unknown'}”, so its negative specs were not turned into Plan Items.`);
+        note(
+          `No role of this Check-up is named “${personaName(h.persona ?? '') || 'unknown'}”, so its negative specs were not turned into Plan Items.`
+        );
         for (const clause of h.rules) looseJudgement('Any role', where, `${clause} (${describeWhere(where)})`);
         continue;
       }
@@ -300,7 +317,12 @@ export function planFromSpec(input: PlanFromSpecInput): PlanFromSpecOutput {
       if (/^(✅|✔️?|yes|all)$/i.test(cell)) continue;
       if (/❌|✗|✖|^(no|n\/a|—|-)$/i.test(cell))
         looseJudgement(role, where, `${h.name}: not allowed per ${describeWhere(where)}`);
-      else if (cell) looseJudgement(role, where, `${h.name}: limited to “${cell.replace(/✅/g, '').trim() || cell}” per ${describeWhere(where)}`);
+      else if (cell)
+        looseJudgement(
+          role,
+          where,
+          `${h.name}: limited to “${cell.replace(/✅/g, '').trim() || cell}” per ${describeWhere(where)}`
+        );
     }
   }
 
@@ -350,16 +372,25 @@ export function planFromSpec(input: PlanFromSpecInput): PlanFromSpecOutput {
     const pages = pagesBy.get(role) ?? [];
     let current: string | null = null;
     let missed = 0;
-    const segments = (h.steps ?? []).flatMap((s) => s.split('→')).map((s) => s.replace(/^\s*\d+[.)]\s*/, '').trim()).filter(Boolean);
+    const segments = (h.steps ?? [])
+      .flatMap((s) => s.split('→'))
+      .map((s) => s.replace(/^\s*\d+[.)]\s*/, '').trim())
+      .filter(Boolean);
     for (const segment of segments) {
       const step = stepFor(segment);
       if (step.kind === 'step') {
-        if (step.before && current !== step.before) flow.steps.push({ action: 'navigate', value: step.before, name: `Open ${step.before}` });
+        if (step.before && current !== step.before)
+          flow.steps.push({ action: 'navigate', value: step.before, name: `Open ${step.before}` });
         flow.steps.push(step.step);
         current = step.step.action === 'navigate' ? (step.step.value ?? null) : null;
       } else {
         missed++;
-        addJudgement(role, where, step.kind === 'safety' ? `Left out by the Safety Filter: ${segment}` : `Step not run: ${segment}`, flow);
+        addJudgement(
+          role,
+          where,
+          step.kind === 'safety' ? `Left out by the Safety Filter: ${segment}` : `Step not run: ${segment}`,
+          flow
+        );
       }
     }
     flow.startPage =
@@ -378,7 +409,10 @@ export function planFromSpec(input: PlanFromSpecInput): PlanFromSpecOutput {
 
     // Assertions: only forms a rule can check become expectations; the rest is for a person.
     const expect: TestCaseExpectations = {};
-    for (const raw of (h.assert ?? []).flatMap((a) => a.split(';')).map((a) => a.trim()).filter(Boolean)) {
+    for (const raw of (h.assert ?? [])
+      .flatMap((a) => a.split(';'))
+      .map((a) => a.trim())
+      .filter(Boolean)) {
       const land = /\b(?:land(?:s|ed)?\s+on|redirect(?:s|ed)?\s+to)\s+`?(\/[\w\-./]*)`?/i.exec(raw);
       const status = /\b(?:status|label)\s+["“]([^"”]+)["”]/i.exec(raw);
       if (land && !expect.url && !DYNAMIC_OR_API.test(cleanRoute(land[1]))) {
@@ -409,7 +443,11 @@ export function planFromSpec(input: PlanFromSpecInput): PlanFromSpecOutput {
         .filter((q) => q && !q.startsWith('/'));
       const words = normaliseRoleText(segment);
       let best: { el: ElementInventoryItem; page: string; score: number } | undefined;
-      const ordered = current ? [...pages].sort((a, b) => Number(cleanRoute(b.urlPath) === current) - Number(cleanRoute(a.urlPath) === current)) : pages;
+      const ordered = current
+        ? [...pages].sort(
+            (a, b) => Number(cleanRoute(b.urlPath) === current) - Number(cleanRoute(a.urlPath) === current)
+          )
+        : pages;
       for (const page of ordered) {
         for (const el of page.elements ?? []) {
           if (!el.visible || NOT_CLICKABLE.has(el.role)) continue;
@@ -419,15 +457,21 @@ export function planFromSpec(input: PlanFromSpecInput): PlanFromSpecOutput {
             quoted.length > 0
               ? quoted.some((q) => q === name || (q.length >= 3 && (containsWords(name, q) || containsWords(q, name))))
               : name.length >= 3 && containsWords(words, name);
-          if (hit && (!best || name.length > best.score)) best = { el, page: cleanRoute(page.urlPath), score: name.length };
+          if (hit && (!best || name.length > best.score))
+            best = { el, page: cleanRoute(page.urlPath), score: name.length };
         }
       }
       if (best) {
-        if (safety.isSensitive(best.el.name, best.el.selector) || FINAL_ACTION.test(best.el.name)) return { kind: 'safety' };
+        if (safety.isSensitive(best.el.name, best.el.selector) || FINAL_ACTION.test(best.el.name))
+          return { kind: 'safety' };
         return {
           kind: 'step',
           step: { action: 'click', selector: best.el.selector, name: `Click “${best.el.name}”` },
-          ...(current !== null && best.page !== current ? { before: best.page } : current === null && flow.steps.length === 0 ? { before: best.page } : {}),
+          ...(current !== null && best.page !== current
+            ? { before: best.page }
+            : current === null && flow.steps.length === 0
+              ? { before: best.page }
+              : {}),
         };
       }
       // Nothing to click, and the words themselves name something the filter blocks.

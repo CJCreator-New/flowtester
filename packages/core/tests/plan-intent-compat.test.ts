@@ -5,7 +5,14 @@ import path from 'path';
 import { normalizePlanIntents, intentOf } from '@qa/types';
 import { loadSiteMemory } from '../src/site-memory.js';
 
-const legacyTest = { id: 'x:denial:Viewer', name: 'Viewer cannot: create', role: 'Viewer', kind: 'denial', steps: [], source: 'fallback' };
+const legacyTest = {
+  id: 'x:denial:Viewer',
+  name: 'Viewer cannot: create',
+  role: 'Viewer',
+  kind: 'denial',
+  steps: [],
+  source: 'fallback',
+};
 
 describe('saved plans written before Intent', () => {
   it('a saved Waiting Plan with kind:denial loads with intent:denied', () => {

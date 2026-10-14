@@ -12,8 +12,8 @@ updates:
         update-types: [minor, patch]
       playwright:
         patterns:
-          - "playwright*"
-          - "@axe-core/playwright"
+          - 'playwright*'
+          - '@axe-core/playwright'
   - package-ecosystem: github-actions
     directory: /
     schedule:

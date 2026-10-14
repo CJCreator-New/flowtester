@@ -377,9 +377,7 @@ export class FlowTestOrchestrator {
     let preflight: PreFlightResult;
     const neededRoles = options.profile?.roles || [];
     const hasPreflight = !!options.preflight;
-    const allRolesPresent =
-      hasPreflight &&
-      neededRoles.every((r) => options.preflight?.roleStorageStates?.[r.role]);
+    const allRolesPresent = hasPreflight && neededRoles.every((r) => options.preflight?.roleStorageStates?.[r.role]);
 
     if (hasPreflight && allRolesPresent) {
       // Validate with a cheap check per role
@@ -468,19 +466,14 @@ export class FlowTestOrchestrator {
         };
       }
     } else {
-      preflight = await this.preflightChecker.runPreFlight(
-        options.targetUrl,
-        options.profile,
-        options.tunnelAuth,
-        {
-          browserManager: this.browserManager,
-          authDir,
-          suppliedSessions: options.suppliedSessions,
-          customHeaders: options.customHeaders,
-          userAgent: options.userAgent,
-          headerHosts: options.headerHosts,
-        }
-      );
+      preflight = await this.preflightChecker.runPreFlight(options.targetUrl, options.profile, options.tunnelAuth, {
+        browserManager: this.browserManager,
+        authDir,
+        suppliedSessions: options.suppliedSessions,
+        customHeaders: options.customHeaders,
+        userAgent: options.userAgent,
+        headerHosts: options.headerHosts,
+      });
     }
 
     if (!preflight.ok) {
@@ -1253,7 +1246,9 @@ export class FlowTestOrchestrator {
             ...designFindings,
             ...a11yDepth,
           ]
-            .filter((f) => !(sentData || openingFailed) || (f.checker !== 'spec-conformance' && !f.id.startsWith('F-STEP-')))
+            .filter(
+              (f) => !(sentData || openingFailed) || (f.checker !== 'spec-conformance' && !f.id.startsWith('F-STEP-'))
+            )
             .map((f) => withSourceWording(f, testCase));
 
           // Enrich findings with Source Code Locator and Repro Script
@@ -1282,10 +1277,10 @@ export class FlowTestOrchestrator {
             : openingFailed
               ? 'Could not verify'
               : hasRealFinding || (hasStepFailure && !hasGuessedFailure)
-              ? 'Failed'
-              : keptFindings.length > 0
-                ? 'Could not verify'
-                : 'Passed';
+                ? 'Failed'
+                : keptFindings.length > 0
+                  ? 'Could not verify'
+                  : 'Passed';
 
           pointResult = {
             testCaseId: testCase.id,
@@ -1493,9 +1488,8 @@ export class FlowTestOrchestrator {
     const documentedItems =
       documented.length + notFoundDocs.length > 0
         ? {
-            reached: documented.filter((tc) =>
-              results.some((r) => r.testCaseId === tc.id && r.status !== 'Skipped')
-            ).length,
+            reached: documented.filter((tc) => results.some((r) => r.testCaseId === tc.id && r.status !== 'Skipped'))
+              .length,
             total: documented.length + notFoundDocs.length,
             notFound: notFoundDocs,
           }

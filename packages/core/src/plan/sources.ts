@@ -1,4 +1,11 @@
-import { intentOf, type DocSource, type PlanNotFound, type PlanPage, type PlanPageTest, type SpecGapCode } from '@qa/types';
+import {
+  intentOf,
+  type DocSource,
+  type PlanNotFound,
+  type PlanPage,
+  type PlanPageTest,
+  type SpecGapCode,
+} from '@qa/types';
 import type { ParsedRequirementHint } from '../discovery/context-parser.js';
 import { SafetyFilter } from '../discovery/safety-filter.js';
 
@@ -161,8 +168,13 @@ export function specGapCodeFor(req: ParsedRequirementHint, pages: PlanPage[]): S
     if (pageExists) return 'SPEC_GAP_NO_ELEMENT';
     return 'SPEC_GAP_NO_PAGE';
   }
-  const words = req.name.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
-  const pageMatches = pages.some((p) => words.some((w) => p.urlPath.toLowerCase().includes(w) || p.title.toLowerCase().includes(w)));
+  const words = req.name
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 3);
+  const pageMatches = pages.some((p) =>
+    words.some((w) => p.urlPath.toLowerCase().includes(w) || p.title.toLowerCase().includes(w))
+  );
   if (pageMatches) return 'SPEC_GAP_NO_ELEMENT';
   return 'SPEC_GAP_NO_PAGE';
 }

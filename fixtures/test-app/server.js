@@ -243,7 +243,10 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (url.pathname === '/lab/expiring' || (url.pathname.startsWith('/lab/expiring/') && url.pathname !== '/lab/expiring/start')) {
+  if (
+    url.pathname === '/lab/expiring' ||
+    (url.pathname.startsWith('/lab/expiring/') && url.pathname !== '/lab/expiring/start')
+  ) {
     if (!session || sessionsInvalidated || labExpiringState.invalidated) {
       res.writeHead(302, { Location: '/signin' });
       res.end();
@@ -256,7 +259,10 @@ const server = http.createServer((req, res) => {
       res.end();
       return;
     }
-    html('Expiring Protected Page', `<h1>Protected Area</h1><p>Request ${labExpiringState.currentRequests} of ${labExpiringState.maxRequests}</p>`);
+    html(
+      'Expiring Protected Page',
+      `<h1>Protected Area</h1><p>Request ${labExpiringState.currentRequests} of ${labExpiringState.maxRequests}</p>`
+    );
     return;
   }
 
@@ -273,7 +279,10 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname.startsWith('/lab/trap/')) {
     const n = parseInt(url.pathname.replace('/lab/trap/', ''), 10) || 0;
-    html(`Trap Page ${n}`, `<h1>Trap Page ${n}</h1><p>Infinite trap chain</p><a href="/lab/trap/${n + 1}">Next trap</a>`);
+    html(
+      `Trap Page ${n}`,
+      `<h1>Trap Page ${n}</h1><p>Infinite trap chain</p><a href="/lab/trap/${n + 1}">Next trap</a>`
+    );
     return;
   }
 
@@ -288,7 +297,10 @@ const server = http.createServer((req, res) => {
     const nextY = m === 12 ? y + 1 : y;
     const prevStr = `${prevY}-${String(prevM).padStart(2, '0')}`;
     const nextStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
-    html(`Calendar ${month}`, `<h1>Calendar ${month}</h1><p>Monthly calendar view</p><a href="/lab/calendar?month=${prevStr}">Previous Month</a> <a href="/lab/calendar?month=${nextStr}">Next Month</a>`);
+    html(
+      `Calendar ${month}`,
+      `<h1>Calendar ${month}</h1><p>Monthly calendar view</p><a href="/lab/calendar?month=${prevStr}">Previous Month</a> <a href="/lab/calendar?month=${nextStr}">Next Month</a>`
+    );
     return;
   }
 
@@ -366,13 +378,17 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/lab/always-500') {
     res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Internal Server Error</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body><h1>Server Error 500</h1></body></html>');
+    res.end(
+      '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Internal Server Error</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body><h1>Server Error 500</h1></body></html>'
+    );
     return;
   }
 
   if (url.pathname === '/lab/forbidden') {
     res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Forbidden</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body><h1>Forbidden 403</h1></body></html>');
+    res.end(
+      '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Forbidden</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.ico"></head><body><h1>Forbidden 403</h1></body></html>'
+    );
     return;
   }
 
@@ -598,7 +614,10 @@ const server = http.createServer((req, res) => {
       if (req.method === 'POST') {
         return drain((f) => {
           if (!f.get('name') || !emailOk(f.get('email')) || !/^[A-Z]{3}-\d{3}$/.test(f.get('code') || '')) {
-            return labPage('Sign up', signupForm(server, '<p role="alert">Enter a name, a valid email and a code like ABC-123.</p>'));
+            return labPage(
+              'Sign up',
+              signupForm(server, '<p role="alert">Enter a name, a valid email and a code like ABC-123.</p>')
+            );
           }
           res.writeHead(302, { Location: '/lab/done' });
           res.end();
@@ -622,7 +641,9 @@ const server = http.createServer((req, res) => {
     }
 
     if (labPath === '/lab/toast') {
-      const form = (note) => `${note}<form method="post" action="/lab/toast" novalidate><label for="t-email">Email</label>
+      const form = (
+        note
+      ) => `${note}<form method="post" action="/lab/toast" novalidate><label for="t-email">Email</label>
         <input id="t-email" name="email"><button type="submit">Save</button></form>`;
       if (req.method === 'POST') {
         return drain((f) =>

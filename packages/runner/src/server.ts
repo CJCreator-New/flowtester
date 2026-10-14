@@ -148,7 +148,19 @@ import {
   type BetaLimits,
 } from './beta.js';
 import { testCopyFor } from './host-policy.js';
-import { checkAiCap, checkContextDocuments, checkContextUrl, checkIntentsOff, checkSavedSessions, checkTestCap, checkCrawlConcurrency, checkCrawlDelayMs, checkCustomHeaders, checkRoles, checkLoginPath } from './run-inputs.js';
+import {
+  checkAiCap,
+  checkContextDocuments,
+  checkContextUrl,
+  checkIntentsOff,
+  checkSavedSessions,
+  checkTestCap,
+  checkCrawlConcurrency,
+  checkCrawlDelayMs,
+  checkCustomHeaders,
+  checkRoles,
+  checkLoginPath,
+} from './run-inputs.js';
 
 function isInside(dir: string, file: string): boolean {
   const rel = path.relative(dir, file);
@@ -519,7 +531,10 @@ function normalizeStoredPlan(record: StoredPlanRecord): StoredPlanRecord {
     context: {
       ...record.context,
       draft: draftPlan
-        ? { ...record.context.draft, plan: { ...draftPlan, pages: draftPlan.pages.map((p) => ({ ...p, tests: normalizeTestIntents(p.tests) })) } }
+        ? {
+            ...record.context.draft,
+            plan: { ...draftPlan, pages: draftPlan.pages.map((p) => ({ ...p, tests: normalizeTestIntents(p.tests) })) },
+          }
         : record.context.draft,
     },
   };
@@ -661,11 +676,7 @@ export function resolveReadOnly(input: {
   signInConsent?: unknown;
   roles?: Array<{ username?: string; password?: string }>;
 }): { readOnly: boolean; consent: boolean } {
-  const consent =
-    !input.beta &&
-    input.ownerExplicit &&
-    input.signInConsent === true &&
-    hasCompleteSignIn(input.roles);
+  const consent = !input.beta && input.ownerExplicit && input.signInConsent === true && hasCompleteSignIn(input.roles);
   return { consent, readOnly: !(input.owner && (input.testHost || consent)) };
 }
 
@@ -2429,10 +2440,7 @@ export class RunnerServer {
           `[Release check-up] Moved ${name} into ${path.relative(process.cwd(), this.dataDir) || this.dataDir}`
         );
       } catch (err) {
-        console.warn(
-          `[Release check-up] Couldn’t move ${name} into the data folder:`,
-          this.redactedMessage(err)
-        );
+        console.warn(`[Release check-up] Couldn’t move ${name} into the data folder:`, this.redactedMessage(err));
       }
     }
   }
@@ -3254,7 +3262,9 @@ export class RunnerServer {
       const sessionRoles = Object.keys(this.savedSessions.get(runId) ?? {});
       const allRoles: RoleCredential[] = [
         ...(signIns.roles ?? []),
-        ...sessionRoles.filter((r) => !signIns.roles?.some((x) => x.role === r)).map((r) => ({ role: r, username: '' })),
+        ...sessionRoles
+          .filter((r) => !signIns.roles?.some((x) => x.role === r))
+          .map((r) => ({ role: r, username: '' })),
       ];
       const profile: ProductProfile | undefined = allRoles.length
         ? { name: productId, productId, roles: allRoles }
@@ -3373,7 +3383,9 @@ export class RunnerServer {
               `No pages could be read from the docs address${fetched.skipped[0] ? ` (${fetched.skipped[0].why})` : ''}.`
             );
           } else if (fetched.skipped.length > 0) {
-            docsNotes.push(`${fetched.skipped.length} docs page(s) were left out (for example: ${fetched.skipped[0].why}).`);
+            docsNotes.push(
+              `${fetched.skipped.length} docs page(s) were left out (for example: ${fetched.skipped[0].why}).`
+            );
           }
         }
       }
@@ -4418,7 +4430,12 @@ export class RunnerServer {
     await this.savePlan(record);
     // Only switches, answers and sizes changed: the answer is what changed, not the whole plan.
     const small =
-      body.intentsOff === undefined && !body.flows && !body.testCases && body.productContext === undefined && body.designNotes === undefined && !notFoundChanged;
+      body.intentsOff === undefined &&
+      !body.flows &&
+      !body.testCases &&
+      body.productContext === undefined &&
+      body.designNotes === undefined &&
+      !notFoundChanged;
     this.sendJson(res, 200, small ? planDelta(record.plan, touched) : planForClient(record.plan));
   }
 
@@ -4515,7 +4532,9 @@ export class RunnerServer {
     this.planUpdate = (async () => {
       try {
         const provider = await this.aiFor(record.context);
-        const budget = provider ? await this.aiBudgetFor(record.context.ai, undefined, record.context.aiCap) : undefined;
+        const budget = provider
+          ? await this.aiBudgetFor(record.context.ai, undefined, record.context.aiCap)
+          : undefined;
         const paced = provider
           ? new PacedAI(provider, budget?.left ?? Infinity, { model: record.context.ai?.model, ...budget?.pacing })
           : undefined;

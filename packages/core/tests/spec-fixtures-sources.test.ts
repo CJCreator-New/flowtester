@@ -12,7 +12,17 @@ const docs = readdirSync(dir)
   .sort()
   .map((f) => ({ name: f, text: readFileSync(path.join(dir, f), 'utf8') }));
 const ROLES = ['Employee', 'Team Lead', 'Manager', 'HR/Admin', 'Alumni'];
-const routes = ['/home', '/mark', '/report', '/my-payslips', '/payroll-runs', '/profile', '/employees', '/requests', '/approvals'];
+const routes = [
+  '/home',
+  '/mark',
+  '/report',
+  '/my-payslips',
+  '/payroll-runs',
+  '/profile',
+  '/employees',
+  '/requests',
+  '/approvals',
+];
 const pages = routes.map((r) => page(r, [el('Save', `#save-${r.slice(1)}`)]));
 
 describe('checkindaily fixtures, no AI', () => {

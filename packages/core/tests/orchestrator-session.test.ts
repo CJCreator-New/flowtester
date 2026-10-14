@@ -152,10 +152,7 @@ describe('Orchestrator session awareness (T-114)', () => {
       const report = await orchestrator.run({
         targetUrl: fixtureUrl,
         productId: 'fixture-app',
-        specTestCases: [
-          testFor('TC-NOREL-1', '/lab/expiring'),
-          testFor('TC-NOREL-2', '/lab/expiring'),
-        ],
+        specTestCases: [testFor('TC-NOREL-1', '/lab/expiring'), testFor('TC-NOREL-2', '/lab/expiring')],
         profile: testProfile,
         authDir,
         outputDir: path.join(outputDir, 'run-no-relogin'),
@@ -188,10 +185,7 @@ describe('Orchestrator session awareness (T-114)', () => {
         orchestrator.run({
           targetUrl: fixtureUrl,
           productId: 'fixture-app',
-          specTestCases: [
-            testFor('TC-REQ-1', '/lab/expiring'),
-            testFor('TC-REQ-2', '/lab/expiring'),
-          ],
+          specTestCases: [testFor('TC-REQ-1', '/lab/expiring'), testFor('TC-REQ-2', '/lab/expiring')],
           profile: testProfile,
           authDir,
           outputDir: path.join(outputDir, 'run-require-sign-in'),

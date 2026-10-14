@@ -34,16 +34,16 @@ Critical/high first (all 13 are ticketed; their fixes land by Wave 6 - G-012 and
 
 ## Key design decisions and trade-offs
 
-| Decision | Why | Trade-off |
-|---|---|---|
-| `navigate()` helper in core, used by all three call sites | Fixes are made once; telemetry is uniform | One more module; small behaviour changes in every goto (timeouts, one retry) |
-| Headers added with a target-origin `context.route`, not `extraHTTPHeaders` | Stops token leakage to third parties (G-016) | Slightly more overhead per request; needs allowlist hosts for API subdomains |
-| Run preflight once, hand `roleStorageStates` to the run | Avoids double login and mismatched sessions (G-014) | The saved state can be old by the time the run starts, so the run revalidates on first navigation (G-008) |
-| `failedStep` is a non-secret enum, never page or typed text | Keeps the existing redaction guarantee | Less detail than raw error text |
-| Count recorded pages against `maxPages`, cap attempts separately | Dead links no longer exhaust the crawl (G-009) | A crawl of a very broken site can make more requests; bounded by the attempt cap and wall-clock budget |
-| Hash and query routes opt in via a route-key option | Avoids exploding the page count on filter/sort links | Default behaviour for query routes changes only for listed parameters |
-| Session loss re-logins once, then reports | Prevents silent signed-out runs | One extra login per role on expiry |
-| Server work split into two tickets across waves | `server.ts` is 5116 lines and shared | Longer critical path |
+| Decision                                                                   | Why                                                  | Trade-off                                                                                                 |
+| -------------------------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `navigate()` helper in core, used by all three call sites                  | Fixes are made once; telemetry is uniform            | One more module; small behaviour changes in every goto (timeouts, one retry)                              |
+| Headers added with a target-origin `context.route`, not `extraHTTPHeaders` | Stops token leakage to third parties (G-016)         | Slightly more overhead per request; needs allowlist hosts for API subdomains                              |
+| Run preflight once, hand `roleStorageStates` to the run                    | Avoids double login and mismatched sessions (G-014)  | The saved state can be old by the time the run starts, so the run revalidates on first navigation (G-008) |
+| `failedStep` is a non-secret enum, never page or typed text                | Keeps the existing redaction guarantee               | Less detail than raw error text                                                                           |
+| Count recorded pages against `maxPages`, cap attempts separately           | Dead links no longer exhaust the crawl (G-009)       | A crawl of a very broken site can make more requests; bounded by the attempt cap and wall-clock budget    |
+| Hash and query routes opt in via a route-key option                        | Avoids exploding the page count on filter/sort links | Default behaviour for query routes changes only for listed parameters                                     |
+| Session loss re-logins once, then reports                                  | Prevents silent signed-out runs                      | One extra login per role on expiry                                                                        |
+| Server work split into two tickets across waves                            | `server.ts` is 5116 lines and shared                 | Longer critical path                                                                                      |
 
 ## Milestones
 
@@ -54,22 +54,23 @@ Critical/high first (all 13 are ticketed; their fixes land by Wave 6 - G-012 and
 
 ## Risks and mitigations
 
-| Risk | Mitigation |
-|---|---|
-| Playwright version change (T-106) breaks tests | Land first; run the full suite; only pin, no upgrade past the Docker image version |
-| Existing tests assert old reasons / behaviours | Each core ticket owns the tests for its file and updates them |
-| Header scoping breaks sites that need headers on subdomains | Allowlist hosts; documented in T-119; covered by T-103 tests |
-| More waiting slows crawls | Bounded caps; telemetry shows time per route; `QA_DEBUG=crawl` |
-| Re-login locks an account | Opt-out env var; re-login at most once per role per run |
-| `server.ts` merge conflicts | One owner per wave (T-115 then T-116, dependent) |
-| T-110, T-111 and T-115 are large (L) | If a session cannot finish one, split along its numbered scope items; the interface contracts stay the same |
-| Hidden dependence on `domcontentloaded` timing in existing flows | `navigate()` keeps `domcontentloaded` as the first signal; extra waits are bounded |
+| Risk                                                             | Mitigation                                                                                                  |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Playwright version change (T-106) breaks tests                   | Land first; run the full suite; only pin, no upgrade past the Docker image version                          |
+| Existing tests assert old reasons / behaviours                   | Each core ticket owns the tests for its file and updates them                                               |
+| Header scoping breaks sites that need headers on subdomains      | Allowlist hosts; documented in T-119; covered by T-103 tests                                                |
+| More waiting slows crawls                                        | Bounded caps; telemetry shows time per route; `QA_DEBUG=crawl`                                              |
+| Re-login locks an account                                        | Opt-out env var; re-login at most once per role per run                                                     |
+| `server.ts` merge conflicts                                      | One owner per wave (T-115 then T-116, dependent)                                                            |
+| T-110, T-111 and T-115 are large (L)                             | If a session cannot finish one, split along its numbered scope items; the interface contracts stay the same |
+| Hidden dependence on `domcontentloaded` timing in existing flows | `navigate()` keeps `domcontentloaded` as the first signal; extra waits are bounded                          |
 
 ## Dispositions (every gap)
 
 **Ticketed:** G-001 T-107/T-110 · G-002 T-110 · G-003 T-101/T-105/T-110 · G-004 T-103/T-110/T-113/T-114/T-115 · G-005 T-107/T-111 · G-006 T-101/T-105/T-111/T-113 · G-007 T-107/T-111/T-113 · G-008 T-107/T-114 · G-009 T-107/T-111 · G-010 T-112/T-113 · G-011 T-114 · G-012 T-102/T-117 · G-013 T-108/T-116 · G-014 T-113/T-114/T-115 · G-015 T-111 · G-016 T-103 · G-017 T-108/T-116 · G-018 T-101/T-104/T-105/T-108 · G-019 T-109 · G-020 T-112 · G-021 T-111 · G-022 T-104/T-110/T-115 · G-023 T-104/T-110 · G-024 T-116 · G-025 T-106/T-118 · G-026 T-106/T-118 · G-027 T-110/T-111/T-117 · G-028 T-102/T-117 · G-029 T-118 · G-030 T-107 · G-031 T-112 · G-032 T-119 · G-033 T-108 · G-036 T-115 · G-037 T-110 · G-038 T-111 · G-039 T-103 · G-040 T-111 · G-047 T-106 · G-048 T-116 · G-049 T-101 · G-053 T-109.
 
 **Deferred (with reason):**
+
 - G-034 releaseVerdict default: outside the auth/crawl goal; needs a product decision on gate semantics.
 - G-035 per-test-point context and video cost: performance, not reliability; separate effort.
 - G-041 AccountPoolManager dead code: no runtime effect; decide wire-or-delete with parallel-run work.
@@ -82,4 +83,5 @@ Critical/high first (all 13 are ticketed; their fixes land by Wave 6 - G-012 and
 - G-052 storageState refresh during a run: needs the session manager; revisit after session-loss handling ships.
 
 **Accepted risk:**
+
 - G-042 `--no-sandbox` and `ignoreHTTPSErrors: true`: needed for container use and staging/self-signed sites; revisit with opt-in flags.

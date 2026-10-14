@@ -2,7 +2,13 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { AddressInfo } from 'net';
 import { chromium, type Browser } from 'playwright';
-import { CAPTURE_BASELINE_SOURCE, REFUSAL_RULE_SOURCE, judgeRefusal, readRefusal, captureRefusalBaseline } from '@qa/checkers';
+import {
+  CAPTURE_BASELINE_SOURCE,
+  REFUSAL_RULE_SOURCE,
+  judgeRefusal,
+  readRefusal,
+  captureRefusalBaseline,
+} from '@qa/checkers';
 import type { ReviewPlan, TestCase } from '@qa/types';
 import { planToPlaywrightProject } from '../src/plan/playwright-export.js';
 import { server } from '../../../fixtures/test-app/server.js';
@@ -13,10 +19,10 @@ const rejectsCase: TestCase = {
   name: 'Sign up rejects an empty name',
   role: 'visitor',
   startPage: '/lab/signup?mode=server',
-  steps: [
-    { action: 'click', selector: 'button[type="submit"]', name: 'Press Sign up' },
-  ],
-  expectations: { refusal: { formPath: '/lab/signup', submitSelector: 'button[type="submit"]', message: 'valid email' } },
+  steps: [{ action: 'click', selector: 'button[type="submit"]', name: 'Press Sign up' }],
+  expectations: {
+    refusal: { formPath: '/lab/signup', submitSelector: 'button[type="submit"]', message: 'valid email' },
+  },
   kind: 'page-test',
   intent: 'rejects',
 };
@@ -70,7 +76,9 @@ describe('expectRefused parity', () => {
         await page.click('button[type="submit"]');
         await page.waitForLoadState('load');
         const input = { baseline: exportedBaseline, message: 'valid email' };
-        const exported = await page.evaluate('(' + helperSource('REFUSAL_RULE_SOURCE') + ')(' + JSON.stringify(input) + ')');
+        const exported = await page.evaluate(
+          '(' + helperSource('REFUSAL_RULE_SOURCE') + ')(' + JSON.stringify(input) + ')'
+        );
         const checker = await readRefusal(page, input as Parameters<typeof readRefusal>[1]);
         expect(exported).toEqual(checker);
         expect(judgeRefusal(checker as Parameters<typeof judgeRefusal>[0]).refused).toBe(c.refused);
