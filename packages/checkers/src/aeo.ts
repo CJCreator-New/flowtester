@@ -33,7 +33,7 @@ export class AeoChecker {
     const isRootOrAbout = context.urlPath === '/' || context.urlPath === '' || context.urlPath.includes('/about');
 
     // 1. JSON-LD Structured Data Audits
-    const parsedSchemas: any[] = [];
+    const parsedSchemas: Array<Record<string, unknown>> = [];
     let hasMalformedJsonLd = false;
 
     for (let i = 0; i < details.jsonLdScripts.length; i++) {
@@ -43,13 +43,14 @@ export class AeoChecker {
         const parsed = JSON.parse(scriptContent);
         if (Array.isArray(parsed)) {
           parsedSchemas.push(...parsed);
-        } else if (parsed['@graph'] && Array.isArray(parsed['@graph'])) {
-          parsedSchemas.push(...parsed['@graph']);
-        } else {
-          parsedSchemas.push(parsed);
+        } else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>)['@graph'])) {
+          parsedSchemas.push(...((parsed as Record<string, unknown>)['@graph'] as Array<Record<string, unknown>>));
+        } else if (parsed && typeof parsed === 'object') {
+          parsedSchemas.push(parsed as Record<string, unknown>);
         }
-      } catch (err: any) {
+      } catch (err) {
         hasMalformedJsonLd = true;
+        const errMsg = err instanceof Error ? err.message : 'SyntaxError';
         findings.push({
           id: `F-AEO-${tcId}-JSONLD-INVALID-${findings.length + 1}`,
           testCaseId: context.testCaseId,
@@ -61,7 +62,7 @@ export class AeoChecker {
           where: { urlPath: context.urlPath, role: context.role, breakpoint: context.breakpoint },
           expectedVsActual: {
             expected: 'All <script type="application/ld+json"> tags must contain syntactically valid JSON',
-            actual: `JSON parse error: ${err.message || 'SyntaxError'} in script block #${i + 1}`,
+            actual: `JSON parse error: ${errMsg} in script block #${i + 1}`,
           },
           stepsToReproduce: [`Visit ${context.urlPath}`, 'Inspect <script type="application/ld+json">'],
           evidence: {},
@@ -73,10 +74,13 @@ export class AeoChecker {
     const schemaTypes = new Set<string>();
     for (const schema of parsedSchemas) {
       if (schema && schema['@type']) {
-        if (Array.isArray(schema['@type'])) {
-          schema['@type'].forEach((t: string) => schemaTypes.add(t));
-        } else {
-          schemaTypes.add(schema['@type']);
+        const typeVal = schema['@type'];
+        if (Array.isArray(typeVal)) {
+          typeVal.forEach((t: unknown) => {
+            if (typeof t === 'string') schemaTypes.add(t);
+          });
+        } else if (typeof typeVal === 'string') {
+          schemaTypes.add(typeVal);
         }
       }
     }

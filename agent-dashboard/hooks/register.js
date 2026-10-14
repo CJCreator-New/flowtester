@@ -459,7 +459,7 @@ export const register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     try {
       return await draw($, e)
-    } catch (err) {
+    } catch (_err) {
       return next(e)
     }
   })

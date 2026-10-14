@@ -87,4 +87,12 @@ export default [
       '@typescript-eslint/no-misused-promises': 'warn',
     },
   },
+  {
+    files: ['agent-dashboard/**/*.{js,mjs,cjs,ts,tsx}'],
+    languageOptions: {
+      globals: {
+        h: 'readonly',
+      },
+    },
+  },
 ];
