@@ -1,6 +1,6 @@
 # Check-up of our own landing page
 
-**Date:** PENDING /verify-all. Ticket [T-15](../tickets/T-15-self-checkup-landing.md). The Check-up could not run at build time (tests and runs are deferred); results below are filled in at verify.
+**Date:** PENDING /verify-all. Ticket T-15 (done). The Check-up could not run at build time (tests and runs are deferred); results below are filled in at verify.
 
 ## Header
 

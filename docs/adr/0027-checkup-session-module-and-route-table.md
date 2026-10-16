@@ -1,7 +1,6 @@
 # 0027: Check-up Session Module and a Route Table for the Runner
 
-Status: Proposed, 2026-10-15. Waiting on the owner's approval; no code changes until then. The tickets that
-execute this decision are in [`docs/plan/checkup-session/`](../plan/checkup-session/PLAN.md).
+Status: Accepted and implemented (tickets T-201 to T-211, all done; the plan files were removed once closed).
 
 Builds on [0008](0008-single-local-server.md) (one local server), [0010](0010-one-app-with-details-on-demand.md)
 (one app, details on demand), [0016](0016-evidence-redaction.md) (Redaction), [0021](0021-saved-sessions-memory-only-and-confined-docs-fetch.md)

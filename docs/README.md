@@ -26,7 +26,6 @@ Product and planning documents that already exist:
 - [`PRD.md`](PRD.md): Product Requirements Document (baseline requirements, personas, features, architecture, and roadmap)
 - [`PRODUCT_GUIDE.md`](PRODUCT_GUIDE.md): full product specification
 - [`E2E_PLATFORM_IMPLEMENTATION_PLAN.md`](E2E_PLATFORM_IMPLEMENTATION_PLAN.md) and [`research/e2e-platform-roadmap.md`](research/e2e-platform-roadmap.md): the end-to-end testing expansion
-- [`plan/checkup-session/`](plan/checkup-session/PLAN.md): Check-up Session module and runner route table plan ([ADR 0027](adr/0027-checkup-session-module-and-route-table.md))
 - [`../PRODUCT_REVIEW.md`](../PRODUCT_REVIEW.md): product review and gap analysis
 - [`SEO_AEO_GEO_STRATEGY.md`](SEO_AEO_GEO_STRATEGY.md), [`design/`](design/)
 
