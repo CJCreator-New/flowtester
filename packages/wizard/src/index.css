@@ -79,13 +79,13 @@
 
   /* Blueprint drafting grid backgrounds */
   .bg-blueprint-grid {
-    background-image: 
+    background-image:
       linear-gradient(to right, rgb(var(--c-rule) / 0.4) 1px, transparent 1px),
       linear-gradient(to bottom, rgb(var(--c-rule) / 0.4) 1px, transparent 1px);
     background-size: 28px 28px;
   }
   .bg-blueprint-grid-dense {
-    background-image: 
+    background-image:
       linear-gradient(to right, rgb(var(--c-rule) / 0.25) 1px, transparent 1px),
       linear-gradient(to bottom, rgb(var(--c-rule) / 0.25) 1px, transparent 1px);
     background-size: 14px 14px;

@@ -118,7 +118,10 @@ export function TestingScreen({
               </div>
             ) : (
               running && (
-                <div aria-hidden="true" className="mt-3 h-2.5 max-w-xl overflow-hidden rounded-pill bg-panel border border-rule/50 shadow-inner">
+                <div
+                  aria-hidden="true"
+                  className="mt-3 h-2.5 max-w-xl overflow-hidden rounded-pill bg-panel border border-rule/50 shadow-inner"
+                >
                   <div className="progress-indeterminate h-full w-1/3 rounded-pill bg-stamp shadow-[0_0_10px_rgba(108,155,242,0.5)]" />
                 </div>
               )
@@ -229,9 +232,17 @@ export function TestingScreen({
                     <div className="flex items-start justify-between gap-2">
                       <span className="block font-semibold text-ink leading-snug">
                         {problem.title}
-                        {problem.count > 1 && <span className="text-ink-soft font-mono text-xs"> ×{problem.count}</span>}
+                        {problem.count > 1 && (
+                          <span className="text-ink-soft font-mono text-xs"> ×{problem.count}</span>
+                        )}
                       </span>
-                      <span className={problem.serious ? 'badge-tech-fail shrink-0 text-[10px] py-0' : 'badge-tech-warn shrink-0 text-[10px] py-0'}>
+                      <span
+                        className={
+                          problem.serious
+                            ? 'badge-tech-fail shrink-0 text-[10px] py-0'
+                            : 'badge-tech-warn shrink-0 text-[10px] py-0'
+                        }
+                      >
                         {problem.serious ? 'HIGH' : 'WARN'}
                       </span>
                     </div>

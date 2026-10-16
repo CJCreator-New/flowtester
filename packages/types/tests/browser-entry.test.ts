@@ -65,7 +65,12 @@ const BUILTINS = new Set([
 function importedSpecifiers(file: string): string[] {
   const text = readFileSync(file, 'utf8');
   const specs: string[] = [];
-  const patterns = [/\bfrom\s*['"]([^'"]+)['"]/g, /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g, /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g, /^\s*import\s*['"]([^'"]+)['"]/gm];
+  const patterns = [
+    /\bfrom\s*['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /^\s*import\s*['"]([^'"]+)['"]/gm,
+  ];
   for (const pattern of patterns) {
     for (const match of text.matchAll(pattern)) specs.push(match[1]);
   }
@@ -89,7 +94,10 @@ function closureOf(entry: string): string[] {
       if (!specifier.startsWith('.')) continue;
       let resolved = path.resolve(path.dirname(file), specifier);
       if (!resolved.startsWith(TYPES_SRC)) continue;
-      if (!statSync(resolved, { throwIfNoEntry: false }) && statSync(resolved.replace(/\.js$/, '.ts'), { throwIfNoEntry: false })) {
+      if (
+        !statSync(resolved, { throwIfNoEntry: false }) &&
+        statSync(resolved.replace(/\.js$/, '.ts'), { throwIfNoEntry: false })
+      ) {
         resolved = resolved.replace(/\.js$/, '.ts');
       }
       queue.push(resolved);

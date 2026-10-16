@@ -208,7 +208,7 @@ export function buildPlan(input: {
       : undefined,
     contextDocuments: context.contextDocuments?.map((d) => ({
       name: d.name,
-      chars: typeof d.chars === 'number' ? d.chars : d.text?.length ?? 0,
+      chars: typeof d.chars === 'number' ? d.chars : (d.text?.length ?? 0),
     })),
   };
 }

@@ -151,7 +151,10 @@ function AddressForm() {
         placeholder="https://your-site.com"
         className="field min-h-[52px] flex-1 font-mono text-base placeholder:font-sans focus:border-stamp focus:ring-2 focus:ring-stamp/40 shadow-level-1"
       />
-      <button type="submit" className="btn-primary min-h-[52px] whitespace-nowrap px-8 font-bold shadow-level-2 hover:shadow-level-3">
+      <button
+        type="submit"
+        className="btn-primary min-h-[52px] whitespace-nowrap px-8 font-bold shadow-level-2 hover:shadow-level-3"
+      >
         Run a free check-up
       </button>
     </form>
@@ -281,7 +284,10 @@ export function LandingScreen() {
       </header>
 
       <main className="overflow-x-clip">
-        <section aria-labelledby="hero-title" className="border-b border-rule/80 bg-canvas bg-blueprint-grid relative overflow-hidden">
+        <section
+          aria-labelledby="hero-title"
+          className="border-b border-rule/80 bg-canvas bg-blueprint-grid relative overflow-hidden"
+        >
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-canvas/80" />
           <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-4 py-14 sm:px-6 sm:py-20 lg:grid-cols-[0.9fr_1.1fr] lg:gap-14">
             <div>
@@ -341,7 +347,10 @@ export function LandingScreen() {
           </SectionTitle>
           <ol className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {HOME_STEPS.map((s, i) => (
-              <li key={s.name} className="blueprint-card p-6 flex flex-col justify-between hover:border-stamp/60 transition-all duration-200">
+              <li
+                key={s.name}
+                className="blueprint-card p-6 flex flex-col justify-between hover:border-stamp/60 transition-all duration-200"
+              >
                 <div>
                   <div className="flex items-center justify-between">
                     <span aria-hidden="true" className="block font-stamp text-6xl leading-none text-stamp/90">
@@ -355,11 +364,7 @@ export function LandingScreen() {
                   </p>
                   <p className="mt-2 text-sm text-ink-soft leading-relaxed">{s.text}</p>
                 </div>
-                {i < 3 && (
-                  <div className="mt-4 hidden lg:block text-right font-mono text-xs text-edge/40">
-                    ──────→
-                  </div>
-                )}
+                {i < 3 && <div className="mt-4 hidden lg:block text-right font-mono text-xs text-edge/40">──────→</div>}
               </li>
             ))}
           </ol>
@@ -377,9 +382,15 @@ export function LandingScreen() {
             </div>
             <ul className="grid gap-4 sm:grid-cols-2">
               {AREAS.map((a) => (
-                <li key={a.name} className="blueprint-card p-5 border-l-4 border-l-stamp transition-all duration-200 hover:-translate-y-0.5 hover:shadow-level-3">
+                <li
+                  key={a.name}
+                  className="blueprint-card p-5 border-l-4 border-l-stamp transition-all duration-200 hover:-translate-y-0.5 hover:shadow-level-3"
+                >
                   <p className="font-bold text-ink">
-                    <a href={SAMPLE_REPORT_URL} className="btn-link min-h-0 font-bold text-ink hover:text-stamp transition-colors">
+                    <a
+                      href={SAMPLE_REPORT_URL}
+                      className="btn-link min-h-0 font-bold text-ink hover:text-stamp transition-colors"
+                    >
                       {a.name}
                       <span className="sr-only">, in the sample report</span>
                     </a>
@@ -449,19 +460,27 @@ export function LandingScreen() {
             <SectionTitle id="faq-title">Questions people ask first</SectionTitle>
             <div className="space-y-3">
               {HOME_FAQ.map((item, i) => (
-                <details key={item.q} className="rounded-control border border-rule/80 bg-surface/60 px-5 py-2.5 transition-colors hover:border-edge">
+                <details
+                  key={item.q}
+                  className="rounded-control border border-rule/80 bg-surface/60 px-5 py-2.5 transition-colors hover:border-edge"
+                >
                   <summary className="min-h-[44px] cursor-pointer py-1 font-bold text-ink flex items-center">
                     <span className="badge-tech mr-3 text-[10px] font-mono shrink-0">FAQ-0{i + 1}</span>
                     <span>{item.q}</span>
                   </summary>
-                  <p className="mb-2 mt-2 max-w-prose text-ink-soft text-sm leading-relaxed border-t border-rule/40 pt-3">{item.a}</p>
+                  <p className="mb-2 mt-2 max-w-prose text-ink-soft text-sm leading-relaxed border-t border-rule/40 pt-3">
+                    {item.a}
+                  </p>
                 </details>
               ))}
             </div>
           </div>
         </section>
 
-        <section aria-labelledby="final-title" className="border-t border-rule/80 bg-canvas bg-blueprint-grid relative overflow-hidden">
+        <section
+          aria-labelledby="final-title"
+          className="border-t border-rule/80 bg-canvas bg-blueprint-grid relative overflow-hidden"
+        >
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-transparent to-canvas/60" />
           <div className={`${SECTION} relative text-center`}>
             <div className="mb-4 inline-flex items-center gap-2 rounded-control border border-stamp/40 bg-stamp-tint/80 px-3 py-1 font-mono text-xs font-bold text-stamp shadow-level-1">
@@ -474,9 +493,13 @@ export function LandingScreen() {
             >
               Find out if you’re ready to ship
             </h2>
-            <p className="mx-auto mt-4 max-w-prose text-ink-soft text-lg">It takes an address and a few minutes of reading.</p>
+            <p className="mx-auto mt-4 max-w-prose text-ink-soft text-lg">
+              It takes an address and a few minutes of reading.
+            </p>
             <p className="mt-8">
-              <StartButton className="btn-primary px-10 shadow-level-3 hover:shadow-level-4 font-bold">Run a free check-up</StartButton>
+              <StartButton className="btn-primary px-10 shadow-level-3 hover:shadow-level-4 font-bold">
+                Run a free check-up
+              </StartButton>
             </p>
           </div>
         </section>

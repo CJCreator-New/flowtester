@@ -21,7 +21,9 @@ export function StepBar({ current, links = {} }: { current: Step; links?: Partia
       <div className="mx-auto max-w-6xl px-4 py-2.5 sm:px-6">
         {/* Phones: just where you are. */}
         <p className="text-sm text-ink-soft sm:hidden flex items-center gap-2">
-          <span className="badge-tech-stamp text-[10px] px-1.5">STEP {index + 1} / {STEPS.length}</span>
+          <span className="badge-tech-stamp text-[10px] px-1.5">
+            STEP {index + 1} / {STEPS.length}
+          </span>
           <strong className="text-ink">{STEPS[index].label}</strong>
         </p>
         <ol className="hidden items-center gap-3 text-sm sm:flex">
@@ -42,7 +44,9 @@ export function StepBar({ current, links = {} }: { current: Step; links?: Partia
                 >
                   {state === 'done' ? '✓' : i + 1}
                 </span>
-                <span className={state === 'todo' ? 'text-ink-soft font-medium' : 'font-bold text-ink'}>{step.label}</span>
+                <span className={state === 'todo' ? 'text-ink-soft font-medium' : 'font-bold text-ink'}>
+                  {step.label}
+                </span>
                 <span className="sr-only">
                   {state === 'done' ? '(done)' : state === 'current' ? '(current step)' : '(to come)'}
                 </span>

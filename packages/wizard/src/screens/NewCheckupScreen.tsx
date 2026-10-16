@@ -341,7 +341,10 @@ export function NewCheckupScreen({
           else setRecheck((n) => n + 1);
         }}
       >
-        <label htmlFor="url-input" className="label text-ink font-mono text-xs uppercase tracking-wider flex items-center justify-between">
+        <label
+          htmlFor="url-input"
+          className="label text-ink font-mono text-xs uppercase tracking-wider flex items-center justify-between"
+        >
           <span>Target Site Address</span>
           <span className="text-ink-soft normal-case font-sans font-normal">Public URL or local dev server</span>
         </label>
@@ -372,13 +375,12 @@ export function NewCheckupScreen({
           {check.state === 'ok' && kind && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
               <span className="badge-tech-pass">
-                <span className="h-1.5 w-1.5 rounded-full bg-pass" />
-                ✓ REACHABLE
+                <span className="h-1.5 w-1.5 rounded-full bg-pass" />✓ REACHABLE
               </span>
               <span className="font-mono text-xs text-ink break-all px-2 py-0.5 rounded bg-panel border border-rule">
                 {check.url}
               </span>
-              <span className={kind.isTestCopy && form.owner ? "badge-tech-warn" : "badge-tech"}>
+              <span className={kind.isTestCopy && form.owner ? 'badge-tech-warn' : 'badge-tech'}>
                 {kind.isTestCopy && form.owner
                   ? 'TEST COPY (FORMS ACTIVE)'
                   : kind.isTestCopy
@@ -687,7 +689,10 @@ export function NewCheckupScreen({
               </div>
             )}
 
-            <details className="mt-6 rounded-card border border-rule/80 bg-surface/60 overflow-hidden" open={added > 0 || undefined}>
+            <details
+              className="mt-6 rounded-card border border-rule/80 bg-surface/60 overflow-hidden"
+              open={added > 0 || undefined}
+            >
               <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center gap-x-2 px-5 py-3 font-bold hover:bg-panel/40 transition-colors">
                 <span>Add specs, design notes or journeys</span>
                 <span className="font-normal text-xs text-ink-soft font-mono">(optional)</span>

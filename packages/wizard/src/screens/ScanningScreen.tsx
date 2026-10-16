@@ -117,13 +117,13 @@ export function ScanningScreen({
                   >
                     {state === 'done' ? '✓' : i + 1}
                   </span>
-                  <span className={state === 'todo' ? 'text-ink-soft font-medium' : 'font-bold text-ink'}>{stage.label}</span>
+                  <span className={state === 'todo' ? 'text-ink-soft font-medium' : 'font-bold text-ink'}>
+                    {stage.label}
+                  </span>
                   {state === 'current' && (
                     <span className="badge-tech-stamp text-[10px] py-0 px-1.5 ml-auto">RUNNING</span>
                   )}
-                  {state === 'done' && (
-                    <span className="badge-tech-pass text-[10px] py-0 px-1.5 ml-auto">DONE</span>
-                  )}
+                  {state === 'done' && <span className="badge-tech-pass text-[10px] py-0 px-1.5 ml-auto">DONE</span>}
                   <span className="sr-only">
                     {state === 'done' ? '(done)' : state === 'current' ? '(now)' : '(to come)'}
                   </span>
@@ -132,7 +132,10 @@ export function ScanningScreen({
             })}
           </ol>
 
-          <section aria-label="Scan progress" className="blueprint-card p-6 bg-surface/90 border border-rule/80 relative overflow-hidden shadow-level-3">
+          <section
+            aria-label="Scan progress"
+            className="blueprint-card p-6 bg-surface/90 border border-rule/80 relative overflow-hidden shadow-level-3"
+          >
             <div className="absolute top-0 inset-x-0 h-1 bg-panel overflow-hidden">
               <div className="h-full bg-stamp progress-indeterminate shadow-[0_0_8px_rgba(108,155,242,0.5)]" />
             </div>

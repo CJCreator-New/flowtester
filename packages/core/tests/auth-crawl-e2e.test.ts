@@ -570,9 +570,7 @@ describe('T-117 Auth and crawl end-to-end (auth-crawl-e2e.test.ts)', () => {
       expect(roleRoutes.some((r) => r.detail === 'session-recovered')).toBe(true);
 
       // LC-003: the crawl kept exploring instead of stopping at the wall.
-      const rolePages = outcome.draft.pages
-        .filter((p) => p.reachedBy?.includes('manager'))
-        .map((p) => p.urlPath);
+      const rolePages = outcome.draft.pages.filter((p) => p.reachedBy?.includes('manager')).map((p) => p.urlPath);
       expect(rolePages.some((p) => !reachedBeforeDeath.has(p))).toBe(true);
       expect((exploration?.pageCoverage?.skipped || []).some((s) => s.why === 'session-lost')).toBe(false);
     } finally {

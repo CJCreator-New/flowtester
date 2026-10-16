@@ -45,7 +45,8 @@ describe('DeterministicSpider: sign-in walls and the paths it reports (T-301)', 
         res.end(body);
       };
       // The site answers with the path it really uses, the way a case-sensitive server does.
-      const canonical = path === '/settings' ? '/settings/' : path === '/account/security' ? '/account/security/' : path;
+      const canonical =
+        path === '/settings' ? '/settings/' : path === '/account/security' ? '/account/security/' : path;
       if (canonical !== raw) {
         res.writeHead(302, { Location: canonical });
         res.end();

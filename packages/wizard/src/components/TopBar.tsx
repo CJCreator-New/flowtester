@@ -50,7 +50,10 @@ export function TopBar({
     <header className="sticky top-0 z-50 border-b border-rule/80 bg-surface/85 backdrop-blur-md shadow-level-1 supports-[backdrop-filter]:bg-surface/75">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-1 px-4 py-1.5 sm:px-6">
         <div className="flex items-center gap-4">
-          <Link to={PATHS.new} className="inline-flex min-h-[44px] items-center gap-2 font-bold text-ink hover:text-stamp transition-colors">
+          <Link
+            to={PATHS.new}
+            className="inline-flex min-h-[44px] items-center gap-2 font-bold text-ink hover:text-stamp transition-colors"
+          >
             <Mark />
             Release check-up
           </Link>

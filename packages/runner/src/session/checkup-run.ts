@@ -114,13 +114,16 @@ export interface RunDeps {
     settings: StoredPlanRecord['context']['ai'],
     key?: string,
     cap?: RunCap
-  ) => Promise<{
-    left?: number;
-    limit?: number;
-    visualReview: number;
-    pacing: { gapMs: number; concurrency: number; cap?: RunCap; price?: { prompt: number; completion: number } };
-    limits: ProviderLimits | null;
-  } | undefined>;
+  ) => Promise<
+    | {
+        left?: number;
+        limit?: number;
+        visualReview: number;
+        pacing: { gapMs: number; concurrency: number; cap?: RunCap; price?: { prompt: number; completion: number } };
+        limits: ProviderLimits | null;
+      }
+    | undefined
+  >;
   signInsFor?: (
     body: RunStartBody,
     memory: SiteMemory | null,
@@ -359,7 +362,10 @@ export function screensForReview(
     const group = groupOf.get(urlPath) ?? urlPath;
     const screen = byGroup.get(group) ?? { layoutGroup: group, urlPath, screenshots: [] };
     byGroup.set(group, screen);
-    if (screen.urlPath === urlPath && !screen.screenshots.some((s: { breakpoint: string }) => s.breakpoint === result.breakpoint)) {
+    if (
+      screen.urlPath === urlPath &&
+      !screen.screenshots.some((s: { breakpoint: string }) => s.breakpoint === result.breakpoint)
+    ) {
       screen.screenshots.push({
         breakpoint: result.breakpoint,
         imagePath: runDir ? path.resolve(runDir, shot.screenshotPath) : shot.screenshotPath,
@@ -555,9 +561,9 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
     }
     await new Redactor([...creds, ...headerSecrets]).files(runDir);
 
-    await session.report.keep(report, record.plan.targetUrl || context.targetUrl, context.siteHost).catch((err) =>
-      console.warn('[Release check-up] Couldn’t keep the run’s report:', redactedMessage(err))
-    );
+    await session.report
+      .keep(report, record.plan.targetUrl || context.targetUrl, context.siteHost)
+      .catch((err) => console.warn('[Release check-up] Couldn’t keep the run’s report:', redactedMessage(err)));
     session.report.set(report);
     session.secrets.savedSessions.delete(context.runId);
     session.run.setPhase('done');
@@ -697,7 +703,9 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
 
       const prepareAIFn =
         deps.prepareAI ??
-        (async (b): Promise<{
+        (async (
+          b
+        ): Promise<{
           provider?: AIProvider;
           models?: { text?: string; vision?: string };
           settings?: StoredPlanRecord['context']['ai'];
@@ -722,9 +730,7 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
       context.ai = ai.settings;
       if (body.planWithoutAI) ai.provider = undefined;
       const aiBudget =
-        ai.provider && deps.aiBudgetFor
-          ? await deps.aiBudgetFor(ai.settings, ai.key, context.aiCap)
-          : undefined;
+        ai.provider && deps.aiBudgetFor ? await deps.aiBudgetFor(ai.settings, ai.key, context.aiCap) : undefined;
       if (!current()) return;
 
       await fs.mkdir(runDir, { recursive: true });

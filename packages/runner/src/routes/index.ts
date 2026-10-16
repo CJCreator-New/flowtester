@@ -5,6 +5,4 @@ export { Route, RouteContext, matchRoute, sendNotFound, notFound, fallbackNotFou
 export { MAX_BODY_CHARS, readJsonBody, sendJson } from './body.js';
 export * from './plan.js';
 
-export const allRoutes: readonly Route[] = [
-  ...planRoutes,
-];
+export const allRoutes: readonly Route[] = [...planRoutes];

@@ -76,9 +76,7 @@ describe('check-up API contracts (T-201)', () => {
       ],
       questions: [{ id: 'Q-001', selectedAnswer: 'Yes' }],
       answers: { 'Q-001': 'Yes' },
-      testCases: [
-        { id: 'TC-1', flowId: 'flow-1', role: 'manager', startPage: '/', steps: [], expectations: {} },
-      ],
+      testCases: [{ id: 'TC-1', flowId: 'flow-1', role: 'manager', startPage: '/', steps: [], expectations: {} }],
       productContext: 'context',
       designNotes: 'notes',
       items: [{ id: 'page:/about', skipped: true }],

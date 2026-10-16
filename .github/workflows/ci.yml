@@ -52,6 +52,8 @@ jobs:
 
   # Full Build & Browser Test Suite: Sharded across 4 parallel runners to complete in ~2-3 minutes instead of 15-20 minutes
   build-and-test:
+    # PRs and manual runs only: a push to main was tested on its PR, and Deploy builds and smoke-checks it.
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -98,6 +100,7 @@ jobs:
   # Integration tests for authenticated crawls against the fixture app.
   # Runs on PRs touching packages/core, packages/runner, fixtures, or packages/types.
   auth-crawl:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

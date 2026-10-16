@@ -412,8 +412,14 @@ describe('A check-up on the runner', () => {
     const { runCheckup, parseArgs } = await import('../src/checkup.js');
     const out1 = path.join(scratch, 'concurrent-cli-1');
     const out2 = path.join(scratch, 'concurrent-cli-2');
-    const args1 = parseArgs([siteUrl, '--fail-on', 'none', '--max-pages', '3', '--output', out1], {} as NodeJS.ProcessEnv);
-    const args2 = parseArgs([siteUrl, '--fail-on', 'none', '--max-pages', '3', '--output', out2], {} as NodeJS.ProcessEnv);
+    const args1 = parseArgs(
+      [siteUrl, '--fail-on', 'none', '--max-pages', '3', '--output', out1],
+      {} as NodeJS.ProcessEnv
+    );
+    const args2 = parseArgs(
+      [siteUrl, '--fail-on', 'none', '--max-pages', '3', '--output', out2],
+      {} as NodeJS.ProcessEnv
+    );
 
     const [code1, code2] = await Promise.all([runCheckup(args1), runCheckup(args2)]);
     expect(code1).toBe(0);

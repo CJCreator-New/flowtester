@@ -229,9 +229,7 @@ export async function getPlan(c: PlanRouteContext): Promise<void> {
   const record = await ensurePlanLoaded(session);
   if (
     !record ||
-    (session.run.phase !== 'awaiting-review' &&
-      session.run.phase !== 'scanning' &&
-      session.run.phase !== 'testing')
+    (session.run.phase !== 'awaiting-review' && session.run.phase !== 'scanning' && session.run.phase !== 'testing')
   ) {
     sendJson(res, 404, { error: 'No plan awaiting review' });
     return;
@@ -510,9 +508,10 @@ export async function startPlanUpdate(
     (async () => {
       try {
         const provider = c.aiFor ? await c.aiFor(record.context) : undefined;
-        const budget = provider && c.aiBudgetFor
-          ? await c.aiBudgetFor(record.context.ai, undefined, record.context.aiCap)
-          : undefined;
+        const budget =
+          provider && c.aiBudgetFor
+            ? await c.aiBudgetFor(record.context.ai, undefined, record.context.aiCap)
+            : undefined;
         const paced = provider
           ? new PacedAI(provider, budget?.left ?? Infinity, { model: record.context.ai?.model, ...budget?.pacing })
           : undefined;
@@ -725,9 +724,7 @@ export async function includeHost(c: PlanRouteContext): Promise<void> {
   }
   const draft = record?.context.draft;
   const other = draft?.plan?.otherHosts.find((h) => h.host === body.host);
-  const link = draft?.pages
-    .flatMap((p) => p.links || [])
-    .find((l) => l.leavesSite && new URL(l.to).host === body.host);
+  const link = draft?.pages.flatMap((p) => p.links || []).find((l) => l.leavesSite && new URL(l.to).host === body.host);
   if (!record || !draft || !other || !link) {
     sendJson(res, 400, { error: 'That host isn’t linked from this site.' });
     return;
@@ -1058,9 +1055,7 @@ export async function approvePlan(c: PlanRouteContext): Promise<void> {
   }
 
   if (record.context.signInConsent && !hasCompleteSignIn(record.context.profile?.roles)) {
-    const missing = (record.context.profile?.roles || [])
-      .filter((r) => !r.username || !r.password)
-      .map((r) => r.role);
+    const missing = (record.context.profile?.roles || []).filter((r) => !r.username || !r.password).map((r) => r.role);
     sendJson(res, 409, {
       error: CONSENT_NEEDS_SIGN_IN,
       code: 'ERR_SIGN_IN_REQUIRED',

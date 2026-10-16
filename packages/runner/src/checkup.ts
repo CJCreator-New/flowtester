@@ -33,11 +33,7 @@ import { fileURLToPath } from 'url';
 import { isActiveFinding, releaseVerdict, isSupportedContextName, summarizeDocument, parseHeaderText } from '@qa/types';
 import { githubAnnotations, docxToMarkdown } from '@qa/core';
 import type { AIProviderType, Finding, ReleaseReport, SiteAspectGrades, RunStartBody } from '@qa/types';
-import {
-  createCheckupSession,
-  createCheckupRun,
-  resolveAuthorization,
-} from './session/checkup-session.js';
+import { createCheckupSession, createCheckupRun, resolveAuthorization } from './session/checkup-session.js';
 
 export type FailOn = 'blocker' | 'major' | 'none' | 'standard';
 

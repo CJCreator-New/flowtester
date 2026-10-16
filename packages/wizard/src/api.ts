@@ -291,7 +291,14 @@ export async function checkDomainProof(targetUrl: string): Promise<DomainProofSt
 
 export type Reachability =
   | ({ ok: true; statusCode?: number; startWarning?: 'start-4xx' } & SiteFacts)
-  | ({ ok: false; reason: string; code: string; suggestion: string; statusCode?: number; startWarning?: 'start-4xx' } & SiteFacts);
+  | ({
+      ok: false;
+      reason: string;
+      code: string;
+      suggestion: string;
+      statusCode?: number;
+      startWarning?: 'start-4xx';
+    } & SiteFacts);
 
 export async function checkReachable(targetUrl: string): Promise<Reachability> {
   const res = await call('/api/runner/preflight', { method: 'POST', body: JSON.stringify({ targetUrl }) }, 15000);

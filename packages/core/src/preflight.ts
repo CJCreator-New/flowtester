@@ -247,17 +247,22 @@ export class PreFlightChecker {
       await context.setExtraHTTPHeaders(roleHeaders).catch(() => {});
     }
     if (credential.localStorageEntries && Object.keys(credential.localStorageEntries).length > 0) {
-      await context.addInitScript((entries) => {
-        for (const [k, v] of Object.entries(entries)) {
-          try {
-            localStorage.setItem(k, v);
-          } catch {}
-        }
-      }, credential.localStorageEntries).catch(() => {});
+      await context
+        .addInitScript((entries) => {
+          for (const [k, v] of Object.entries(entries)) {
+            try {
+              localStorage.setItem(k, v);
+            } catch {}
+          }
+        }, credential.localStorageEntries)
+        .catch(() => {});
     }
 
     // Direct token/header/localStorage session verification (when no password given)
-    if (!credential.password && (credential.token || Object.keys(roleHeaders).length > 0 || credential.localStorageEntries)) {
+    if (
+      !credential.password &&
+      (credential.token || Object.keys(roleHeaders).length > 0 || credential.localStorageEntries)
+    ) {
       let page: Page | undefined;
       try {
         page = await context.newPage();
@@ -278,7 +283,10 @@ export class PreFlightChecker {
           }
         }
       } catch (err) {
-        debugLog('auth', 'direct header/token session verification failed', { role: credential.role, error: String(err) });
+        debugLog('auth', 'direct header/token session verification failed', {
+          role: credential.role,
+          error: String(err),
+        });
       } finally {
         if (page) await page.close().catch(() => {});
       }

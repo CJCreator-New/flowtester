@@ -3,10 +3,7 @@ import type http from 'http';
 /** The largest JSON request accepted (characters). Plans are the biggest, and stay far below this. */
 export const MAX_BODY_CHARS = 5_000_000;
 
-export async function readJsonBody<T>(
-  req: http.IncomingMessage,
-  maxChars: number = MAX_BODY_CHARS
-): Promise<T> {
+export async function readJsonBody<T>(req: http.IncomingMessage, maxChars: number = MAX_BODY_CHARS): Promise<T> {
   let body = '';
   for await (const chunk of req) {
     body += chunk;

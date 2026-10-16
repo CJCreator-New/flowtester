@@ -31,7 +31,14 @@ import {
   LOOPBACK_HOSTS,
   formatDay,
 } from './session/checkup-session.js';
-import { allRoutes, matchRoute, readJsonBody, sendJson, MAX_BODY_CHARS, type PlanRouteContext } from './routes/index.js';
+import {
+  allRoutes,
+  matchRoute,
+  readJsonBody,
+  sendJson,
+  MAX_BODY_CHARS,
+  type PlanRouteContext,
+} from './routes/index.js';
 import type {
   RunSummary,
   SiteMapSummary,
@@ -215,7 +222,6 @@ async function exists(file: string): Promise<boolean> {
   );
 }
 
-
 export { redactedMessage };
 
 function isLoopbackOrigin(origin: string): boolean {
@@ -225,7 +231,6 @@ function isLoopbackOrigin(origin: string): boolean {
     return false;
   }
 }
-
 
 /** The Host header names this computer. A page that points a name it controls at this port (DNS rebinding) doesn't. */
 function isLoopbackHost(host: string | undefined): boolean {
@@ -263,8 +268,6 @@ function matchesSecret(given: string | null | undefined, secret: string): boolea
 }
 
 const MAX_RUN_EVENTS = 5000;
-
-
 
 /** Token use per stage, added together. */
 function addTokens(a: AIRequestBudget['tokens'], b: AIRequestBudget['tokens']): AIRequestBudget['tokens'] {
@@ -372,8 +375,6 @@ export interface RunnerServerOptions {
   /** Most time one test step may spend finding and acting on its element, in ms (env RUNNER_STEP_TIMEOUT_MS). Default 10000. */
   stepTimeoutMs?: number;
 }
-
-
 
 /** Plans saved before Intent carry the old Denial kind; read them as `intent: 'denied'`. */
 function normalizeStoredPlan(record: StoredPlanRecord): StoredPlanRecord {
@@ -2888,10 +2889,6 @@ export class RunnerServer {
     });
   }
 
-
-
-
-
   /**
    * The text model for a run. Without a key or a free model there's no run: the plan is written by
    * the AI (ADR 0009). `key` is the key used, for reading its AI Request Budget; it isn't saved.
@@ -3004,7 +3001,6 @@ export class RunnerServer {
     return this.makeAIProvider(settings.provider, apiKey, settings.model);
   }
 
-
   private async ensurePlanLoaded(): Promise<StoredPlanRecord | null> {
     const record = await this.session.plan.current();
     if (record && this.phase === 'idle') {
@@ -3047,7 +3043,6 @@ export class RunnerServer {
     }));
   }
 
-
   private async savePlan(record: StoredPlanRecord): Promise<void> {
     return this.session.plan.save(record);
   }
@@ -3064,10 +3059,6 @@ export class RunnerServer {
   private async clearPlan(runId?: string): Promise<void> {
     return this.session.plan.clear(runId);
   }
-
-
-
-
 
   private async handleServeBaseline(fileName: string, res: http.ServerResponse): Promise<void> {
     const target = path.resolve(this.baselineDir, fileName);
@@ -3438,5 +3429,4 @@ export class RunnerServer {
       this.sendJson(res, 500, { error: this.redactedMessage(err) });
     }
   }
-
 }

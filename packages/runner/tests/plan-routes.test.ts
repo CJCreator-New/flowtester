@@ -138,9 +138,7 @@ function makeStoredPlan(runId = 'run-test-1', targetUrl = 'http://example.com'):
       profile: {
         name: 'test-product',
         productId: 'test-product',
-        roles: [
-          { role: 'admin', username: 'admin@example.com', password: 'secretPassword123!' },
-        ],
+        roles: [{ role: 'admin', username: 'admin@example.com', password: 'secretPassword123!' }],
       },
     },
   };
@@ -225,9 +223,7 @@ describe('Plan handlers as functions over CheckupSession (T-207)', () => {
       name: 'Aim at missing element',
       role: 'visitor',
       startPage: '/',
-      steps: [
-        { action: 'click', name: 'Click non-existent button', selector: '#non-existent-button' },
-      ],
+      steps: [{ action: 'click', name: 'Click non-existent button', selector: '#non-existent-button' }],
     };
 
     const req = createMockRequest({
@@ -279,9 +275,7 @@ describe('Plan handlers as functions over CheckupSession (T-207)', () => {
       name: 'Admin sign in',
       role: 'admin',
       startPage: '/',
-      steps: [
-        { action: 'fill', name: 'Fill password', selector: '#password', value: 'secretPassword123!' },
-      ],
+      steps: [{ action: 'fill', name: 'Fill password', selector: '#password', value: 'secretPassword123!' }],
     };
 
     const req = createMockRequest({

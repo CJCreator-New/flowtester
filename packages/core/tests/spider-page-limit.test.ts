@@ -26,7 +26,9 @@ describe('the page limit is checked before a page’s work (T-307)', () => {
       const pathname = new URL(req.url || '/', BASE).pathname;
       const send = (title: string, body: string, status = 200) => {
         res.writeHead(status, { 'Content-Type': 'text/html' });
-        res.end(`<!doctype html><html lang="en"><head><title>${title}</title></head><body><main>${body}</main></body></html>`);
+        res.end(
+          `<!doctype html><html lang="en"><head><title>${title}</title></head><body><main>${body}</main></body></html>`
+        );
       };
       if (pathname === '/') {
         const links = ['/dead', ...Array.from({ length: LINK_COUNT }, (_, i) => `/page/${i + 1}`)]

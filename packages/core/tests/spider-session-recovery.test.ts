@@ -56,10 +56,7 @@ describe('mid-crawl session recovery (T-305)', () => {
       if (pathname === '/ls-gated') {
         if (signedIn) return send(page('Orders', '<p>Your orders.</p>'));
         return send(
-          page(
-            'Orders',
-            `<script>if (!localStorage.getItem('spider_token')) location.replace('/signin');</script>`
-          )
+          page('Orders', `<script>if (!localStorage.getItem('spider_token')) location.replace('/signin');</script>`)
         );
       }
       return send(page('Home', '<p>Home.</p>'));

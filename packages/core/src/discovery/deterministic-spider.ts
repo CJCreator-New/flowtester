@@ -147,10 +147,7 @@ function isSignInOnlyForm(forms: ReadForm[]): boolean {
   if (visible.some((f) => f !== withPassword[0])) return false;
   return withPassword[0].inputs.every(
     (i) =>
-      i.type === 'password' ||
-      i.type === 'email' ||
-      i.type === 'tel' ||
-      CREDENTIAL_FIELD.test(`${i.name} ${i.label}`)
+      i.type === 'password' || i.type === 'email' || i.type === 'tel' || CREDENTIAL_FIELD.test(`${i.name} ${i.label}`)
   );
 }
 
@@ -1193,7 +1190,8 @@ export class DeterministicSpider {
     if (this.safetyFilter.isSensitive(el.name, el.selector)) return false;
     const scriptLink = el.role === 'link' && (!el.href || el.href === '#' || el.href.startsWith('javascript:'));
     const navButton = el.role === 'button' && NAVIGATION_WORDS.test(el.name);
-    const inNavLandmark = (el.landmark === 'nav' || el.landmark === 'header') && (el.role === 'button' || el.role === 'link');
+    const inNavLandmark =
+      (el.landmark === 'nav' || el.landmark === 'header') && (el.role === 'button' || el.role === 'link');
     return scriptLink || navButton || inNavLandmark;
   }
 }
