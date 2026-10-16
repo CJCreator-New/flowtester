@@ -77,17 +77,18 @@ export function ScanningScreen({
 
   return (
     <div className="mx-auto max-w-[44rem] px-4 py-10 sm:px-6 sm:py-14">
-      <FocusHeading className="mb-2 break-words text-question font-bold">Scanning {host}</FocusHeading>
+      <FocusHeading className="mb-2 break-words text-question font-bold">Exploring {host}</FocusHeading>
       <p className="mb-8 max-w-prose text-ink-soft">
-        Every page is opened and every link noted, then the AI writes the test plan
-        {hasMaterials ? ' with the specs you added' : ''}. You review the plan before anything is tested.
+        This can take a few minutes on a big site. You can leave this page: the check-up keeps going, and "New check-up"
+        shows a dot while it does. You review the plan before anything is tested
+        {hasMaterials ? ', and the AI uses the specs you added to write it' : ''}.
       </p>
 
       {failure ? (
-        <RunFailure title="The scan stopped" message={failure} />
+        <RunFailure title="The check-up stopped" message={failure} />
       ) : (
         <>
-          <ol className="mb-6 space-y-2.5" aria-label="Scan stages">
+          <ol className="mb-6 space-y-2.5" aria-label="Stages">
             {STAGES.map((stage, i) => {
               const state =
                 stageIndex < 0

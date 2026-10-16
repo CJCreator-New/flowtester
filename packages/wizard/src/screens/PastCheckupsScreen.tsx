@@ -58,8 +58,8 @@ export function PastCheckupsScreen({
       title: 'Delete this check-up?',
       body: (
         <p>
-          The report of {run.host} from {formatWhen(run.timestamp)}, with its screenshots, is deleted from this
-          computer. This can’t be undone. The site’s grade history is kept.
+          The report of {run.host} from {formatWhen(run.timestamp)}, with its screenshots, is deleted. This can’t be
+          undone. The site’s grade history is kept.
         </p>
       ),
       confirmLabel: 'Delete the check-up',
@@ -80,7 +80,7 @@ export function PastCheckupsScreen({
     <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-14">
       <Question>Past check-ups</Question>
       <p className="mb-8 max-w-prose text-ink-soft">
-        The last ten check-ups of each site are kept on this computer. Older ones are deleted by themselves.
+        The last ten check-ups of each site are kept. Older ones are deleted by themselves.
       </p>
 
       {error && <ErrorMessage>{error}</ErrorMessage>}

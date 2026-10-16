@@ -72,9 +72,9 @@ describe('new check-up screen', () => {
     expect(open).not.toMatch(/\sopen(=|\s|>)/);
     expect(inside).toContain('More options');
     expect(inside).toContain('Explore up to');
-    expect(inside).toContain('Add specs, design notes or journeys');
+    expect(inside).toContain('Add notes, design rules or journeys');
     expect(outside).toContain('id="url-input"');
-    expect(outside).toContain('Scan the site');
+    expect(outside).toContain('Start the check-up');
     expect(outside).not.toContain('Explore up to');
   });
 
@@ -90,7 +90,7 @@ describe('new check-up screen', () => {
     const proof = source.indexOf('<DomainProofPanel');
     const prod = source.indexOf('This appears to be a live production site');
     const block = source.indexOf('data-testid="more-options"');
-    const submit = source.indexOf('Scan the site');
+    const submit = source.indexOf('Start the check-up');
     expect(choice).toBeGreaterThan(-1);
     for (const safety of [choice, proof, prod]) expect(safety).toBeLessThan(block);
     expect(submit).toBeGreaterThan(block);

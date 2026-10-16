@@ -118,7 +118,7 @@ describe('T-109: rolesNotTested rendering', () => {
     expect(html).toContain('billing');
     expect(html).toContain('Sign-in failed');
 
-    // Make sure it is not inside Living Spec Conformance section
-    expect(html).not.toContain('Living Spec Conformance');
+    // Make sure it is not inside the spec section
+    expect(html).not.toContain('How the site matches its spec');
   });
 });

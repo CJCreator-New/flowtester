@@ -40,7 +40,7 @@ import {
   settleConsent,
   signInConsentGiven,
   withAddress,
-  withoutConsent,
+  resetSignInChoices,
   type CheckupForm,
 } from '../lib/form';
 import { SignInRow } from '../components/SignInRow';
@@ -178,7 +178,7 @@ export function NewCheckupScreen({
         ? f
         : {
             // Consent given for another App never carries over.
-            ...withoutConsent(f),
+            ...resetSignInChoices(f),
             rememberTouched: false,
             owner: remembered?.owner ?? false,
             markedTestCopy: remembered?.markedTestCopy ?? false,
@@ -287,7 +287,7 @@ export function NewCheckupScreen({
 
       <Question>Enter the address of the site to check</Question>
       <p className="mb-8 max-w-prose text-ink-soft">
-        The site is scanned and a test plan is written for you to review. Nothing is tested until you approve the plan.
+        The site is explored and a plan is written for you to review. Nothing is tested until you approve the plan.
       </p>
 
       {shared && (
@@ -307,24 +307,6 @@ export function NewCheckupScreen({
         </div>
       )}
 
-      {ai && !keyReady && (
-        <section aria-labelledby="key-title" className="mb-8 rounded-lg border-2 border-stamp bg-surface p-5">
-          <h2 id="key-title" className="mb-1 text-xl font-bold">
-            Connect the AI for a smarter plan
-          </h2>
-          <p className="mb-4 text-sm text-ink-soft">
-            Optional. Without it, fixed rules write the test plan and you can scan now. With it, the AI writes a plan
-            that fits your site. It runs on OpenRouter’s free models, so it costs nothing. You only do this once, and
-            anything you type below is kept.
-          </p>
-          <KeyField
-            onSaved={(model) => {
-              setKeyJustSaved(true);
-              onKeySaved(model);
-            }}
-          />
-        </section>
-      )}
       {keyJustSaved && keyReady && (
         <div className="mb-6">
           <Notice tone="pass" title="The AI is connected.">
@@ -341,12 +323,11 @@ export function NewCheckupScreen({
           else setRecheck((n) => n + 1);
         }}
       >
-        <label
-          htmlFor="url-input"
-          className="label text-ink font-mono text-xs uppercase tracking-wider flex items-center justify-between"
-        >
-          <span>Target Site Address</span>
-          <span className="text-ink-soft normal-case font-sans font-normal">Public URL or local dev server</span>
+        <label htmlFor="url-input" className="label text-ink flex items-center justify-between">
+          <span>Site address</span>
+          <span className="text-ink-soft normal-case font-sans font-normal">
+            A public address, or one on your computer
+          </span>
         </label>
         <input
           id="url-input"
@@ -375,17 +356,18 @@ export function NewCheckupScreen({
           {check.state === 'ok' && kind && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
               <span className="badge-tech-pass">
-                <span className="h-1.5 w-1.5 rounded-full bg-pass" />✓ REACHABLE
+                <span className="h-1.5 w-1.5 rounded-full bg-pass" />
+                Reachable
               </span>
               <span className="font-mono text-xs text-ink break-all px-2 py-0.5 rounded bg-panel border border-rule">
                 {check.url}
               </span>
               <span className={kind.isTestCopy && form.owner ? 'badge-tech-warn' : 'badge-tech'}>
                 {kind.isTestCopy && form.owner
-                  ? 'TEST COPY (FORMS ACTIVE)'
+                  ? 'Test copy: forms are filled in and sent'
                   : kind.isTestCopy
-                    ? 'LOOK-ONLY MODE'
-                    : 'LIVE INSPECTION (READ-ONLY SAFE)'}
+                    ? 'Only looks: nothing is sent or changed'
+                    : 'Live site: only looks, nothing is sent or changed'}
               </span>
             </div>
           )}
@@ -407,8 +389,6 @@ export function NewCheckupScreen({
           </ErrorMessage>
         )}
 
-        <SignInFields form={form} onFormChange={onFormChange} />
-
         {consentFlow && <ConsentNotice form={form} onFormChange={onFormChange} />}
 
         {kind && !consentFlow && <AccessChoice isTestCopyHost={kind.natural} form={form} onChange={setChoice} />}
@@ -419,25 +399,25 @@ export function NewCheckupScreen({
 
         {needsProdConfirmation && (
           <div className="mt-4">
-            <Notice tone="warn" title="This appears to be a live production site">
+            <Notice tone="warn" title="This looks like a live site">
               <p>
-                The address doesn’t match typical staging or dev indicators. Form submissions and state-changing actions
-                will be muted unless confirmed.
+                The address doesn’t look like a copy made for testing. Forms stay untouched unless you say it is a test
+                copy.
               </p>
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  className="btn-quiet rounded-control border border-stamp/50 px-3 py-1.5 text-xs font-bold text-stamp hover:text-stamp-dark"
+                  className="btn-quiet rounded-control min-h-[44px] border border-stamp/50 px-4 py-2.5 text-xs font-bold text-stamp hover:text-stamp-dark"
                   onClick={() => setConfirmedProd(true)}
                 >
-                  ✓ I confirm this is safe to test
+                  Yes, this is a test copy
                 </button>
                 <button
                   type="button"
-                  className="text-xs text-ink-soft hover:underline"
+                  className="min-h-[44px] px-2 py-2.5 text-xs text-ink-soft hover:underline"
                   onClick={() => setChoice({ owner: true, markedTestCopy: false })}
                 >
-                  Switch to safe inspection mode
+                  Only look at it instead
                 </button>
               </div>
             </Notice>
@@ -479,83 +459,6 @@ export function NewCheckupScreen({
               </span>
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-              <label htmlFor="test-cap">Test cap</label>
-              <input
-                id="test-cap"
-                type="number"
-                inputMode="numeric"
-                min={1}
-                max={100000}
-                placeholder="2000"
-                className="field w-24 py-1.5 text-sm"
-                value={form.testCap}
-                onChange={(e) => onFormChange((f) => ({ ...f, testCap: e.target.value }))}
-                aria-describedby="test-cap-hint"
-              />
-              <span>tests at most</span>
-              <span id="test-cap-hint" className="basis-full text-ink-soft">
-                Past this many Tests, the last Rejects and Limits are switched off in the Plan. Leave it empty for 2000.
-              </span>
-            </div>
-
-            <div className="mt-4 rounded-lg border border-edge bg-surface p-4 text-sm">
-              <span className="block font-semibold text-ink">Crawl Settings</span>
-              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-                <div className="flex items-center gap-2">
-                  <label htmlFor="crawl-concurrency">Concurrency</label>
-                  <input
-                    id="crawl-concurrency"
-                    type="number"
-                    min={1}
-                    max={5}
-                    className="field w-20 py-1.5 text-sm"
-                    value={form.crawlConcurrency}
-                    onChange={(e) => {
-                      const val = Math.max(1, Math.min(5, Number(e.target.value) || 2));
-                      onFormChange((f) => ({ ...f, crawlConcurrency: val }));
-                    }}
-                  />
-                  <span className="text-xs text-ink-soft">workers (1–5)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <label htmlFor="crawl-delay">Pacing delay</label>
-                  <input
-                    id="crawl-delay"
-                    type="number"
-                    min={0}
-                    max={2000}
-                    step={50}
-                    className="field w-24 py-1.5 text-sm"
-                    value={form.crawlDelayMs}
-                    onChange={(e) => {
-                      const val = Math.max(0, Math.min(2000, Number(e.target.value) || 0));
-                      onFormChange((f) => ({ ...f, crawlDelayMs: val }));
-                    }}
-                  />
-                  <span className="text-xs text-ink-soft">ms (0–2000)</span>
-                </div>
-              </div>
-              <div className="mt-3">
-                <label htmlFor="custom-headers" className="block text-xs font-medium text-ink">
-                  Custom Headers (bypass bot protection / Cloudflare allowlist tokens)
-                </label>
-                <textarea
-                  id="custom-headers"
-                  rows={2}
-                  placeholder="X-QA-Bypass-Token: your-token&#10;User-Agent: MyCustomAgent"
-                  className="field mt-1 w-full font-mono text-xs"
-                  value={form.customHeaders}
-                  onChange={(e) => onFormChange((f) => ({ ...f, customHeaders: e.target.value }))}
-                />
-                {headerErrors.map((err, idx) => (
-                  <p key={idx} role="alert" className="mt-1 text-xs text-fail">
-                    {err}
-                  </p>
-                ))}
-              </div>
-            </div>
-
             <SignInsSection
               form={form}
               saved={remembered?.signIns}
@@ -580,14 +483,16 @@ export function NewCheckupScreen({
                     }}
                   />
                   <span className="flex-1">
-                    <span className="block font-bold text-ink">Check how search engines and AI find the site</span>
+                    <span className="block font-bold text-ink">
+                      Look at how search engines and AI assistants find the site
+                    </span>
                     <span className="block text-xs font-medium text-ink-soft">
-                      Search (SEO) · AI answers (AEO) · AI search (GEO) · Marketing (MKT)
+                      Search engines · AI answers · AI search · Marketing basics
                     </span>
                     <span className="mt-1 block text-xs text-ink-soft">
                       {kind.isTestCopy && form.owner
-                        ? 'Off by default for local test copies, but you can turn it on anytime to audit SEO, AI discovery, and Marketing.'
-                        : 'Audits search engine tags, AI assistant schemas, crawler access, and marketing readiness.'}
+                        ? 'Off by default for test copies on your computer, but you can turn it on any time.'
+                        : 'Looks at search tags, what AI assistants can read, and marketing basics.'}
                     </span>
                   </span>
                 </label>
@@ -613,9 +518,9 @@ export function NewCheckupScreen({
                           }}
                         />
                         <div>
-                          <span className="font-semibold text-ink">Search (SEO)</span>
+                          <span className="font-semibold text-ink">Search engines</span>
                           <span className="block text-ink-soft">
-                            Titles, descriptions, headings, canonical, robots & sitemap
+                            Titles, descriptions, headings, robots and sitemap
                           </span>
                         </div>
                       </label>
@@ -635,8 +540,10 @@ export function NewCheckupScreen({
                           }}
                         />
                         <div>
-                          <span className="font-semibold text-ink">AI answers (AEO)</span>
-                          <span className="block text-ink-soft">FAQPage, HowTo, Organization JSON-LD markup</span>
+                          <span className="font-semibold text-ink">AI answers</span>
+                          <span className="block text-ink-soft">
+                            Question-and-answer markup that AI assistants read
+                          </span>
                         </div>
                       </label>
 
@@ -655,9 +562,9 @@ export function NewCheckupScreen({
                           }}
                         />
                         <div>
-                          <span className="font-semibold text-ink">AI search (GEO)</span>
+                          <span className="font-semibold text-ink">AI search</span>
                           <span className="block text-ink-soft">
-                            llms.txt, AI crawlers (GPTBot, ClaudeBot), citations
+                            A guide file for AI assistants, whether they may visit, and sources
                           </span>
                         </div>
                       </label>
@@ -677,9 +584,9 @@ export function NewCheckupScreen({
                           }}
                         />
                         <div>
-                          <span className="font-semibold text-ink">Marketing (MKT)</span>
+                          <span className="font-semibold text-ink">Marketing basics</span>
                           <span className="block text-ink-soft">
-                            Share previews, picture, call to action, contact & privacy
+                            Share previews, picture, call to action, contact and privacy
                           </span>
                         </div>
                       </label>
@@ -694,7 +601,7 @@ export function NewCheckupScreen({
               open={added > 0 || undefined}
             >
               <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center gap-x-2 px-5 py-3 font-bold hover:bg-panel/40 transition-colors">
-                <span>Add specs, design notes or journeys</span>
+                <span>Add notes, design rules or journeys</span>
                 <span className="font-normal text-xs text-ink-soft font-mono">(optional)</span>
                 {added > 0 && <span className="badge-tech-pass text-[10px] py-0 px-2">Added</span>}
               </summary>
@@ -733,6 +640,98 @@ export function NewCheckupScreen({
                 <ReferenceDocuments form={form} onFormChange={onFormChange} keyReady={keyReady} />
               </div>
             </details>
+
+            <details
+              className="mt-6 rounded-card border border-rule/80 bg-surface/60 overflow-hidden"
+              open={!!form.testCap || !!form.customHeaders.trim() || undefined}
+            >
+              <summary className="flex min-h-[48px] cursor-pointer items-center px-5 py-3 font-bold hover:bg-panel/40 transition-colors">
+                For developers
+              </summary>
+              <div className="space-y-4 border-t border-rule p-4 text-sm">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <label htmlFor="test-cap">Test cap</label>
+                  <input
+                    id="test-cap"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={100000}
+                    placeholder="2000"
+                    className="field w-24 py-1.5 text-sm"
+                    value={form.testCap}
+                    onChange={(e) => onFormChange((f) => ({ ...f, testCap: e.target.value }))}
+                    aria-describedby="test-cap-hint"
+                  />
+                  <span>tests at most</span>
+                  <span id="test-cap-hint" className="basis-full text-ink-soft">
+                    Past this many tests, the rest are switched off in the plan. Leave it empty for 2000.
+                  </span>
+                </div>
+
+                <div>
+                  <span className="block font-semibold text-ink">Crawl pace</span>
+                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <div className="flex items-center gap-2">
+                      <label htmlFor="crawl-concurrency">Pages at once</label>
+                      <input
+                        id="crawl-concurrency"
+                        type="number"
+                        min={1}
+                        max={5}
+                        className="field w-20 py-1.5 text-sm"
+                        value={form.crawlConcurrency}
+                        onChange={(e) => {
+                          const val = Math.max(1, Math.min(5, Number(e.target.value) || 2));
+                          onFormChange((f) => ({ ...f, crawlConcurrency: val }));
+                        }}
+                      />
+                      <span className="text-xs text-ink-soft">(1–5)</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label htmlFor="crawl-delay">Wait between pages</label>
+                      <input
+                        id="crawl-delay"
+                        type="number"
+                        min={0}
+                        max={2000}
+                        step={50}
+                        className="field w-24 py-1.5 text-sm"
+                        value={form.crawlDelayMs}
+                        onChange={(e) => {
+                          const val = Math.max(0, Math.min(2000, Number(e.target.value) || 0));
+                          onFormChange((f) => ({ ...f, crawlDelayMs: val }));
+                        }}
+                      />
+                      <span className="text-xs text-ink-soft">ms (0–2000)</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="custom-headers" className="block font-semibold text-ink">
+                    Custom headers
+                  </label>
+                  <p id="custom-headers-hint" className="text-ink-soft">
+                    For sites behind bot protection: headers sent with every request, such as an allowlist token.
+                  </p>
+                  <textarea
+                    id="custom-headers"
+                    rows={2}
+                    aria-describedby="custom-headers-hint"
+                    placeholder="X-QA-Bypass-Token: your-token&#10;User-Agent: MyCustomAgent"
+                    className="field mt-1 w-full font-mono text-xs"
+                    value={form.customHeaders}
+                    onChange={(e) => onFormChange((f) => ({ ...f, customHeaders: e.target.value }))}
+                  />
+                  {headerErrors.map((err, idx) => (
+                    <p key={idx} role="alert" className="mt-1 text-xs text-fail">
+                      {err}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            </details>
           </div>
         </details>
 
@@ -749,7 +748,7 @@ export function NewCheckupScreen({
             disabled={starting || !canStart}
             aria-describedby={blockedHint ? 'scan-blocked-hint' : 'start-hint'}
           >
-            {starting ? <Spinner label="Starting…" /> : 'Scan the site'}
+            {starting ? <Spinner label="Starting…" /> : 'Start the check-up'}
           </button>
           {blockedHint ? (
             <p id="scan-blocked-hint" role="alert" className="text-sm font-semibold text-warn">
@@ -757,13 +756,37 @@ export function NewCheckupScreen({
             </p>
           ) : (
             <p id="start-hint" className="text-sm text-ink-soft">
-              {ai && !keyReady
-                ? 'No AI key yet, so fixed rules will write the plan. Nothing is tested until you approve it.'
-                : 'Nothing is tested until you approve the plan.'}
+              {consentFlow && !form.reviewFirst
+                ? 'With these sign-in details, testing starts as soon as the plan is written. You will not review the plan first.'
+                : ai && !keyReady
+                  ? 'No AI key yet, so fixed rules will write the plan. Nothing is tested until you approve it.'
+                  : 'Nothing is tested until you approve the plan.'}
             </p>
           )}
         </div>
       </form>
+
+      {ai && !keyReady && (
+        <details className="mt-8 blueprint-card overflow-hidden">
+          <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center gap-x-2 px-5 py-3.5 font-bold hover:bg-panel/40 transition-colors">
+            <span>Connect the AI for a smarter plan</span>
+            <span className="font-normal text-xs text-ink-soft font-mono">(optional)</span>
+          </summary>
+          <div className="border-t border-rule p-5">
+            <p className="mb-4 text-sm text-ink-soft">
+              Without it, fixed rules write the plan and you can start now. With it, the AI writes a plan that fits your
+              site. It runs on OpenRouter’s free models, so it costs nothing. You only do this once, and anything you
+              typed above is kept.
+            </p>
+            <KeyField
+              onSaved={(model) => {
+                setKeyJustSaved(true);
+                onKeySaved(model);
+              }}
+            />
+          </div>
+        </details>
+      )}
 
       {recent && recent.length > 0 && (
         <section aria-labelledby="recent-title" className="mt-14">
@@ -1052,7 +1075,7 @@ function AccessChoice({
         {
           id: 'test',
           title: 'It’s a test copy I’m allowed to test fully',
-          hint: 'A copy that’s safe to fill in and send forms on, such as a staging site.',
+          hint: 'A copy you set up for testing, so forms can be filled in and sent without touching real customers or data.',
           set: { owner: true, markedTestCopy: true },
         },
       ];
@@ -1163,7 +1186,7 @@ function SignInsSection({
   return (
     <details className="mt-6 rounded-lg border-2 border-edge bg-surface" open={filled > 0 || undefined}>
       <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center gap-x-2 px-4 py-3 font-bold">
-        Test signed-in pages
+        Sign in to test pages behind a login
         <span className="font-normal text-ink-soft">(optional)</span>
         {(filled > 0 || usingSaved) && (
           <span className="rounded border border-pass px-1.5 text-xs text-pass">{usingSaved ? 'Saved' : 'Added'}</span>
@@ -1171,9 +1194,10 @@ function SignInsSection({
       </summary>
       <div className="space-y-4 border-t border-rule p-4">
         <p className="text-sm text-ink-soft">
-          The scan signs in as each role and explores what it sees, so pages behind the sign-in are planned and tested
-          too.
+          The check-up signs in as each role and explores what it sees, so pages behind the sign-in are planned and
+          tested too.
         </p>
+        <SignInFields form={form} onFormChange={onFormChange} />
         {!!saved?.length && (
           <label className="flex cursor-pointer items-start gap-3 text-sm">
             <input
@@ -1309,7 +1333,7 @@ function ImportRoles({ onFormChange }: { onFormChange: (update: (form: CheckupFo
   );
 }
 
-/** Username and password right under the address: the first sign-in (role `member` unless named in More options). */
+/** Username and password at the top of the sign-in section: the first sign-in (role `member` unless named). */
 function SignInFields({
   form,
   onFormChange,
@@ -1324,7 +1348,7 @@ function SignInFields({
       return { ...f, signIns: signIns.map((s, n) => (n === 0 ? { ...s, ...change } : s)) };
     });
   return (
-    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-3 sm:grid-cols-2">
       <label className="text-sm">
         <span className="mb-1 block font-bold">
           Email or username <span className="font-normal text-ink-soft">(optional)</span>
@@ -1384,7 +1408,7 @@ function ConsentNotice({
             checked={form.reviewFirst}
             onChange={(e) => onFormChange((f) => ({ ...f, reviewFirst: e.target.checked }))}
           />
-          <span>Show me the plan first</span>
+          <span>Let me review the plan before testing starts</span>
         </label>
         <button type="button" className="btn-link mt-3 text-sm" onClick={() => onFormChange(lookOnly)}>
           Only look at it instead

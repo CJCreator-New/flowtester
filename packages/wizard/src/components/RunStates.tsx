@@ -39,7 +39,7 @@ export function RunFailure({
 }
 
 /** A check-up address opened when no check-up is at that step, e.g. from a bookmark. */
-export function NothingInProgress({ what }: { what: string }) {
+export function NothingInProgress({ what, reportRunId }: { what: string; reportRunId?: string | null }) {
   return (
     <div className="mx-auto max-w-prose px-4 py-12 sm:px-6">
       <FocusHeading className="mb-4 text-3xl font-bold">{what}</FocusHeading>
@@ -48,6 +48,11 @@ export function NothingInProgress({ what }: { what: string }) {
         <Link to={PATHS.new} className="btn-primary">
           Start a new check-up
         </Link>
+        {reportRunId && (
+          <Link to={PATHS.report(reportRunId)} className="btn-quiet">
+            Open the last report
+          </Link>
+        )}
         <Link to={PATHS.reports} className="btn-quiet">
           Past check-ups
         </Link>

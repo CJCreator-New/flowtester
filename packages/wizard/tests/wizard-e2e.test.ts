@@ -229,8 +229,8 @@ describe('Release check-up end to end, on the one server', () => {
     );
     expectPlain(await plainText(page), 'the landing page');
     await screenshot('landing');
-    await checkPhone('/', 'landing', { role: 'link', name: 'Run a free check-up' });
-    await page.getByRole('link', { name: 'Run a free check-up' }).first().click();
+    await checkPhone('/', 'landing', { role: 'link', name: 'Start a free check-up' });
+    await page.getByRole('link', { name: 'Start a free check-up' }).first().click();
     await page.waitForURL(`${toolUrl}/check`);
     await expect.poll(() => heading(page), { timeout: 10000 }).toBe('Enter the address of the site to check');
     await expect.poll(() => page.title()).toBe('New check-up · Release check-up');
@@ -239,8 +239,10 @@ describe('Release check-up end to end, on the one server', () => {
       expect(await topBar.getByRole('link', { name }).count(), name).toBe(1);
     // Served by the QA Tool, the page never needs to explain how to start it.
     expect(await page.getByText('Start Release check-up first').count()).toBe(0);
-    // No key yet: connecting the AI comes first, on this screen.
-    await page.getByRole('heading', { name: 'Connect the AI for a smarter plan' }).waitFor();
+    // No key yet: connecting the AI is offered below the form, in a closed section.
+    const connectAI = page.locator('summary', { hasText: 'Connect the AI for a smarter plan' });
+    await connectAI.waitFor();
+    expect(await connectAI.evaluate((s) => (s.parentElement as HTMLDetailsElement).open)).toBe(false);
     expectPlain(await plainText(page), 'the new check-up');
     // A first-time visitor sees the address and one button; extra options and developer shortcuts wait.
     expect(
@@ -271,12 +273,12 @@ describe('Release check-up end to end, on the one server', () => {
     // The address actually used shows once it's checked. A site not checked before starts unticked.
     await expect
       .poll(() => page.locator('#url-status').innerText(), { timeout: 15000 })
-      .toContain(`Found ${fixtureUrl}`);
+      .toMatch(new RegExp(`Reachable\\s+${fixtureUrl}`));
     // One question for what the check-up may do; a site not checked before is only looked at.
     const owner = page.getByRole('radio', { name: /Test it fully/ });
     expect(await owner.isChecked()).toBe(false);
     expect(await page.getByRole('radio', { name: 'Only look at it' }).isChecked()).toBe(true);
-    expect(await page.locator('#url-status').innerText()).toContain('Only looked at, nothing is sent or changed.');
+    expect(await page.locator('#url-status').innerText()).toContain('Only looks: nothing is sent or changed');
     // A local address is a test copy already: there's no live-site answer to give.
     expect(await page.getByRole('radio', { name: /my live site/ }).count()).toBe(0);
 
@@ -285,17 +287,18 @@ describe('Release check-up end to end, on the one server', () => {
       await page.locator('details[data-testid="more-options"]').evaluate((d) => (d as HTMLDetailsElement).open)
     ).toBe(false);
     await page.locator('summary', { hasText: 'More options' }).click();
-    await page.getByText('Add specs, design notes or journeys').click();
+    await page.getByText('Add notes, design rules or journeys').click();
     await page.getByLabel('Specs', { exact: true }).fill(SPECS);
     // This copy isn't the shared one, so there is no shared-copy warning.
     expect(await page.getByText('This is a shared copy').count()).toBe(0);
     // No key yet doesn't stop a first scan: fixed rules write the plan, and the key is offered as an upgrade.
-    const scan = page.getByRole('button', { name: 'Scan the site' });
+    const scan = page.getByRole('button', { name: 'Start the check-up' });
     expect(await scan.isDisabled()).toBe(false);
     expect(await page.locator('#start-hint').innerText()).toBe(
       'No AI key yet, so fixed rules will write the plan. Nothing is tested until you approve it.'
     );
 
+    await page.locator('summary', { hasText: 'Connect the AI for a smarter plan' }).click();
     const key = page.getByLabel('OpenRouter key');
     await key.fill('sk-or-v1-revoked');
     await expect
@@ -312,7 +315,7 @@ describe('Release check-up end to end, on the one server', () => {
     openRouterModels.list = [FREE_MODEL];
     await save.click();
     await page.getByText('The AI is connected.').waitFor();
-    expect(await page.getByRole('heading', { name: 'Connect the AI for a smarter plan' }).count()).toBe(0);
+    expect(await page.locator('summary', { hasText: 'Connect the AI for a smarter plan' }).count()).toBe(0);
     // The QA Tool, not this browser, remembers the key and the model it chose.
     expect(await api('/api/ai/openrouter/key')).toMatchObject({ configured: true, model: FREE_MODEL.id });
 
@@ -323,9 +326,9 @@ describe('Release check-up end to end, on the one server', () => {
     await owner.check();
     await expect
       .poll(() => page.locator('#url-status').innerText())
-      .toContain('Test copy: forms can be filled in and sent.');
+      .toContain('Test copy: forms are filled in and sent');
     // Search checks are off for a test copy unless asked for; this check-up asks for them.
-    const search = page.getByRole('checkbox', { name: /Check how search engines/ });
+    const search = page.getByRole('checkbox', { name: /Look at how search engines and AI assistants/ });
     expect(await search.isChecked()).toBe(false);
     await search.check();
     // Before anything starts: about how many AI requests the scan needs, and a way to spend none.
@@ -340,15 +343,15 @@ describe('Release check-up end to end, on the one server', () => {
     const otherPage = await other.newPage();
     await otherPage.goto(`${toolUrl}/check`);
     await expect.poll(() => heading(otherPage), { timeout: 10000 }).toBe('Enter the address of the site to check');
-    expect(await otherPage.getByRole('heading', { name: 'Connect the AI for a smarter plan' }).count()).toBe(0);
+    expect(await otherPage.locator('summary', { hasText: 'Connect the AI for a smarter plan' }).count()).toBe(0);
     await other.close();
   }, 60000);
 
   it('scans, shows the plan, and keeps it waiting when you leave it', async () => {
     runRequests.length = 0;
-    await page.getByRole('button', { name: 'Scan the site' }).click();
+    await page.getByRole('button', { name: 'Start the check-up' }).click();
     await page.waitForURL(`${toolUrl}/check/scan`);
-    await expect.poll(() => heading(page)).toBe(`Scanning ${fixtureHost}`);
+    await expect.poll(() => heading(page)).toBe(`Exploring ${fixtureHost}`);
     const steps = page.getByRole('navigation', { name: 'Check-up steps' });
     expect(await steps.locator('[aria-current="step"]').innerText()).toContain('Plan');
     await page.getByRole('region', { name: 'Scan progress' }).getByText('Pages found').waitFor();
@@ -367,12 +370,13 @@ describe('Release check-up end to end, on the one server', () => {
     expect(runRequests[0]).toMatchObject({
       targetUrl: fixtureUrl,
       owner: true,
-      skipReview: false,
       mode: 'product',
       useAI: true,
       aiProvider: 'openrouter',
       searchChecks: true,
     });
+    // Review-first is the default: skipReview is only sent when the review is switched off.
+    expect(runRequests[0].skipReview).toBeFalsy();
     expect(runRequests[0].productContext).toContain('# Specs\n\n# Invoices\n- Amount must be positive');
     // The specs pasted before the key reached the plan.
     expect(await page.getByLabel('Specs, requirements or user stories').inputValue()).toContain(
@@ -416,7 +420,7 @@ describe('Release check-up end to end, on the one server', () => {
     await page.getByRole('group', { name: 'How to show the map' }).waitFor();
     await page.getByRole('tab', { name: 'Full plan' }).click();
     // On a phone the approval bar is one line with a short button.
-    await checkPhone('/check/plan', 'plan', { role: 'button', name: 'Approve' });
+    await checkPhone('/check/plan', 'plan', { role: 'button', name: 'Approve and test' });
 
     // Intents: chips filter the plan view; a switch turns a whole Intent off and the plan remembers it.
     const chips = page.getByTestId('intent-chips');
@@ -446,8 +450,8 @@ describe('Release check-up end to end, on the one server', () => {
     expect(await page.getByLabel('Site address').inputValue()).toBe(fixtureHost);
 
     // Starting another check-up asks first, and keeping the plan keeps it.
-    await expect.poll(() => page.locator('#url-status').innerText(), { timeout: 15000 }).toContain('Found');
-    await page.getByRole('button', { name: 'Scan the site' }).click();
+    await expect.poll(() => page.locator('#url-status').innerText(), { timeout: 15000 }).toContain('Reachable');
+    await page.getByRole('button', { name: 'Start the check-up' }).click();
     const ask = page.getByRole('dialog', { name: 'Start a new check-up?' });
     await ask.waitFor();
     expect(await ask.innerText()).toContain(
@@ -552,7 +556,7 @@ describe('Release check-up end to end, on the one server', () => {
       await page.getByRole('button', { name: 'Stop testing' }).click();
       const ask = page.getByRole('dialog', { name: 'Stop testing?' });
       expect(await ask.innerText()).toContain('Make a report from the tests done so far');
-      await ask.getByRole('button', { name: 'Stop testing and keep the plan' }).click();
+      await ask.getByRole('button', { name: 'Throw away the results and go back to the plan' }).click();
       await page.waitForURL(`${toolUrl}/check/plan`, { timeout: 30000 });
       await page.getByText('Testing stopped. Your plan is kept.').waitFor();
       expect(await runnerPhase()).toBe('awaiting-review');
@@ -777,7 +781,7 @@ describe('Release check-up end to end, on the one server', () => {
     expect(runRequests[0].productContext).toContain('Amount must be positive');
     expect(runRequests[0].testAgain).toBeUndefined();
     // The new scan's own progress shows, not the last one's.
-    await expect.poll(() => heading(page)).toBe(`Scanning ${fixtureHost}`);
+    await expect.poll(() => heading(page)).toBe(`Exploring ${fixtureHost}`);
     await page.getByRole('region', { name: 'Scan progress' }).getByText('Pages found').waitFor({ timeout: 30000 });
 
     await page.getByRole('button', { name: 'Stop scanning' }).click();
@@ -796,12 +800,10 @@ describe('Release check-up end to end, on the one server', () => {
     try {
       await otherPage.goto(`${toolUrl}/check`);
       await otherPage.getByLabel('Site address').fill(fixtureHost);
-      await expect.poll(() => otherPage.locator('#url-status').innerText(), { timeout: 15000 }).toContain('Found');
+      await expect.poll(() => otherPage.locator('#url-status').innerText(), { timeout: 15000 }).toContain('Reachable');
       await expect.poll(() => otherPage.getByRole('radio', { name: /Test it fully/ }).isChecked()).toBe(true);
-      expect(await otherPage.locator('#url-status').innerText()).toContain(
-        'Test copy: forms can be filled in and sent.'
-      );
-      await checkPhone('/check', 'new-checkup', { role: 'button', name: 'Scan the site' });
+      expect(await otherPage.locator('#url-status').innerText()).toContain('Test copy: forms are filled in and sent');
+      await checkPhone('/check', 'new-checkup', { role: 'button', name: 'Start the check-up' });
     } finally {
       await other.close();
     }

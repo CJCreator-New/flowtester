@@ -22,6 +22,7 @@ import {
 } from './api';
 import { useConfirm } from './components/ConfirmDialog';
 import { NothingInProgress } from './components/RunStates';
+import { addressForPhase } from './lib/phase-address';
 import { StepBar, type Step } from './components/StepBar';
 import { Spinner } from './components/text';
 import { TopBar } from './components/TopBar';
@@ -73,25 +74,11 @@ const POLL_MS = 5000;
 
 const IN_PROGRESS = new Set(['scanning', 'awaiting-review', 'testing']);
 
-/** Where the runner's phase puts the person, when they're on one of the check-up's addresses. */
-function addressForPhase(status: RunnerStatus): string | null {
-  switch (status.phase) {
-    case 'scanning':
-      return PATHS.scan;
-    case 'awaiting-review':
-      return PATHS.plan;
-    case 'testing':
-      return PATHS.testing;
-    case 'done':
-      return status.reportRunId ? PATHS.report(status.reportRunId) : null;
-    default:
-      return null;
-  }
-}
-
 /** The step bar's position for a screen, when it has one. Scanning is when the plan is made. */
 function stepOf(route: Route): Step | null {
   switch (route.name) {
+    case 'new':
+      return 'address';
     case 'scan':
     case 'plan':
       return 'plan';
@@ -170,8 +157,7 @@ export default function App() {
     const next = await getStatus();
     if (!next || asked !== epoch.current) return;
     setStatus(next);
-    if (!isCheckRoute(matchRoute(window.location.pathname))) return;
-    const target = addressForPhase(next);
+    const target = addressForPhase(next.phase, window.location.pathname);
     if (target && target !== window.location.pathname) navigate(target, { replace: true });
   }, []);
 
@@ -186,6 +172,18 @@ export default function App() {
   }, [reachable, reconcile, refreshRecent]);
 
   const inProgress = !!status?.phase && IN_PROGRESS.has(status.phase);
+
+  // Back onto a finished check-up's address would only bounce to the report: go to the new check-up instead.
+  const phase = status?.phase;
+  useEffect(() => {
+    if (phase !== 'done') return;
+    const onPop = () => {
+      const target = addressForPhase('done', window.location.pathname, true);
+      if (target) navigate(target, { replace: true });
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [phase]);
 
   // The runner's state is read again on each check-up address, and every few seconds while a
   // check-up is in progress (the events do most of the work; this catches anything missed).
@@ -407,7 +405,7 @@ export default function App() {
         setAi((a) => ({ model: a?.model ?? null, configured: false }));
         setStartError(
           matchRoute(window.location.pathname).name === 'new'
-            ? 'The AI isn’t connected yet. Connect it above, or scan again to plan with fixed rules.'
+            ? 'The AI isn’t connected. Connect it on this page, or start again without it: fixed rules will write the plan.'
             : 'An AI key is needed first. Add it in Settings, then try again.'
         );
       } else {
@@ -582,7 +580,7 @@ export default function App() {
     resetRun();
     setStatus((s) => (s ? { ...s, phase: 'idle', isRunning: false, runId: null, targetUrl: null } : s));
     // Back to the new check-up, with everything still filled in.
-    navigate(PATHS.new);
+    navigate(PATHS.new, { replace: true });
   };
 
   const stopTesting = async () => {
@@ -590,12 +588,12 @@ export default function App() {
       title: 'Stop testing?',
       body: (
         <p>
-          Make a report from the tests done so far (marked as a partial check-up), or go back to the plan to change it
-          and approve it again, throwing the results away.
+          Make a report from the tests done so far (marked as a partial check-up), or go back to the plan. Going back
+          throws away the results so far.
         </p>
       ),
       confirmLabel: 'Make a report from what’s done',
-      altLabel: 'Stop testing and keep the plan',
+      altLabel: 'Throw away the results and go back to the plan',
       altDanger: true,
       cancelLabel: 'Keep testing',
     });
@@ -691,6 +689,7 @@ export default function App() {
   const scanFailure =
     feed.failure ?? (status?.phase === 'failed' ? plainFailure(status.lastRunError, 'product') : null);
 
+  const nothingInProgress = (what: string) => <NothingInProgress what={what} reportRunId={status?.reportRunId} />;
   let body: ReactNode;
   if (route.name === 'landing') {
     body = <LandingScreen />;
@@ -729,7 +728,7 @@ export default function App() {
             onStop={() => void stopScan()}
           />
         ) : (
-          <NothingInProgress what="Nothing is being scanned" />
+          nothingInProgress('Nothing is being scanned')
         );
         break;
       case 'plan':
@@ -749,7 +748,7 @@ export default function App() {
           ) : !status || status.phase === 'awaiting-review' ? (
             <Loading label="Opening the plan…" />
           ) : (
-            <NothingInProgress what="No plan is waiting for review" />
+            nothingInProgress('No plan is waiting for review')
           );
         break;
       case 'testing':
@@ -765,7 +764,7 @@ export default function App() {
             onBackToPlan={() => navigate(PATHS.plan)}
           />
         ) : (
-          <NothingInProgress what="Nothing is being tested" />
+          nothingInProgress('Nothing is being tested')
         );
         break;
       case 'reports':

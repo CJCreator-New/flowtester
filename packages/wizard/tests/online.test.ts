@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_WAKE_LIMIT_MS, startAddress, wakeAddress, wakeLimitMs } from '../src/lib/online';
 
-describe('where "Run a free check-up" leads', () => {
+describe('where "Start a free check-up" leads', () => {
   it('stays on this site when no online copy is published', () => {
     expect(startAddress(null, 'https://app.example.com')).toBe('/check');
   });

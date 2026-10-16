@@ -155,7 +155,7 @@ function AddressForm() {
         type="submit"
         className="btn-primary min-h-[52px] whitespace-nowrap px-8 font-bold shadow-level-2 hover:shadow-level-3"
       >
-        Run a free check-up
+        Start a free check-up
       </button>
     </form>
   );
@@ -275,8 +275,10 @@ export function LandingScreen() {
               <ThemeToggle className={`${NAV_LINK} rounded border border-rule`} />
             </nav>
             <StartButton className="btn-primary min-h-[44px] whitespace-nowrap px-2.5 text-xs sm:px-4 sm:text-sm">
-              <span className="sm:hidden">Check-up</span>
-              <span className="hidden sm:inline">Run a free check-up</span>
+              <span className="sm:hidden">
+                Start<span className="sr-only"> a free check-up</span>
+              </span>
+              <span className="hidden sm:inline">Start a free check-up</span>
             </StartButton>
             <MobileMenu />
           </div>
@@ -498,7 +500,7 @@ export function LandingScreen() {
             </p>
             <p className="mt-8">
               <StartButton className="btn-primary px-10 shadow-level-3 hover:shadow-level-4 font-bold">
-                Run a free check-up
+                Start a free check-up
               </StartButton>
             </p>
           </div>

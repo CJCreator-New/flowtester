@@ -21,7 +21,6 @@ import {
   replanItem,
   type PlanDelta,
 } from '../api';
-import { Link, PATHS } from '../lib/router';
 import type { ConfirmOptions } from '../components/ConfirmDialog';
 
 /** A background change to the plan (re-planning, adding pages), as the QA Tool reports it. */
@@ -115,7 +114,6 @@ export function PlanReviewScreen({
   const [error, setError] = useState<string | null>(null);
   const [switched, setSwitched] = useState<Record<string, boolean>>({});
   const [sizes, setSizes] = useState<Breakpoint[] | null>(null);
-  const [barOpen, setBarOpen] = useState(false);
   // The Intents switched off: the Plan's own list, shown at once while a change is saved.
   const [sentOff, setSentOff] = useState<PlanIntent[] | null>(null);
   const intentsOff = sentOff ?? plan.intentsOff ?? [];
@@ -333,19 +331,6 @@ export function PlanReviewScreen({
       <div className="border-b border-rule bg-surface px-4 py-4 sm:px-6">
         <div className="mx-auto flex max-w-6xl flex-wrap items-end justify-between gap-3">
           <div className="min-w-0">
-            <nav aria-label="Breadcrumbs" className="mb-2 flex flex-wrap items-center gap-2 text-sm text-ink-soft">
-              <Link to={PATHS.new} className="hover:text-ink transition-colors">
-                New check-up
-              </Link>
-              <span aria-hidden="true" className="text-rule">
-                /
-              </span>
-              <span className="font-semibold text-ink">{host}</span>
-              <span aria-hidden="true" className="text-rule">
-                /
-              </span>
-              <span className="text-ink-soft">Plan review</span>
-            </nav>
             <FocusHeading className="break-words text-2xl font-bold text-ink sm:text-3xl">
               Review the plan for {host}
             </FocusHeading>
@@ -430,38 +415,36 @@ export function PlanReviewScreen({
       </div>
 
       <div className="sticky bottom-0 z-40 border-t border-rule bg-surface/95 px-4 py-2 backdrop-blur sm:px-6 sm:py-3">
-        {/* Phones: one line that opens into the summary, so the bar doesn't cover the plan. */}
-        <div className="flex items-center justify-between gap-3 sm:hidden">
+        {/* Phones: one row, then a link to the full summary in the plan. */}
+        <div className="sm:hidden">
+          <div className="flex items-center justify-between gap-3">
+            <p className="min-w-0 flex-1 text-sm font-bold text-ink">
+              {tests !== undefined
+                ? `${count(tests, 'test', 'tests')}${minutes ? `, about ${minutes} min` : ''}`
+                : 'Ready to test'}
+            </p>
+            <button
+              type="button"
+              className="btn-primary min-h-[44px] shrink-0 px-4"
+              disabled={busy || approving}
+              onClick={() => onApprove()}
+            >
+              {approving ? <Spinner label="Starting…" /> : 'Approve and test'}
+            </button>
+          </div>
           <button
             type="button"
-            className="min-h-[44px] min-w-0 flex-1 text-left text-sm font-bold text-ink"
-            aria-expanded={barOpen}
-            onClick={() => setBarOpen((o) => !o)}
+            className="inline-flex min-h-[44px] items-center text-sm font-bold text-stamp underline"
+            onClick={() => {
+              selectTab('plan');
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => document.getElementById('plan-summary')?.scrollIntoView({ block: 'start' }))
+              );
+            }}
           >
-            {tests !== undefined
-              ? `${count(tests, 'test', 'tests')}${minutes ? ` · about ${minutes} min` : ''}`
-              : 'Ready to test'}{' '}
-            {barOpen ? '▾' : '▸'}
-          </button>
-          <button
-            type="button"
-            className="btn-primary min-h-[44px] shrink-0 px-4"
-            disabled={busy || approving}
-            onClick={() => onApprove()}
-          >
-            {approving ? <Spinner label="Starting…" /> : 'Approve'}
+            What approving runs
           </button>
         </div>
-        {barOpen && (
-          <p className="pb-2 text-sm text-ink-soft sm:hidden">
-            {lines.length > 1
-              ? lines
-                  .slice(1)
-                  .map((l) => l.text)
-                  .join(' · ')
-              : 'Nothing runs until you approve.'}
-          </p>
-        )}
         <div className="mx-auto hidden max-w-6xl flex-wrap items-center justify-between gap-3 sm:flex">
           <div className="min-w-0 flex-1 text-sm text-ink">
             <p className="font-bold">

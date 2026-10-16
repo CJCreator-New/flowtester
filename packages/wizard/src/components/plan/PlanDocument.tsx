@@ -823,7 +823,7 @@ function QuestionsSection({ plan, actions }: { plan: ReviewPlan; actions: PlanAc
       title="Questions before testing"
       count={plan.questions.length}
       collapsible
-      intro="Anything you leave unanswered uses the safe answer, which sends and deletes nothing."
+      intro="Anything you leave unanswered gets the cautious answer: nothing is sent or deleted."
     >
       <ul className="space-y-3">
         {shown.map((q) => (

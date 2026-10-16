@@ -94,11 +94,11 @@ describe('T-108: scanBlockedHint and Start button blocking', () => {
     expect(html).toContain('Tick &#x27;I accept this&#x27; to scan with sign-in');
     expect(html).toMatch(/aria-describedby="[^"]*scan-blocked-hint[^"]*"/);
     expect(html).toMatch(
-      /<button[^>]*disabled=""[^>]*aria-describedby="[^"]*scan-blocked-hint[^"]*"[^>]*>Scan the site<\/button>/
+      /<button[^>]*disabled=""[^>]*aria-describedby="[^"]*scan-blocked-hint[^"]*"[^>]*>Start the check-up<\/button>/
     );
   });
 
-  it('disables Scan the site button and renders error when header is invalid', () => {
+  it('disables Start the check-up button and renders error when header is invalid', () => {
     const form = {
       ...EMPTY_FORM,
       address: 'https://example.com',
@@ -121,7 +121,7 @@ describe('T-108: scanBlockedHint and Start button blocking', () => {
 
     expect(html).toContain('role="alert"');
     expect(html).toMatch(/line 1/i);
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Scan the site<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Start the check-up<\/button>/);
   });
 });
 

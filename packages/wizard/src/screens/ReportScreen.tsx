@@ -124,6 +124,31 @@ function useLightReport(): [boolean, (on: boolean) => void] {
   return [light, set];
 }
 
+/**
+ * "2 blockers, and your rule allows 0." from the verdict's counts and the rule's limits; area score
+ * breaches have no counts, so their own texts follow.
+ */
+function ruleBreachText(v: ReturnType<typeof releaseVerdict>): string {
+  const limits: Array<[keyof typeof v.counts, string, number | undefined]> = [
+    ['Blocker', 'blocker', v.gate?.maxBlockers ?? 0],
+    ['Major', 'major', v.gate?.maxMajors],
+    ['Minor', 'minor', v.gate?.maxMinors],
+  ];
+  const over = limits.filter(([sev, , max]) => max !== undefined && v.counts[sev] > max);
+  const rest = (v.breaches ?? []).filter((b) => !/^\d+ (blocker|major|minor) problems? \(/.test(b));
+  const parts: string[] = [];
+  if (over.length === 1) {
+    const [sev, word, max] = over[0];
+    parts.push(`${v.counts[sev]} ${word}${v.counts[sev] === 1 ? '' : 's'}, and your rule allows ${max}.`);
+  } else if (over.length > 1) {
+    parts.push(
+      `${over.map(([sev, word, max]) => `${v.counts[sev]} ${word}${v.counts[sev] === 1 ? '' : 's'} (your rule allows ${max})`).join(', ')}.`
+    );
+  }
+  parts.push(...rest.map((b) => `${b}.`));
+  return parts.join(' ');
+}
+
 export function Report({
   report,
   actions,
@@ -252,6 +277,24 @@ export function Report({
               Tested with the plan you approved on {formatDay(report.testedWithApprovedPlan)}.
             </p>
           )}
+          {/* The person's own rule, kept in this browser: shown, never a second verdict. */}
+          {evaluatedGate.gate && (
+            <>
+              <p className="mt-2 text-sm text-ink">
+                {evaluatedGate.ready
+                  ? 'Your release rule: met'
+                  : `Your release rule: not met. ${ruleBreachText(evaluatedGate)}`.trim()}
+              </p>
+              {!evaluatedGate.ready && summary.ready && (
+                <p className="text-sm text-ink-soft">
+                  Your rule is stricter than the verdict above. The stamp does not change.{' '}
+                  <Link to={PATHS.settings} className="font-bold text-stamp hover:underline print:hidden">
+                    Change the rule
+                  </Link>
+                </p>
+              )}
+            </>
+          )}
         </div>
       </header>
 
@@ -262,59 +305,6 @@ export function Report({
         </Notice>
       )}
 
-      <ReportActionsBar report={report} actions={actions} light={light} onLight={setLight} />
-
-      {/* Quality Gate Status */}
-      {evaluatedGate.gate && (
-        <section
-          aria-labelledby="gate-verdict-title"
-          className="rounded-panel border border-edge bg-surface/60 p-4 shadow-level-1"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <span id="gate-verdict-title" className="text-xs font-bold uppercase tracking-wider text-ink-soft">
-                Quality Gate:
-              </span>
-              <span className="font-bold text-ink">
-                {evaluatedGate.gate.strictAccessibility
-                  ? 'Strict'
-                  : evaluatedGate.gate.maxBlockers === 0
-                    ? 'Standard'
-                    : 'Lenient'}
-              </span>
-              <span
-                className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${
-                  evaluatedGate.ready ? 'bg-pass/15 text-pass' : 'bg-fail/15 text-fail'
-                }`}
-              >
-                {evaluatedGate.ready ? 'Passed' : 'Breached'}
-              </span>
-            </div>
-            <Link to={PATHS.settings} className="text-xs font-bold text-stamp hover:underline">
-              Adjust Gate Criteria →
-            </Link>
-          </div>
-          {evaluatedGate.breaches && evaluatedGate.breaches.length > 0 && (
-            <div className="mt-2.5 space-y-1">
-              <span className="text-xs font-bold text-fail">Threshold Breaches:</span>
-              <ul className="list-disc pl-5 text-xs text-fail space-y-0.5">
-                {evaluatedGate.breaches.map((b: string, idx: number) => (
-                  <li key={idx}>{b}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </section>
-      )}
-
-      <VisualReview report={report} onReportChanged={onReportChanged} />
-
-      <PageCoverageSection report={report} />
-
-      <RolesNotTestedSection report={report} />
-
-      <SourcesSummary report={report} />
-
       <Problems
         report={report}
         pageFilter={pageFilter}
@@ -322,6 +312,14 @@ export function Report({
         sectionRef={problemsRef}
         onReportChanged={onReportChanged}
       />
+
+      <ReportActionsBar report={report} actions={actions} hasProblems={summary.total > 0} />
+
+      <DownloadBar report={report} light={light} onLight={setLight} />
+
+      <VisualReview report={report} onReportChanged={onReportChanged} />
+
+      <TestedDetails report={report} />
 
       {/* Only once there's an earlier check-up to compare with. */}
       {report.history?.previousTimestamp && <Changes report={report} />}
@@ -513,22 +511,18 @@ function VisualReview({
   );
 }
 
-function ReportActionsBar({
+/** Under the stamp: download, print or lighten the report. */
+function DownloadBar({
   report,
-  actions,
   light,
   onLight,
 }: {
   report: ReleaseReport;
-  actions: ReportActions;
   light: boolean;
   onLight: (on: boolean) => void;
 }) {
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [deeper, setDeeper] = useState(false);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
 
   return (
     <div className="print:hidden">
@@ -551,6 +545,38 @@ function ReportActionsBar({
         >
           {downloading ? <Spinner label="Downloading…" /> : 'Download the report'}
         </button>
+        <span className="flex flex-wrap items-center gap-3 sm:ml-auto">
+          <button type="button" className="btn-link" aria-pressed={light} onClick={() => onLight(!light)}>
+            {light ? 'Dark view' : 'Light view'}
+          </button>
+          <button type="button" className="btn-link" onClick={() => window.print()}>
+            Print
+          </button>
+        </span>
+      </div>
+      {downloadError && <ErrorMessage>{downloadError}</ErrorMessage>}
+    </div>
+  );
+}
+
+/** After the problems: the next step is to fix them, then test again or go deeper. */
+function ReportActionsBar({
+  report,
+  actions,
+  hasProblems,
+}: {
+  report: ReleaseReport;
+  actions: ReportActions;
+  hasProblems: boolean;
+}) {
+  const [deeper, setDeeper] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+
+  return (
+    <div className="print:hidden">
+      <div className="flex flex-wrap items-center gap-3">
+        {hasProblems && <p className="font-bold text-ink">Fixed some of these?</p>}
         <button
           type="button"
           className="btn-quiet"
@@ -562,16 +588,7 @@ function ReportActionsBar({
         <button type="button" className="btn-link" aria-expanded={deeper} onClick={() => setDeeper((d) => !d)}>
           Go deeper: test the signed-in pages
         </button>
-        <span className="flex flex-wrap items-center gap-3 sm:ml-auto">
-          <button type="button" className="btn-link" aria-pressed={light} onClick={() => onLight(!light)}>
-            {light ? 'Dark view' : 'Light view'}
-          </button>
-          <button type="button" className="btn-link" onClick={() => window.print()}>
-            Print
-          </button>
-        </span>
       </div>
-      {downloadError && <ErrorMessage>{downloadError}</ErrorMessage>}
       {actions.actionError && <ErrorMessage>{actions.actionError}</ErrorMessage>}
 
       {deeper && (
@@ -618,7 +635,7 @@ function ReportActionsBar({
             </div>
           </div>
           <button type="submit" className="btn-primary" disabled={actions.starting || !username.trim() || !password}>
-            Scan the signed-in pages
+            Start with these sign-in details
           </button>
         </form>
       )}
@@ -1080,6 +1097,64 @@ const BUCKET_BORDER: Record<Bucket, string> = {
 /**
  * Crawl coverage: reached vs found pages and a collapsible list of skipped pages with plain reasons.
  */
+/**
+ * Pages reached, roles not tested and documents, collapsed under one line that always shows
+ * the gaps (ADR 0018: what was not checked is never hidden).
+ */
+function TestedDetails({ report }: { report: ReleaseReport }) {
+  const pages = report.pageCoverage;
+  const roles = report.rolesNotTested ?? [];
+  const documents = !!documentedLine(report.documentedItems) || (report.documentedItems?.notFound ?? []).length > 0;
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const hidden = !pages && roles.length === 0 && !documents;
+
+  // A closed <details> prints without its content: open it (and the lists inside) for printing, then restore.
+  useEffect(() => {
+    if (hidden) return;
+    let reopened: HTMLDetailsElement[] = [];
+    const beforePrint = () => {
+      const root = detailsRef.current;
+      if (!root) return;
+      reopened = [root, ...root.querySelectorAll<HTMLDetailsElement>('details')].filter((d) => !d.open);
+      reopened.forEach((d) => (d.open = true));
+    };
+    const afterPrint = () => {
+      reopened.forEach((d) => (d.open = false));
+      reopened = [];
+    };
+    window.addEventListener('beforeprint', beforePrint);
+    window.addEventListener('afterprint', afterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', beforePrint);
+      window.removeEventListener('afterprint', afterPrint);
+    };
+  }, [hidden]);
+
+  if (hidden) return null;
+
+  const gaps = [
+    pages && `${pages.reached} of ${count(pages.found, 'page', 'pages')} reached`,
+    roles.length > 0 && `${count(roles.length, 'role', 'roles')} not tested`,
+  ].filter(Boolean);
+  return (
+    <section aria-labelledby="tested-title">
+      <details ref={detailsRef} className="rounded-card border border-edge bg-surface/40 shadow-level-2">
+        <summary className="flex min-h-[56px] cursor-pointer items-center px-4 py-3">
+          <h2 id="tested-title" className="text-2xl font-bold">
+            What was and wasn’t tested
+            {gaps.length > 0 && <span className="text-base font-normal text-ink-soft">: {gaps.join(', ')}</span>}
+          </h2>
+        </summary>
+        <div className="space-y-6 border-t border-rule p-4">
+          <PageCoverageSection report={report} />
+          <RolesNotTestedSection report={report} />
+          <SourcesSummary report={report} />
+        </div>
+      </details>
+    </section>
+  );
+}
+
 function PageCoverageSection({ report }: { report: ReleaseReport }) {
   const coverage = report.pageCoverage;
   if (!coverage) return null;
@@ -1091,9 +1166,9 @@ function PageCoverageSection({ report }: { report: ReleaseReport }) {
       className="space-y-4 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm"
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
-        <h2 id="coverage-title" className="text-xl font-bold">
+        <h3 id="coverage-title" className="text-xl font-bold">
           Crawl coverage
-        </h2>
+        </h3>
         <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">
           Pages reached {coverage.reached} of {coverage.found}
         </span>
@@ -1135,10 +1210,10 @@ function RolesNotTestedSection({ report }: { report: ReleaseReport }) {
       aria-labelledby="roles-not-tested-title"
       className="space-y-3 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm"
     >
-      <h2 id="roles-not-tested-title" className="text-xl font-bold">
+      <h3 id="roles-not-tested-title" className="text-xl font-bold">
         Roles not tested, and why
         <span className="sr-only">Roles not tested and why</span>
-      </h2>
+      </h3>
       <ul className="list-disc space-y-1 pl-5 text-sm text-ink">
         {roles.map((r) => (
           <li key={r.role}>
@@ -1198,17 +1273,17 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
       className="space-y-4 rounded-xl border border-rule bg-surface/50 p-6 shadow-sm"
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
-        <h2 id="sources-title" className="text-xl font-bold">
-          Living Spec Conformance
-        </h2>
+        <h3 id="sources-title" className="text-xl font-bold">
+          How the site matches its spec
+        </h3>
         {line && <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">{line}</span>}
       </div>
 
       {notFound.length > 0 && (
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">
-            Unreached Documented Requirements ({notFound.length})
-          </h3>
+          <h4 className="text-sm font-semibold text-ink-soft">
+            Documented requirements not reached ({notFound.length})
+          </h4>
           <div className="space-y-3">
             {notFound.map((item, i) => {
               const reqId = item.docSource.requirementId || item.docSource.section || item.docSource.document;

@@ -21,9 +21,9 @@ const filled = (patch: Partial<CheckupForm> = {}): CheckupForm => ({
 });
 
 describe('sign-in consent in the form', () => {
-  it('starts without consent and without reviewing first', () => {
+  it('starts without consent and with reviewing first', () => {
     expect(EMPTY_FORM.signInConsent).toBe(false);
-    expect(EMPTY_FORM.reviewFirst).toBe(false);
+    expect(EMPTY_FORM.reviewFirst).toBe(true);
   });
   it('needs both username and password', () => {
     expect(hasSignInDetails(EMPTY_FORM)).toBe(false);
@@ -45,7 +45,7 @@ describe('consent cannot go stale or leak', () => {
   it('a host change resets consent and plan-first; a path change keeps them', () => {
     const moved = withAddress(consented(), 'b.example.com', hostFor);
     expect(moved.signInConsent).toBe(false);
-    expect(moved.reviewFirst).toBe(false);
+    expect(moved.reviewFirst).toBe(true);
     expect(withAddress(consented(), 'a.example.com/pricing', hostFor).signInConsent).toBe(true);
   });
   it('emptying the username or password resets consent', () => {
@@ -72,7 +72,7 @@ describe('consent cannot go stale or leak', () => {
   it('is reset after a run starts', () => {
     const next = afterStart(consented({ rememberTouched: true }));
     expect(next.signInConsent).toBe(false);
-    expect(next.reviewFirst).toBe(false);
+    expect(next.reviewFirst).toBe(true);
     expect(next.rememberTouched).toBe(false);
   });
   it('"Only look at it" clears consent and the quick fields, keeps a second role', () => {

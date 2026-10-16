@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Link, PATHS, type Route } from '../lib/router';
 
 /** The mark: an inspector's stamp with a tick. */
@@ -27,6 +28,82 @@ export function Mark({ size = 24 }: { size?: number }) {
   );
 }
 
+type NavItem = { to: string; label: string; names: Route['name'][] };
+const PRIMARY: NavItem[] = [
+  { to: PATHS.new, label: 'New check-up', names: ['new'] },
+  { to: PATHS.reports, label: 'Past check-ups', names: ['reports', 'report'] },
+  { to: PATHS.settings, label: 'Settings', names: ['settings'] },
+];
+const MORE: NavItem[] = [
+  { to: PATHS.baselines, label: 'Baselines', names: ['baselines'] },
+  { to: PATHS.benchmark, label: 'Compare sites', names: ['benchmark'] },
+];
+/** Check-up screens show the StepBar instead of a breadcrumb row. */
+const NO_CRUMBS: Route['name'][] = ['new', 'scan', 'plan', 'testing', 'report'];
+
+const ITEM =
+  'inline-flex min-h-[44px] items-center rounded-control px-2.5 text-sm font-bold transition-colors duration-150 hover:bg-panel hover:text-ink';
+const tone = (active?: string) =>
+  active ? 'bg-panel text-ink underline decoration-stamp decoration-2 underline-offset-8' : 'text-ink-soft';
+
+function NavLink({
+  item: l,
+  route,
+  checkupInProgress,
+  onNavigate,
+  extra = '',
+}: {
+  item: NavItem;
+  route: Route;
+  checkupInProgress: boolean;
+  onNavigate: () => void;
+  extra?: string;
+}) {
+  const current = l.names.includes(route.name) ? 'page' : undefined;
+  return (
+    <Link to={l.to} aria-current={current} onClick={onNavigate} className={`${ITEM} ${tone(current)} ${extra}`}>
+      {l.label}
+      {l.to === PATHS.new && checkupInProgress && route.name !== 'new' && (
+        <span className="relative ml-2 flex h-2 w-2" aria-label="(a check-up is in progress)" role="img">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-stamp opacity-75" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-stamp" />
+        </span>
+      )}
+    </Link>
+  );
+}
+
+/** Phones: every destination in one full-width list under the brand row. */
+export function MobileMenu({
+  items,
+  route,
+  checkupInProgress,
+  onNavigate,
+}: {
+  items: NavItem[];
+  route: Route;
+  checkupInProgress: boolean;
+  onNavigate: () => void;
+}) {
+  return (
+    <nav id="mobile-menu" aria-label="Main" className="basis-full sm:hidden">
+      <ul>
+        {items.map((l) => (
+          <li key={l.to}>
+            <NavLink
+              item={l}
+              route={route}
+              checkupInProgress={checkupInProgress}
+              onNavigate={onNavigate}
+              extra="w-full"
+            />
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
 /**
  * On every screen: the places you can go. Nothing here stops or deletes anything. The check-up in
  * progress is reached from its Resume card on the new check-up screen.
@@ -41,11 +118,46 @@ export function TopBar({
   /** The Commands and shortcuts buttons: hidden until a first check-up is done. The keys still work. */
   showDeveloperShortcuts?: boolean;
 }) {
-  const current = (names: Route['name'][]) => (names.includes(route.name) ? 'page' : undefined);
-  const item =
-    'inline-flex min-h-[44px] items-center rounded-control px-2.5 text-sm font-bold transition-colors duration-150 hover:bg-panel hover:text-ink';
-  const tone = (active?: string) =>
-    active ? 'bg-panel text-ink underline decoration-stamp decoration-2 underline-offset-8' : 'text-ink-soft';
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLLIElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const close = () => {
+    setMenuOpen(false);
+    setMoreOpen(false);
+  };
+  const link = (l: NavItem, extra = '') => (
+    <NavLink item={l} route={route} checkupInProgress={checkupInProgress} onNavigate={close} extra={extra} />
+  );
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setMoreOpen(false);
+      moreButtonRef.current?.focus();
+    };
+    const onDown = (e: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown);
+    };
+  }, [moreOpen]);
+
+  useEffect(() => {
+    if (!menuOpen || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(min-width: 640px)');
+    const onChange = (e: MediaQueryListEvent) => {
+      if (e.matches) setMenuOpen(false);
+    };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [menuOpen]);
+
   return (
     <header className="sticky top-0 z-50 border-b border-rule/80 bg-surface/85 backdrop-blur-md shadow-level-1 supports-[backdrop-filter]:bg-surface/75">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-1 px-4 py-1.5 sm:px-6">
@@ -86,59 +198,50 @@ export function TopBar({
             </>
           )}
         </div>
-        <nav aria-label="Main">
-          <ul className="flex flex-wrap items-center gap-x-3 sm:gap-x-5">
-            <li>
-              <Link to={PATHS.new} aria-current={current(['new'])} className={`${item} ${tone(current(['new']))}`}>
-                New check-up
-                {checkupInProgress && route.name !== 'new' && (
-                  <span className="relative ml-2 flex h-2 w-2" aria-label="(a check-up is in progress)" role="img">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-stamp opacity-75" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-stamp" />
-                  </span>
-                )}
-              </Link>
-            </li>
-            <li>
-              <Link
-                to={PATHS.reports}
-                aria-current={current(['reports', 'report'])}
-                className={`${item} ${tone(current(['reports', 'report']))}`}
+        <button
+          type="button"
+          aria-expanded={menuOpen}
+          aria-controls={menuOpen ? 'mobile-menu' : undefined}
+          onClick={() => setMenuOpen((o) => !o)}
+          className={`${ITEM} border border-edge/60 text-ink sm:hidden`}
+        >
+          Menu
+        </button>
+        <nav aria-label="Main" className="hidden sm:block">
+          <ul className="flex items-center gap-x-5">
+            {PRIMARY.map((l) => (
+              <li key={l.to}>{link(l)}</li>
+            ))}
+            <li className="relative" ref={moreRef}>
+              <button
+                type="button"
+                ref={moreButtonRef}
+                aria-expanded={moreOpen}
+                onClick={() => setMoreOpen((o) => !o)}
+                className={`${ITEM} ${tone(MORE.some((l) => l.names.includes(route.name)) ? 'page' : undefined)}`}
               >
-                Past check-ups
-              </Link>
-            </li>
-            <li>
-              <Link
-                to={PATHS.baselines}
-                aria-current={current(['baselines'])}
-                className={`${item} ${tone(current(['baselines']))}`}
-              >
-                Baselines
-              </Link>
-            </li>
-            <li>
-              <Link
-                to={PATHS.benchmark}
-                aria-current={current(['benchmark'])}
-                className={`${item} ${tone(current(['benchmark']))}`}
-              >
-                Compare sites
-              </Link>
-            </li>
-            <li>
-              <Link
-                to={PATHS.settings}
-                aria-current={current(['settings'])}
-                className={`${item} ${tone(current(['settings']))}`}
-              >
-                Settings
-              </Link>
+                More
+              </button>
+              {moreOpen && (
+                <ul className="absolute right-0 top-full z-50 min-w-[11rem] rounded-control border border-rule bg-surface p-1 shadow-level-1">
+                  {MORE.map((l) => (
+                    <li key={l.to}>{link(l, 'w-full')}</li>
+                  ))}
+                </ul>
+              )}
             </li>
           </ul>
         </nav>
+        {menuOpen && (
+          <MobileMenu
+            items={[...PRIMARY, ...MORE]}
+            route={route}
+            checkupInProgress={checkupInProgress}
+            onNavigate={close}
+          />
+        )}
       </div>
-      {route.name !== 'landing' && (
+      {!NO_CRUMBS.includes(route.name) && route.name !== 'landing' && (
         <div className="border-t border-rule/50 bg-panel/40">
           <nav
             aria-label="Breadcrumb"

@@ -61,7 +61,7 @@ export function StepBar({ current, links = {} }: { current: Step; links?: Partia
                 {href ? (
                   <Link
                     to={href}
-                    className="inline-flex min-h-[36px] items-center gap-2 rounded px-1 transition-colors hover:underline"
+                    className="inline-flex min-h-[44px] items-center gap-2 rounded px-1 transition-colors hover:underline"
                   >
                     {content}
                   </Link>
