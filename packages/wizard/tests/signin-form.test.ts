@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SIGN_IN_FAILURE_REASONS, signInReasonText } from '@qa/types/src/signin.js';
+import { SIGN_IN_FAILURE_REASONS, signInReasonText } from '@qa/types/src/browser.js';
 import {
   EMPTY_FORM,
   EMPTY_SIGN_IN,

@@ -97,6 +97,7 @@ export class TestPlanner {
         expectations: answered ??
           flow.candidateExpectations ?? {
             url: { pattern: '/*' },
+            pageWorks: { description: 'Flow completed without page errors or crash' },
           },
         validationRules: flow.candidateValidationRules,
       });

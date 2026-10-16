@@ -1,14 +1,15 @@
 import type { AspectType, CheckerType, Finding, FindingSeverity, ReleaseReport } from '@qa/types';
-// The verdict and problem modules only: the package index also exports Node-only code (fingerprints).
-import { countsTowardVerdict, releaseVerdict } from '@qa/types/src/verdict.js';
+// The browser-safe entry, not the package index: the index also exports Node-only code (fingerprints).
 import {
   ASPECT_CHECKERS,
   ASPECTS,
   aspectOfChecker,
+  countsTowardVerdict,
   groupIntoProblems,
   plainTitleText,
+  releaseVerdict,
   SEVERITY_ORDER,
-} from '@qa/types/src/problems.js';
+} from '@qa/types/src/browser.js';
 
 export interface SeverityCount {
   severity: FindingSeverity;

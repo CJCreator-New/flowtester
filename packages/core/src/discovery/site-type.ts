@@ -1,4 +1,4 @@
-import type { DiscoveredFlow, PageInventoryItem, RoleCredential } from '@qa/types';
+import type { DiscoveredFlow, PageInventoryItem, RoleCredential, TestCaseStep } from '@qa/types';
 import type { SpiderResult } from './deterministic-spider.js';
 
 export type SiteType = 'shop' | 'SaaS' | 'content' | 'booking' | 'app' | 'other';
@@ -112,6 +112,8 @@ export function generateFallbackJourneys(
   let flowCounter = 1;
   const homePage = spiderResult.pages.find((p) => p.urlPath === '/' || p.urlPath === '') || spiderResult.pages[0];
 
+  const NON_FILLABLE_TYPES = new Set(['submit', 'button', 'reset', 'checkbox', 'radio', 'file', 'image', 'hidden']);
+
   // 1. Site-type specific primary journey
   if (siteType === 'shop' && homePage) {
     const productLink = homePage.elements?.find(
@@ -158,8 +160,52 @@ export function generateFallbackJourneys(
     }
   }
 
+  // 1b. App with CRUD structure
+  const crudPage = spiderResult.pages.find((p) => p.crud?.list && p.crud?.add);
+  if (crudPage && crudPage.crud && flows.length < 3) {
+    const crudForms = spiderResult.forms.filter(
+      (f) => f.urlPath === crudPage.urlPath && !f.inputs.some((i) => i.type === 'password')
+    );
+    const addForm = crudForms[0];
+    const fillable = addForm?.inputs.filter((i) => !NON_FILLABLE_TYPES.has(i.type));
+    const submitBtn = addForm?.submitButtonSelector;
+    const addControl = crudPage.elements?.find((el) => el.role === 'button' && /add|new|create/i.test(el.name));
+
+    const steps: TestCaseStep[] = [
+      { action: 'navigate', value: crudPage.urlPath || '/', name: `Open ${crudPage.title || crudPage.urlPath}` },
+    ];
+    if (addControl && !addForm) {
+      steps.push({ action: 'click' as const, selector: addControl.selector, name: `Click "${addControl.name}"` });
+    }
+    if (fillable && fillable.length > 0 && submitBtn) {
+      for (const inp of fillable) {
+        steps.push({
+          action: 'fill' as const,
+          selector: inp.selector,
+          value: 'qa-test-item',
+          name: `Enter test data in ${inp.label || 'field'}`,
+        });
+      }
+      steps.push({ action: 'click' as const, selector: submitBtn, name: 'Save item' });
+      steps.push({ action: 'wait' as const, name: 'Wait for list to update' });
+    }
+    if (steps.length > 1) {
+      flows.push({
+        id: flowId(flowCounter++),
+        name: `Create and view items on ${crudPage.urlPath}`,
+        role: defaultRole,
+        description: `Verifies items can be created and viewed in the list on ${crudPage.urlPath}.`,
+        startPage: crudPage.urlPath || '/',
+        steps,
+        candidateExpectations: {
+          pageWorks: { description: 'Item appears in the list after creation' },
+        },
+        source: 'fallback',
+      });
+    }
+  }
+
   // 2. Add form submission flows from discovered forms (never the sign-in form)
-  const NON_FILLABLE_TYPES = new Set(['submit', 'button', 'reset', 'checkbox', 'radio', 'file', 'image', 'hidden']);
   for (const form of spiderResult.forms) {
     if (flows.length >= 3) break;
     if (form.inputs.some((inp) => inp.type === 'password')) continue;

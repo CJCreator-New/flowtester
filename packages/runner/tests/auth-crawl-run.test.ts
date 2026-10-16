@@ -156,6 +156,47 @@ describe('T-117 Runner auth crawl SSE and report (auth-crawl-run.test.ts)', () =
     expect(Array.isArray(report.pageCoverage.skipped)).toBe(true);
   }, 120000);
 
+  // T-309: the same crawl through the runner finishes, and the report's page coverage carries the
+  // signed-in area — including the page that only shows a password field (LC-002), which must not be
+  // dropped as a sign-in wall.
+  it('runs the fixture signed in and reports the covered pages', async () => {
+    const runRes = await fetch(`${runnerBase}/api/runner/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targetUrl: `${fixtureBase}/account`,
+        skipReview: true,
+        maxPages: 20,
+        breakpoints: ['1440px'],
+        owner: true,
+        signInConsent: true,
+        roles: [
+          {
+            role: 'manager',
+            username: 'manager@example.com',
+            password: 'manager-password',
+            loginPath: '/signin',
+          },
+        ],
+      }),
+    });
+    expect(runRes.status).toBe(202);
+
+    let isRunning = true;
+    for (let i = 0; i < 300 && isRunning; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const status = await (await fetch(`${runnerBase}/api/runner/status`)).json();
+      isRunning = status.isRunning;
+    }
+    expect(isRunning).toBe(false);
+
+    const report = await (await fetch(`${runnerBase}/api/report`)).json();
+    expect(report.pageCoverage.reached).toBeGreaterThan(0);
+    const skippedPaths = (report.pageCoverage.skipped ?? []).map((s: { urlPath: string }) => s.urlPath);
+    // A page with a password field that is not the sign-in page is reached, not skipped as a wall.
+    expect(skippedPaths).not.toContain('/account/security');
+  }, 180000);
+
   it('asserts RUN_FAILED event carries signInReason when credentials fail under consent', async () => {
     const events: any[] = [];
     const streamController = new AbortController();

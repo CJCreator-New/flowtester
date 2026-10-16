@@ -29,6 +29,8 @@ routes and what they are for; **request and response bodies are defined by the h
 | `POST /api/runner/abort` (alias `/stop`) | Stop the current run                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `POST /api/runner/ai/finish`             | Finish AI work for the current run                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
+`POST /api/runner/preflight` answers `{ reachable, statusCode, ...about }`. A 4xx start address is still `reachable: true` and carries `startWarning: 'start-4xx'` (the same literal the core uses): the address answered, but not with the page the person expected, so the wizard shows it as a warning and still lets the Check-up start. A 401 or 403 is `reachable: true` with **no** warning — a site that asks for a sign-in is a real site. `reachable: false` carries `reason` (`unreachable` or `server-error`), `code` and a fixed `suggestion`.
+
 ### Sources, saved sessions and caps (ADR 0020, 0021)
 
 All additive; no new route. Wizard types: `StartRunRequest`, `PatchPlanBody`, `AiEstimate` in `packages/wizard/src/api.ts`.
@@ -60,6 +62,8 @@ All additive; no new route. Wizard types: `StartRunRequest`, `PatchPlanBody`, `A
 - The `crawling` progress event adds `plannedSoFar`; the planning total can grow while the scan runs.
 
 ## Plan Review
+
+The eleven routes below are the first rows in the runner's route table (`packages/runner/src/routes/plan.ts` and `routes/index.ts`), implemented as functions over the Check-up Session ([ADR 0027](adr/0027-checkup-session-module-and-route-table.md)). Other areas below remain in the `RunnerServer.start()` dispatch chain until the follow-up plan.
 
 | Route                                | Purpose                                                                                                                            |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -123,7 +127,11 @@ Under `/api/ai/`: `settings` (GET/POST), `usage`, `test-model`, `validate`, `key
 
 ## Adding or changing a route
 
-1. Add it in `server.ts` next to its group, and decide whether beta mode must close it (see the beta route list near line 1100).
-2. Add a test in `packages/runner/tests/` (`wizard-endpoints.test.ts` or `runner-server.test.ts`).
-3. Add the client call in `packages/wizard/src/api.ts`.
-4. Update this page.
+The runner is migrating from a dispatch chain in `server.ts` to a data-driven route table (`packages/runner/src/routes/`, [ADR 0027](adr/0027-checkup-session-module-and-route-table.md)). The eleven plan routes (`/api/runner/plan*` and `/api/runner/waiting-plans`) are in the route table today; remaining routes are still in `server.ts:start()`'s dispatch chain until the follow-up plan.
+
+1. **Register the route**: Add a `Route` entry in `packages/runner/src/routes/index.ts` (or the area's module, such as `routes/plan.ts`), specifying `{ method, path, handle }` (with `prefix: true` or `anyMethod: true` if needed).
+2. **Implement the handler**: Write a handler function taking the route context (`RouteContext` / `PlanRouteContext`) that operates over the `CheckupSession`. The session owns state and operations; transport and policy stay in `server.ts`.
+3. **Respect the gate order**: All incoming requests pass security gates in `server.ts` before route matching: access token / cookie, allowed origin check, beta closed routes, and beta visitor scoping. Do not bypass or reorder these gates.
+4. **Update the client**: Add or update the client method and shared contracts in `packages/wizard/src/api.ts` (using shared types from `@qa/types`).
+5. **Pin reachability**: Add or update test coverage in `packages/runner/tests/route-inventory.test.ts` (to pin reachability) and in the area's test suite (e.g. `packages/runner/tests/plan-routes.test.ts`).
+6. **Update this page**.

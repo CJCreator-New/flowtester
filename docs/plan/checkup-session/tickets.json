@@ -1,0 +1,299 @@
+{
+  "goal": "Check-up Session module and a runner route table (plan routes first)",
+  "generated": "2026-10-15",
+  "evidenceSource": "Architecture audit 2026-10-15 (read-only). Findings are registered in AUDIT.md as A-001..A-014 and mapped to tickets in TRACEABILITY.md; there is no G-### register in this plan.",
+  "mergedTickets": [
+    { "id": "T-205", "mergedInto": "T-204", "reason": "Owner asked for one session hand-off instead of two." }
+  ],
+  "tickets": [
+    {
+      "id": "T-201",
+      "title": "Check-up API contracts in @qa/types",
+      "type": "refactor",
+      "size": "S",
+      "wave": 0,
+      "dependsOn": [],
+      "findings": ["A-006"],
+      "evidence": [
+        "packages/runner/src/server.ts:422 TriggerRunBody",
+        "packages/wizard/src/api.ts:359 StartRunRequest",
+        "packages/runner/src/server.ts:4225 PatchPlanBody (inline)",
+        "packages/wizard/src/api.ts:490 PatchPlanBody (exported)",
+        "packages/wizard/src/api.ts:70 RunnerStatus vs server.ts:1099 inline status JSON"
+      ],
+      "file": "tickets/T-201-checkup-api-contracts.md",
+      "filesOwned": [
+        "packages/types/src/checkup-api.ts",
+        "packages/types/src/index.ts",
+        "packages/types/tests/checkup-api.test.ts",
+        "packages/wizard/src/api.ts"
+      ],
+      "filesReadOnly": ["packages/runner/src/server.ts", "packages/types/src/verdict.ts", "packages/types/src/plan.ts"],
+      "status": "done"
+    },
+    {
+      "id": "T-202",
+      "title": "Wizard: break the ScanningScreen / coverage-text import cycle",
+      "type": "refactor",
+      "size": "S",
+      "wave": 0,
+      "dependsOn": [],
+      "findings": ["A-010"],
+      "evidence": [
+        "packages/wizard/src/lib/coverage-text.ts:2 imports type ScanProgress from '../screens/ScanningScreen'",
+        "packages/wizard/src/screens/ScanningScreen.tsx:5 imports from '../lib/coverage-text'"
+      ],
+      "file": "tickets/T-202-wizard-coverage-module.md",
+      "filesOwned": [
+        "packages/wizard/src/lib/scan-progress.ts",
+        "packages/wizard/src/lib/coverage-text.ts",
+        "packages/wizard/src/screens/ScanningScreen.tsx"
+      ],
+      "filesReadOnly": [
+        "packages/wizard/src/App.tsx",
+        "packages/wizard/tests/scanning-progress.test.tsx",
+        "packages/wizard/tests/coverage-view.test.tsx",
+        "packages/types/src/route-telemetry.ts"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "T-203",
+      "title": "Route inventory test: pin every documented route before the rewrite",
+      "type": "test",
+      "size": "M",
+      "wave": 0,
+      "dependsOn": [],
+      "findings": ["A-001", "A-004"],
+      "evidence": [
+        "packages/runner/src/server.ts:973-1330 the dispatch chain, 47 if (pathname ...) conditionals",
+        "packages/runner/src/server.ts:1328 the fallback 404 body { error: 'Not found' }",
+        "docs/API.md route tables (Check-up lifecycle, Plan Review, Reports and history, baselines, benchmarks, schedules, AI settings)"
+      ],
+      "file": "tickets/T-203-route-inventory-test.md",
+      "filesOwned": ["packages/runner/tests/route-inventory.test.ts"],
+      "filesReadOnly": ["packages/runner/src/**", "docs/API.md"],
+      "status": "done"
+    },
+    {
+      "id": "T-204",
+      "title": "Check-up Session: the state and the operations",
+      "type": "refactor",
+      "size": "L",
+      "wave": 1,
+      "dependsOn": [],
+      "findings": ["A-001", "A-004"],
+      "evidence": [
+        "packages/runner/src/server.ts:715-790 the 51 fields (27 of them the state of one Check-up)",
+        "packages/runner/src/server.ts:3999 ensurePlanLoaded, :4117 savePlan, :4126 planForDisk, :4194 clearPlan, :4029 parkPlan, :4037 unparkPlan",
+        "packages/runner/src/server.ts:2198 keepRun, :2230 pruneRuns, :900 recordRunEvent, :913 forwardRunEvent, :877 broadcastRunnerEvent",
+        "packages/runner/src/server.ts:744-770 the run slot fields, :771-774 the run's session secrets, :788 recentApprovals",
+        "28 of 41 files in packages/runner/tests/ boot a real RunnerServer"
+      ],
+      "file": "tickets/T-204-checkup-session.md",
+      "filesOwned": [
+        "packages/runner/src/session/checkup-session.ts",
+        "packages/runner/src/session/plan-store.ts",
+        "packages/runner/src/session/report-store.ts",
+        "packages/runner/src/session/run-slot.ts",
+        "packages/runner/src/session/run-secrets.ts",
+        "packages/runner/src/session/run-events.ts",
+        "packages/runner/src/server.ts",
+        "packages/runner/tests/session-state.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/runner/src/beta.ts",
+        "packages/runner/src/host-policy.ts",
+        "packages/runner/src/scheduler.ts",
+        "packages/runner/src/ui-static.ts",
+        "packages/runner/src/index.ts",
+        "packages/runner/src/cli.ts",
+        "packages/core/src/**",
+        "packages/runner/tests/**"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "T-206",
+      "title": "Route table, and the plan routes as its first rows",
+      "type": "refactor",
+      "size": "M",
+      "wave": 2,
+      "dependsOn": ["T-204", "T-203"],
+      "findings": ["A-001", "A-004"],
+      "evidence": [
+        "packages/runner/src/server.ts:1123-1185 the eleven plan and waiting-plans branches",
+        "packages/runner/src/server.ts:1039 the gate order (access, origin, beta, closed routes)",
+        "packages/runner/src/server.ts:960-1385 start()"
+      ],
+      "file": "tickets/T-206-route-table-and-plan-routes.md",
+      "filesOwned": [
+        "packages/runner/src/routes/route.ts",
+        "packages/runner/src/routes/plan.ts",
+        "packages/runner/src/routes/index.ts",
+        "packages/runner/src/server.ts",
+        "packages/runner/tests/route-table.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/runner/tests/route-inventory.test.ts",
+        "packages/runner/src/session/checkup-session.ts"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "T-207",
+      "title": "Plan handlers become functions over the session",
+      "type": "refactor",
+      "size": "L",
+      "wave": 3,
+      "dependsOn": ["T-206", "T-201"],
+      "findings": ["A-002", "A-004"],
+      "evidence": [
+        "packages/runner/src/server.ts:4208 handleGetPlan, :4218 handlePatchPlan, :4442 handlePlanMarkdown, :4461 handlePlanExport",
+        "packages/runner/src/server.ts:4512 startPlanUpdate, :4581 handleReplan, :4621 handleAddPage, :4670 handleIncludeHost, :4719 handleAddSignIn",
+        "packages/runner/src/server.ts:4911 handleInterpret, :4949 handleApprovePlan, :4077 handleWaitingPlans"
+      ],
+      "file": "tickets/T-207-plan-handlers-as-functions.md",
+      "filesOwned": [
+        "packages/runner/src/routes/body.ts",
+        "packages/runner/src/routes/plan.ts",
+        "packages/runner/src/routes/index.ts",
+        "packages/runner/src/session/checkup-session.ts",
+        "packages/runner/src/server.ts",
+        "packages/runner/tests/plan-routes.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/types/src/checkup-api.ts",
+        "packages/runner/tests/**",
+        "packages/core/src/plan/**",
+        "packages/wizard/src/api.ts"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "T-208",
+      "title": "Plan building moves to @qa/core",
+      "type": "refactor",
+      "size": "M",
+      "wave": 4,
+      "dependsOn": ["T-207"],
+      "findings": ["A-003"],
+      "evidence": [
+        "packages/runner/src/server.ts:3652 buildPlan, :3720 gradedChecksFor, :3748 screenSizesOf, :3757 testsFor, :3789 siteMapOf, :3813 handCheckNotes, :3647 emptyPlan",
+        "packages/runner/src/server.ts:3539 prepareAI, :3600 aiBudgetFor, :3639 aiFor (stay: keys and policy)"
+      ],
+      "file": "tickets/T-208-plan-building-to-core.md",
+      "filesOwned": [
+        "packages/core/src/plan/build.ts",
+        "packages/core/src/index.ts",
+        "packages/core/tests/plan-build.test.ts",
+        "packages/runner/src/server.ts",
+        "packages/runner/src/routes/plan.ts"
+      ],
+      "filesReadOnly": [
+        "packages/core/src/plan/ai-planner.ts",
+        "packages/core/src/plan/pipeline.ts",
+        "packages/core/src/plan/expand.ts",
+        "packages/core/src/plan/sampling.ts",
+        "packages/types/src/**",
+        "packages/runner/tests/**"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "T-209",
+      "title": "The run operation gets one home; the CLI uses it, without a port",
+      "type": "refactor",
+      "size": "L",
+      "wave": 5,
+      "dependsOn": ["T-204", "T-208"],
+      "findings": ["A-005"],
+      "evidence": [
+        "packages/runner/src/checkup.ts:426 new RunnerServer, :433 server.start(), :458 fetch(`${base}/api/runner/run`)",
+        "packages/runner/src/server.ts:2949 handleTriggerRun, :3205 executeRun, :3821 executeTesting, :670 resolveReadOnly",
+        "packages/runner/src/server.ts:422 TriggerRunBody (deleted here in favour of the shared RunStartBody)",
+        "commit c10f5e8 (flaky ephemeral port bind in the fixture test)"
+      ],
+      "file": "tickets/T-209-checkup-cli-on-session.md",
+      "filesOwned": [
+        "packages/runner/src/session/checkup-run.ts",
+        "packages/runner/src/session/checkup-session.ts",
+        "packages/runner/src/server.ts",
+        "packages/runner/src/checkup.ts",
+        "packages/runner/tests/checkups.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/runner/tests/checkup-vs-api.test.ts",
+        "packages/runner/src/cli.ts",
+        "packages/runner/src/beta.ts",
+        "packages/runner/src/host-policy.ts",
+        "docs/CONFIGURATION.md"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "T-210",
+      "title": "Docs and glossary: the session, the routes, the new way to add a route",
+      "type": "docs",
+      "size": "S",
+      "wave": 6,
+      "dependsOn": ["T-209"],
+      "findings": [],
+      "evidence": [
+        "docs/API.md:126-129 'Adding or changing a route' names server.ts and its line numbers",
+        "docs/ARCHITECTURE.md package table and 'Life of a check-up'",
+        "CONTEXT.md has no term for the Check-up Session"
+      ],
+      "file": "tickets/T-210-docs-and-glossary.md",
+      "filesOwned": [
+        "docs/API.md",
+        "docs/ARCHITECTURE.md",
+        "docs/CONFIGURATION.md",
+        "CONTEXT.md",
+        "CHANGELOG.md",
+        "docs/README.md"
+      ],
+      "filesReadOnly": ["docs/adr/0027-checkup-session-module-and-route-table.md", "packages/**"],
+      "status": "done"
+    },
+    {
+      "id": "T-211",
+      "title": "One browser-safe entry into @qa/types for the wizard",
+      "type": "refactor",
+      "size": "S",
+      "wave": 1,
+      "dependsOn": ["T-201", "T-202"],
+      "findings": ["A-012"],
+      "evidence": [
+        "14 @qa/types/src/<area>.js imports in 10 wizard source files (api.ts:15-17, components/SiteMap.tsx:3, lib/context.ts:1, lib/coverage-text.ts:1, lib/form.ts:2-3, lib/intent-view.ts:2, lib/plan-sources.ts:3, lib/session-file.ts:1, lib/summary.ts:3,11, lib/translate.ts:7) plus 3 in wizard/tests",
+        "packages/types/src/route-telemetry.ts:1-4 states the browser-safe rule in a comment; nothing enforces it",
+        "verified: no file under packages/types/src imports a Node built-in today"
+      ],
+      "file": "tickets/T-211-types-browser-entry.md",
+      "filesOwned": [
+        "packages/types/src/browser.ts",
+        "packages/types/tests/browser-entry.test.ts",
+        "packages/wizard/src/api.ts",
+        "packages/wizard/src/components/SiteMap.tsx",
+        "packages/wizard/src/lib/context.ts",
+        "packages/wizard/src/lib/coverage-text.ts",
+        "packages/wizard/src/lib/form.ts",
+        "packages/wizard/src/lib/intent-view.ts",
+        "packages/wizard/src/lib/plan-sources.ts",
+        "packages/wizard/src/lib/session-file.ts",
+        "packages/wizard/src/lib/summary.ts",
+        "packages/wizard/src/lib/translate.ts",
+        "packages/wizard/tests/signin-consent.test.ts",
+        "packages/wizard/tests/signin-form.test.ts",
+        "packages/wizard/tests/signin-reason.test.ts"
+      ],
+      "filesReadOnly": [
+        "packages/types/src/index.ts",
+        "packages/types/package.json",
+        "packages/wizard/src/App.tsx",
+        "packages/wizard/src/screens/**"
+      ],
+      "status": "done"
+    }
+  ]
+}

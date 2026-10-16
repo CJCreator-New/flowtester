@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import type { DiscoveredFlow } from '@qa/types';
-import { journeyPages } from '@qa/types/src/site-map.js';
+import { journeyPages } from '@qa/types/src/browser.js';
 
 export interface PageNode {
   ref: string; // e.g. "pg-01"

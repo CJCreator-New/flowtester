@@ -9,8 +9,29 @@ import {
   summarizeDocument,
   type DocumentSummary,
   type StorageStateData,
+  type RunStartBody,
 } from '@qa/types';
 import { serveUi, type UiApp } from './ui-static.js';
+import {
+  createCheckupSession,
+  type CheckupSession,
+  type StoredPlanRecord,
+  createCheckupRun,
+  type CheckupRun,
+  resolveAuthorization,
+  type RunAuthorization,
+  resolveReadOnly,
+  readOnlyReason,
+  hasCompleteSignIn,
+  screensForReview,
+  nothingNew,
+  redactedMessage,
+  signInAccount,
+  ALL_SCREEN_SIZES,
+  LOOPBACK_HOSTS,
+  formatDay,
+} from './session/checkup-session.js';
+import { allRoutes, matchRoute, readJsonBody, sendJson, MAX_BODY_CHARS, type PlanRouteContext } from './routes/index.js';
 import type {
   RunSummary,
   SiteMapSummary,
@@ -39,8 +60,6 @@ import { normalizePlanIntents, normalizeTestIntents } from '@qa/types';
 import {
   FlowTestOrchestrator,
   DiscoveryAgent,
-  TestPlanner,
-  buildPageSweep,
   createAIProvider,
   runSafeWebsiteScan,
   KeyResolver,
@@ -89,8 +108,14 @@ import {
   calculateSiteAspectGrades,
   generateRankedRecommendations,
   generateSingleFileHtmlReport,
-  expandPlan,
-  GRADED_CHECKS,
+  emptyPlan,
+  defaultTestCase,
+  buildPlan,
+  testsFor,
+  screenSizesOf,
+  gradedChecksFor,
+  siteMapOf,
+  handCheckNotes,
   planToMarkdown,
   planToPlaywrightProject,
   zipFiles,
@@ -190,77 +215,8 @@ async function exists(file: string): Promise<boolean> {
   );
 }
 
-/** The largest JSON request accepted (characters). Plans are the biggest, and stay far below this. */
-const MAX_BODY_CHARS = 5_000_000;
 
-/**
- * Redacts secrets from error messages: passwords, tokens, email usernames, custom header values,
- * tunnel authorization, and session cookies. Also strips URL query strings so query secrets never leak.
- */
-export function redactedMessage(
-  err: unknown,
-  extra?: {
-    roles?: Array<Partial<RoleCredential>>;
-    customHeaders?: Record<string, string>;
-    tunnelAuth?: string;
-    cookies?: Array<{ name?: string; value?: string }>;
-    targetUrl?: string;
-  }
-): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  const secrets: Array<Partial<RoleCredential>> = [...(extra?.roles || [])];
-
-  if (extra?.customHeaders) {
-    for (const val of Object.values(extra.customHeaders)) {
-      if (typeof val === 'string' && val.length >= 3) {
-        secrets.push({ token: val });
-      }
-    }
-  }
-
-  if (extra?.tunnelAuth && extra.tunnelAuth.length >= 3) {
-    secrets.push({ token: extra.tunnelAuth });
-  }
-
-  if (extra?.cookies) {
-    for (const c of extra.cookies) {
-      if (typeof c.name === 'string' && c.name.length >= 3) {
-        secrets.push({ token: c.name });
-      }
-      if (typeof c.value === 'string' && c.value.length >= 3) {
-        secrets.push({ token: c.value });
-      }
-    }
-  }
-
-  if (extra?.targetUrl) {
-    try {
-      const u = new URL(extra.targetUrl);
-      for (const val of u.searchParams.values()) {
-        if (typeof val === 'string' && val.length >= 3) {
-          secrets.push({ token: val });
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  const redactor = new Redactor(secrets);
-  let out = redactor.text(raw);
-  out = redactUrl(out);
-  // Strip any URL query strings to ensure no query strings leak in error messages
-  out = out.replace(/(https?:\/\/[^\s"'<>)]+)\?[^\s"'<>)]*/gi, '$1');
-  return out;
-}
-
-/** "30 September 2026", for sentences in the report. */
-function formatDay(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime())
-    ? iso
-    : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-}
+export { redactedMessage };
 
 function isLoopbackOrigin(origin: string): boolean {
   try {
@@ -270,7 +226,6 @@ function isLoopbackOrigin(origin: string): boolean {
   }
 }
 
-const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 
 /** The Host header names this computer. A page that points a name it controls at this port (DNS rebinding) doesn't. */
 function isLoopbackHost(host: string | undefined): boolean {
@@ -309,8 +264,7 @@ function matchesSecret(given: string | null | undefined, secret: string): boolea
 
 const MAX_RUN_EVENTS = 5000;
 
-/** Every screen size a check-up can test at. */
-const ALL_SCREEN_SIZES: Breakpoint[] = ['375px', '768px', '1440px'];
+
 
 /** Token use per stage, added together. */
 function addTokens(a: AIRequestBudget['tokens'], b: AIRequestBudget['tokens']): AIRequestBudget['tokens'] {
@@ -419,106 +373,7 @@ export interface RunnerServerOptions {
   stepTimeoutMs?: number;
 }
 
-export interface TriggerRunBody {
-  targetUrl: string;
-  productId?: string;
-  useAI?: boolean;
-  aiProvider?: AIProviderType;
-  apiKey?: string;
-  aiModel?: string;
-  releaseTarget?: string;
-  breakpoints?: string[];
-  headless?: boolean;
-  /** Login credentials per role, used for pre-flight auth against the target site. */
-  roles?: RoleCredential[];
-  /** Remember the sign-ins for the site: names and usernames in its memory, passwords in the OS keychain. */
-  rememberSignIns?: boolean;
-  /** No sign-ins given: sign in with the ones saved for the site. */
-  useSavedSignIns?: boolean;
-  /** Explicit test cases to run instead of AI discovery / the default sanity check. */
-  specTestCases?: TestCase[];
-  /** Raw reference material (PRDs, user flows) handed to AI discovery as Product Context. */
-  productContext?: string;
-  /**
-   * 'safe-public' runs a read-only website scan (Safe Interaction Mode) instead of discovery +
-   * test execution: no sign-in, no form submissions, no mutating requests.
-   */
-  mode?: 'product' | 'safe-public';
-  /**
-   * When true (default when omitted), skips pausing for plan review and tests immediately.
-   * When false, pauses in 'awaiting-review' after discovery and writes the plan to disk.
-   */
-  skipReview?: boolean;
-  /**
-   * The URL-first wizard's "I own this site or it's a test copy" box. Full testing needs it and a
-   * test host; anything else runs read-only. Omitted by older callers, which count as owners (but
-   * a live host still stays read-only). Sending it also turns on planning without an AI key.
-   */
-  owner?: boolean;
-  /**
-   * The person gave test sign-in details and accepts that this run may act on the site (ADR 0022).
-   * Per run only, never remembered. Ignored on a shared machine (beta). Needs a role with both
-   * username and password; a failed sign-in ends the run before the crawl.
-   */
-  signInConsent?: boolean;
-  /** The owner says this host is a test copy (staging). Remembered for the site. */
-  stagingHost?: boolean;
-  /** Attached design system tokens or styling guidelines. */
-  designNotes?: string;
-  /** Plan everything afresh with the AI instead of reusing the site's last approved Plan. */
-  replanAll?: boolean;
-  /** Pages the crawl explores at most (default 200; 1 to 1000). */
-  maxPages?: number;
-  /**
-   * Check how search engines and AI assistants see the site. Remembered for the site; when never
-   * said, on for a live site and off for a test copy.
-   */
-  searchChecks?: boolean;
-  visibility?: { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean };
-  /**
-   * Plan with fixed rules now, spending no AI requests; the AI is still set up for the review, so
-   * items can be re-planned with it later.
-   */
-  planWithoutAI?: boolean;
-  /**
-   * A plan is waiting for review: starting another run throws it away, so the caller has to say
-   * so. Without it the run is refused with 409 ERR_PLAN_WAITING.
-   */
-  replacePlan?: boolean;
-  /**
-   * "Test again": scan, compare with the site's last approved plan, and test straight away when
-   * nothing is new. Anything new pauses for review, with only the new items flagged.
-   */
-  testAgain?: boolean;
-  /**
-   * Product Context as several .md/.txt documents (at most 10, 500 KB each). Each requirement keeps
-   * its document and section as its Source. Used with or instead of `productContext`.
-   */
-  contextDocuments?: Array<{ name: string; text: string }>;
-  /** A docs page to read for Product Context: it and the same-site pages it links to (at most 20). */
-  contextUrl?: string;
-  /**
-   * Saved sessions by role (Playwright storage state). Kept in the runner's memory for this Check-up
-   * only: never written to disk, never sent back, never logged. Cookies must belong to the target host.
-   */
-  savedSessions?: Record<string, StorageStateData>;
-  /** The person's cap on this Check-up's AI use: requests, and dollars when the model has a price. */
-  aiCap?: RunCap;
-  /** Most Tests the Plan runs before Rejects and Limits are trimmed (1 to 100000); the default when absent. */
-  testCap?: number;
-  /** Crawl concurrency (workers count, 1 to 5; default 2 per FR-1.7). */
-  crawlConcurrency?: number;
-  /** Delay pacing between page requests in ms (default 100ms per FR-1.7). */
-  crawlDelayMs?: number;
-  /** Custom HTTP headers sent with every crawler and test request (e.g. bypass headers). */
-  customHeaders?: Record<string, string> | string;
-  /** Custom user-agent string. */
-  userAgent?: string;
-  /** Tunnel authentication secret. */
-  tunnelAuth?: string;
-  /** Extra hosts that may receive secret headers (Domain Allowlist). */
-  headerHosts?: string[];
-}
+
 
 /** Plans saved before Intent carry the old Denial kind; read them as `intent: 'denied'`. */
 function normalizeStoredPlan(record: StoredPlanRecord): StoredPlanRecord {
@@ -540,76 +395,7 @@ function normalizeStoredPlan(record: StoredPlanRecord): StoredPlanRecord {
   };
 }
 
-interface StoredPlanRecord {
-  /** Document schema version: missing or 0 = legacy, 1 = current. Higher = read-only. */
-  schemaVersion?: number;
-  /** Current state of the plan: awaiting-review, approved, or done. */
-  status?: 'awaiting-review' | 'approved' | 'done';
-  plan: ReviewPlan;
-  context: {
-    targetUrl: string;
-    productId: string;
-    runId: string;
-    profile?: ProductProfile;
-    reportNotes?: string[];
-    pageCoverage?: ReleaseReport['pageCoverage'];
-    aiModels?: { text?: string; vision?: string };
-    breakpoints?: Breakpoint[];
-    headless?: boolean;
-    releaseTarget?: string;
-    draft: DiscoveryDraft;
-    /**
-     * Roles whose sign-in details were left out of the saved file. Set only on a plan read back
-     * from disk: the details have to be sent again with the approval.
-     */
-    signInNotSaved?: string[];
-    /**
-     * Roles whose saved session was left out of the saved file (sessions live in memory only): sent
-     * again with the approval. Set only on a plan read back from disk.
-     */
-    sessionNotSaved?: string[];
-    /** Names of the Product Context documents, with their text (a document is not a secret). */
-    contextDocuments?: Array<{ name: string; text: string }>;
-    /** The person's AI cap; the provider's limits are asked again whenever the plan is changed. */
-    aiCap?: RunCap;
-    /** The Test cap this Plan is expanded with. Kept with the Waiting Plan, never in site memory. */
-    testCap?: number;
-    /** Nothing that could change data is sent: the site isn't a test copy. */
-    readOnly?: boolean;
-    /**
-     * Full testing is on because test sign-in details were given as consent (ADR 0022). Kept with the
-     * plan so approving it again checks the details are still there, and a failed sign-in fails the run.
-     */
-    signInConsent?: boolean;
-    /** The site as the person typed it, e.g. "localhost:3050": the key for what is remembered about it. */
-    siteHost?: string;
-    /** How to reach the text model again, e.g. to turn a sentence into a test. A key given in the request stays in memory only. */
-    ai?: { provider: AIProviderType; model?: string; apiKey?: string };
-    /** The review sent its own test cases, which run as they are. */
-    customTestCases?: boolean;
-    /** Product context / spec documents provided for discovery. */
-    productContext?: string;
-    /** Check how search engines and AI assistants see the site: off for a test copy unless asked. */
-    searchChecks?: boolean;
-    visibility?: { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean };
-    /** Design tokens / design notes. */
-    designNotes?: string;
-    /** Path to product context file on disk if written. */
-    contextFilePath?: string;
-    /** Custom HTTP headers sent with requests. Kept in memory only. */
-    customHeaders?: Record<string, string>;
-    /** Names of custom headers configured during discovery (kept on disk so approval can ask for them). */
-    customHeaderNames?: string[];
-    /** Custom user-agent string. */
-    userAgent?: string;
-    /** Tunnel authentication secret. Kept in memory only. */
-    tunnelAuth?: string;
-    /** Extra hosts allowed for secret headers. */
-    headerHosts?: string[];
-    /** Pre-flight check outcome reused across stages. Kept in memory only. */
-    preflight?: PreFlightResult;
-  };
-}
+export type { StoredPlanRecord };
 
 /**
  * The plan as the review screen needs it: without each page's raw inventory of controls, and with
@@ -654,45 +440,7 @@ function hostOfAddress(address: string): string {
   }
 }
 
-/** At least one role has both a username and a password. */
-function hasCompleteSignIn(roles?: Array<{ username?: string; password?: string }>): boolean {
-  return (roles ?? []).some((r) => !!r.username && !!r.password);
-}
-
-/** Said when full testing was agreed to but the sign-in details are no longer there. */
-const CONSENT_NEEDS_SIGN_IN =
-  'Full testing needs the test sign-in details you agreed to use, and they are missing, so nothing was sent to the site. Send them again, or start a new check-up that only looks at the site.';
-
-/**
- * Whether a run only looks. Test sign-in details count as consent to full testing on this machine
- * (ADR 0022), never on a shared machine (beta). Per run: never saved.
- */
-export function resolveReadOnly(input: {
-  beta: boolean;
-  owner: boolean;
-  /** The request said `owner: true` itself. An omitted owner counts as an owner elsewhere, but never as consent. */
-  ownerExplicit: boolean;
-  testHost: boolean;
-  signInConsent?: unknown;
-  roles?: Array<{ username?: string; password?: string }>;
-}): { readOnly: boolean; consent: boolean } {
-  const consent = !input.beta && input.ownerExplicit && input.signInConsent === true && hasCompleteSignIn(input.roles);
-  return { consent, readOnly: !(input.owner && (input.testHost || consent)) };
-}
-
-/** Why a run is read-only, in plain words. */
-function readOnlyReason(owner: boolean, testHost: boolean, unverifiedMarked = false): string {
-  if (!owner) {
-    return 'You didn’t say you own this site, so it’s only looked at: nothing is sent or changed. If it’s yours, start a new check-up and tick “I own this site”.';
-  }
-  if (!testHost && unverifiedMarked) {
-    return 'This address isn’t a verified test copy yet, so it’s only looked at: nothing is sent or changed. Publish the Verified Domain line shown for it, then start a new check-up.';
-  }
-  if (!testHost) {
-    return 'This looks like a live site, so it’s only looked at: nothing is sent or changed. If it’s a test copy of your site, start a new check-up and choose “This is a test copy”.';
-  }
-  return '';
-}
+export { resolveReadOnly };
 
 /** A test case in the shape the plan check reads. */
 function asFlow(testCase: TestCase): DiscoveredFlow {
@@ -717,7 +465,6 @@ export class RunnerServer {
   private host: string;
   private outputDir: string;
   private dataDir: string;
-  private planFile: string;
   private streamClients = new Set<http.ServerResponse>();
   /** Beta: which visitor each open stream belongs to, so a run's events reach only the visitor who started it. */
   private streamSessions = new Map<http.ServerResponse, string | undefined>();
@@ -741,74 +488,167 @@ export class RunnerServer {
   private allowedOrigins: Set<string>;
   private accessToken?: string;
 
-  private isRunning = false;
-  private phase: RunnerPhase = 'idle';
-  private lastReport: ReleaseReport | null = null;
-  private lastRunError: string | null = null;
-  private lastErrorCode: string | null = null;
-  private activeAbortController: AbortController | null = null;
-  /** Finishes the scan or test run early: the scan plans what it found, testing reports what it did. */
-  private finishController: AbortController | null = null;
-  /** Plans kept aside for other sites while one is reviewed or tested, by site. Also on disk. */
-  private parkedPlans = new Map<string, StoredPlanRecord>();
-  private currentPlanRecord: StoredPlanRecord | null = null;
-  /**
-   * Saved sessions by run, then role. Memory only (ADR 0021): never in the plan file, the plan sent to
-   * the screen, events, logs or reports. Dropped when the run ends, is stopped, or its plan is cleared.
-   */
-  private savedSessions = new Map<string, Record<string, StorageStateData>>();
-  /** The run in progress or paused, so a reopened page can pick it up again. */
-  private currentRunId: string | null = null;
-  /** The site the run in progress or paused is for, as typed: the Resume card names it. */
-  private currentTargetUrl: string | null = null;
-  /**
-   * Goes up whenever a scan or test run starts or is stopped. A run remembers the value it started
-   * with; once it differs, the run was stopped or replaced, so its events and results are dropped.
-   */
-  private runGeneration = 0;
-  /** Where sign-in sessions are saved: beside the runs, never inside one, and never served. */
-  private authDir: string;
-  private currentCustomHeaders?: Record<string, string>;
-  private currentTunnelAuth?: string;
-  private currentHeaderHosts?: string[];
-  private currentUserAgent?: string;
-  /** The working folder that held the data before `.qa-data` existed, when the default data folder is used. */
-  private legacyDataDir?: string;
-  /** A plan update running in the background (re-planning, adding pages): one at a time. */
-  private planUpdate: Promise<void> | null = null;
-  /** This run's events, so a page that reopens or reconnects can replay them and show where the run is. */
-  private runEvents: Array<Record<string, unknown>> = [];
+  public readonly session: CheckupSession;
   /** The chosen free models (not secret), kept beside the key so every browser gets the same setup. */
   private aiModelsFile: string;
   /** How each AI model has done on this machine. */
   private modelRecordFile: string;
   /** The defaults a check-up starts with (screen sizes). */
   private defaultsFile: string;
-  /** Recent plan approval requests with their idempotency keys, cached for 1 hour to prevent duplicate runs. */
-  private recentApprovals = new Map<string, { timestamp: number; runId: string }>();
   private baselineDir: string;
   private scheduler: SchedulerManager;
+  private checkupRun: CheckupRun;
+
+  private get isRunning(): boolean {
+    return this.session.run.isRunning;
+  }
+  private set isRunning(val: boolean) {
+    this.session.run.setIsRunning(val);
+  }
+
+  private get phase(): RunnerPhase {
+    return this.session.run.phase;
+  }
+  private set phase(p: RunnerPhase) {
+    this.session.run.setPhase(p);
+  }
+
+  private get currentRunId(): string | null {
+    return this.session.run.runId;
+  }
+  private set currentRunId(val: string | null) {
+    this.session.run.setRunId(val);
+  }
+
+  private get currentTargetUrl(): string | null {
+    return this.session.run.targetUrl;
+  }
+  private set currentTargetUrl(val: string | null) {
+    this.session.run.setTargetUrl(val);
+  }
+
+  private get runGeneration(): number {
+    return this.session.run.generation;
+  }
+  private set runGeneration(val: number) {
+    this.session.run.setGeneration(val);
+  }
+
+  private get activeAbortController(): AbortController | null {
+    return this.session.run.abortController();
+  }
+  private set activeAbortController(val: AbortController | null) {
+    this.session.run.setAbortController(val);
+  }
+
+  private get finishController(): AbortController | null {
+    return this.session.run.finishController();
+  }
+  private set finishController(val: AbortController | null) {
+    this.session.run.setFinishController(val);
+  }
+
+  private get lastReport(): ReleaseReport | null {
+    return this.session.report.last;
+  }
+  private set lastReport(val: ReleaseReport | null) {
+    this.session.report.set(val);
+  }
+
+  private get lastRunError(): string | null {
+    return this.session.report.error().message;
+  }
+  private set lastRunError(val: string | null) {
+    this.session.report.setError(val, this.session.report.error().code);
+  }
+
+  private get lastErrorCode(): string | null {
+    return this.session.report.error().code;
+  }
+  private set lastErrorCode(val: string | null) {
+    this.session.report.setError(this.session.report.error().message, val);
+  }
+
+  private get currentCustomHeaders(): Record<string, string> | undefined {
+    return this.session.secrets.headers;
+  }
+  private set currentCustomHeaders(val: Record<string, string> | undefined) {
+    this.session.secrets.set({
+      headers: val,
+      tunnelAuth: this.session.secrets.tunnelAuth,
+      headerHosts: this.session.secrets.headerHosts,
+      userAgent: this.session.secrets.userAgent,
+    });
+  }
+
+  private get currentTunnelAuth(): string | undefined {
+    return this.session.secrets.tunnelAuth;
+  }
+  private set currentTunnelAuth(val: string | undefined) {
+    this.session.secrets.set({
+      headers: this.session.secrets.headers,
+      tunnelAuth: val,
+      headerHosts: this.session.secrets.headerHosts,
+      userAgent: this.session.secrets.userAgent,
+    });
+  }
+
+  private get currentHeaderHosts(): string[] | undefined {
+    return this.session.secrets.headerHosts;
+  }
+  private set currentHeaderHosts(val: string[] | undefined) {
+    this.session.secrets.set({
+      headers: this.session.secrets.headers,
+      tunnelAuth: this.session.secrets.tunnelAuth,
+      headerHosts: val,
+      userAgent: this.session.secrets.userAgent,
+    });
+  }
+
+  private get currentUserAgent(): string | undefined {
+    return this.session.secrets.userAgent;
+  }
+  private set currentUserAgent(val: string | undefined) {
+    this.session.secrets.set({
+      headers: this.session.secrets.headers,
+      tunnelAuth: this.session.secrets.tunnelAuth,
+      headerHosts: this.session.secrets.headerHosts,
+      userAgent: val,
+    });
+  }
+
+  private get authDir(): string {
+    return this.session.paths.authDir;
+  }
+
+  private get planFile(): string {
+    return this.session.plan.file;
+  }
+
+  private get legacyDataDir(): string | undefined {
+    return this.session.paths.legacyDataDir;
+  }
+
+  get savedSessions(): Map<string, Record<string, StorageStateData>> {
+    return this.session.secrets.savedSessions;
+  }
 
   public runAuthDir(runId: string): string {
-    return path.join(this.authDir, runId);
+    return this.session.secrets.authDirFor(runId);
   }
 
   public async cleanAuthDir(runId: string): Promise<void> {
-    try {
-      await fs.rm(this.runAuthDir(runId), { recursive: true, force: true });
-    } catch {
-      // ignore
-    }
+    await this.session.secrets.clean(runId);
   }
 
   private redactedMessage(err: unknown, extraRoles?: Array<Partial<RoleCredential>>): string {
-    const headers = this.currentCustomHeaders || this.currentPlanRecord?.context?.customHeaders;
-    const tunnel = this.currentTunnelAuth || this.currentPlanRecord?.context?.tunnelAuth;
+    const headers = this.currentCustomHeaders || this.session.plan.currentRecord?.context?.customHeaders;
+    const tunnel = this.currentTunnelAuth || this.session.plan.currentRecord?.context?.tunnelAuth;
     return redactedMessage(err, {
       roles: extraRoles,
       customHeaders: headers,
       tunnelAuth: tunnel,
-      targetUrl: this.currentTargetUrl || this.currentPlanRecord?.context?.targetUrl || undefined,
+      targetUrl: this.currentTargetUrl || this.session.plan.currentRecord?.context?.targetUrl || undefined,
     });
   }
 
@@ -822,10 +662,14 @@ export class RunnerServer {
       Object.entries(options.hostAliases || {}).map(([k, v]) => [k.toLowerCase(), v])
     );
     this.dataDir = path.resolve(options.dataDir || path.join(process.cwd(), '.qa-data'));
-    if (!options.dataDir) this.legacyDataDir = process.cwd();
+    const legacyDataDir = !options.dataDir ? process.cwd() : undefined;
+    this.session = createCheckupSession({
+      outputDir: this.outputDir,
+      dataDir: this.dataDir,
+      authDir: options.authDir,
+      legacyDataDir,
+    });
     this.scheduler = new SchedulerManager(this.dataDir);
-    this.authDir = options.authDir ? path.resolve(options.authDir) : path.join(this.outputDir, 'auth');
-    this.planFile = path.join(this.dataDir, '.qa-plan.json');
     this.aiModelsFile = path.join(this.dataDir, '.qa-ai-models.json');
     this.modelRecordFile = path.join(this.dataDir, '.qa-ai-model-record.json');
     this.defaultsFile = path.join(this.dataDir, '.qa-settings.json');
@@ -852,6 +696,30 @@ export class RunnerServer {
       })
     );
     this.accessToken = options.accessToken || undefined;
+    this.checkupRun = createCheckupRun(this.session, {
+      prepareAI: (body) => this.prepareAI(body),
+      aiBudgetFor: (settings, key, cap) => this.aiBudgetFor(settings, key, cap),
+      signInsFor: (body, memory, host) => this.signInsFor(body, memory, host),
+      readDefaults: () => this.readDefaults(),
+      siteDir: () => this.siteDir(),
+      hostAliases: this.hostAliases,
+      localhostAlias: this.localhostAlias,
+      beta: this.beta,
+      hostChecks: this.hostChecks,
+      stepTimeoutMs: this.stepTimeoutMs,
+      onEvent: (event) => this.broadcastRunnerEvent(event),
+      screensForReview: (report, draft) => this.screensForReview(report, draft),
+      visualReview: (report, screens, options) => this.visualReview(report, screens, options),
+      saveReviewedReport: (report) => this.saveReviewedReport(report),
+      recordModelOutcomes: (models) => this.recordModelOutcomes(models),
+      claimOwner: (runId) => {
+        if (this.beta) {
+          const me = currentSessionId();
+          if (me) this.runOwners.set(runId, me);
+        }
+      },
+      isMine: (runId) => this.isMine(runId),
+    });
   }
 
   /** Beta: whether a run belongs to the visitor making this request. Outside beta every run is everyone's. */
@@ -900,13 +768,7 @@ export class RunnerServer {
   private recordRunEvent(event: Record<string, unknown>): void {
     if (!this.currentRunId) return;
     if (typeof event.runId === 'string' && event.runId !== this.currentRunId) return;
-    this.runEvents.push(event.type === 'RUN_COMPLETED' ? { type: event.type, runId: event.runId } : event);
-    if (this.runEvents.length > MAX_RUN_EVENTS) {
-      const half = this.runEvents.length / 2;
-      this.runEvents = this.runEvents.filter(
-        (e, i) => i >= half || (e.type !== 'STEP_STARTED' && e.type !== 'STEP_COMPLETED')
-      );
-    }
+    this.session.events.publish(event.type === 'RUN_COMPLETED' ? { type: event.type, runId: event.runId } : event);
   }
 
   /** Stores the report before announcing completion, so a client reacting to RUN_COMPLETED gets this run's report. */
@@ -1060,7 +922,7 @@ export class RunnerServer {
             res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
             // A page that opens or reconnects mid-run catches up: this run's events so far, in order (beta: only the visitor's own run).
             if (this.isMine(this.currentRunId))
-              for (const event of this.runEvents)
+              for (const event of this.session.events.log)
                 res.write(`data: ${JSON.stringify({ ...event, replayed: true })}\n\n`);
             this.streamClients.add(res);
             if (this.beta) this.streamSessions.set(res, currentSessionId());
@@ -1106,10 +968,10 @@ export class RunnerServer {
                 lastRunError: this.lastRunError,
                 lastErrorCode: this.lastErrorCode,
                 phase: this.phase,
-                hasPlan: !!this.currentPlanRecord,
+                hasPlan: !!this.session.plan.currentRecord,
                 runId: this.currentRunId,
                 // The site the run in progress or paused is for, as typed, for the Resume card.
-                targetUrl: this.currentPlanRecord?.plan.targetUrl ?? this.currentTargetUrl,
+                targetUrl: this.session.plan.currentRecord?.plan.targetUrl ?? this.currentTargetUrl,
                 // The finished report, when the last run finished.
                 reportRunId: this.lastReport?.runId ?? null,
                 // A copy shared with other people: their check-ups and reports are visible to each other.
@@ -1119,66 +981,12 @@ export class RunnerServer {
             return;
           }
 
-          // GET /api/runner/plan
-          if (pathname === '/api/runner/plan' && req.method === 'GET') {
-            await this.handleGetPlan(req, res);
-            return;
-          }
-
-          // PATCH /api/runner/plan
-          if (pathname === '/api/runner/plan' && req.method === 'PATCH') {
-            await this.handlePatchPlan(req, res);
-            return;
-          }
-
-          // POST /api/runner/plan/approve
-          if (pathname === '/api/runner/plan/approve' && req.method === 'POST') {
-            await this.handleApprovePlan(req, res);
-            return;
-          }
-
-          // POST /api/runner/plan/interpret — a sentence becomes a test or a rule, shown back before it's added
-          if (pathname === '/api/runner/plan/interpret' && req.method === 'POST') {
-            await this.handleInterpret(req, res);
-            return;
-          }
-
-          // GET /api/runner/plan/markdown — the whole plan as a Markdown document, for sign-off
-          if (pathname === '/api/runner/plan/markdown' && req.method === 'GET') {
-            await this.handlePlanMarkdown(res);
-            return;
-          }
-
-          // GET /api/runner/plan/export — the approved plan as a Playwright project (zip)
-          if (pathname === '/api/runner/plan/export' && req.method === 'GET') {
-            await this.handlePlanExport(res);
-            return;
-          }
-
-          // Changes that need the AI or the crawler run in the background (202, then PLAN_UPDATE_* events):
-          // POST /api/runner/plan/replan — plan an item, a promoted page, or everything again
-          if (pathname === '/api/runner/plan/replan' && req.method === 'POST') {
-            await this.handleReplan(req, res);
-            return;
-          }
-          // POST /api/runner/plan/add-page — add a page by its address
-          if (pathname === '/api/runner/plan/add-page' && req.method === 'POST') {
-            await this.handleAddPage(req, res);
-            return;
-          }
-          // GET/POST /api/runner/waiting-plans — plans kept aside for other sites, and bringing one back
-          if (pathname === '/api/runner/waiting-plans') {
-            await this.handleWaitingPlans(req, res);
-            return;
-          }
-          // POST /api/runner/plan/add-sign-in — sign in as a role, explore what it sees, and plan it
-          if (pathname === '/api/runner/plan/add-sign-in' && req.method === 'POST') {
-            await this.handleAddSignIn(req, res);
-            return;
-          }
-          // POST /api/runner/plan/include-host — explore another host the site links to, and plan its pages
-          if (pathname === '/api/runner/plan/include-host' && req.method === 'POST') {
-            await this.handleIncludeHost(req, res);
+          const route = matchRoute(allRoutes, req.method ?? 'GET', pathname);
+          if (route) {
+            await route.handle({
+              server: this,
+              ...this.planRouteContext(req, res, url),
+            });
             return;
           }
 
@@ -1396,13 +1204,8 @@ export class RunnerServer {
     });
   }
 
-  private async readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
-    let body = '';
-    for await (const chunk of req) {
-      body += chunk;
-      if (body.length > MAX_BODY_CHARS) throw new Error('Request body too large');
-    }
-    return JSON.parse(body) as T;
+  private async readJsonBody<T>(req: http.IncomingMessage, maxChars?: number): Promise<T> {
+    return readJsonBody<T>(req, maxChars);
   }
 
   /**
@@ -1510,8 +1313,42 @@ export class RunnerServer {
   }
 
   private sendJson(res: http.ServerResponse, status: number, body: unknown): void {
-    res.writeHead(status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(body));
+    sendJson(res, status, body);
+  }
+
+  private planRouteContext(req: http.IncomingMessage, res: http.ServerResponse, url: URL): PlanRouteContext {
+    return {
+      session: this.session,
+      req,
+      res,
+      url,
+      broadcastRunnerEvent: (event) => this.broadcastRunnerEvent(event),
+      isMine: (runId) => this.isMine(runId),
+      isBeta: this.beta,
+      aiFor: (context) => this.aiFor(context),
+      aiBudgetFor: (settings, key, cap) => this.aiBudgetFor(settings, key, cap),
+      recordModelOutcomes: (models) => this.recordModelOutcomes(models),
+      refuseTarget: (response, target) => this.refuseTarget(response, target),
+      siteDir: () => this.siteDir(),
+      testCopyOf: (typed, marked) => this.testCopyOf(typed, marked),
+      onApproved: (record, specTestCases, notRun, generation) => {
+        this.checkupRun.executeTesting(record, specTestCases, notRun, generation).catch((err: unknown) => {
+          if (generation !== this.runGeneration || isAbortError(err)) return;
+          const msg = this.redactedMessage(err);
+          this.lastRunError = msg;
+          this.lastErrorCode = 'ERR_TEST_EXECUTION_FAILED';
+          this.phase = 'failed';
+          this.isRunning = false;
+          this.broadcastRunnerEvent({
+            type: 'RUN_FAILED',
+            runId: record.plan.runId,
+            error: msg,
+            code: 'ERR_TEST_EXECUTION_FAILED',
+            timestamp: Date.now(),
+          });
+        });
+      },
+    };
   }
 
   /**
@@ -1703,12 +1540,19 @@ export class RunnerServer {
       undefined,
       this.beta ? (url, headers) => this.sharedGet(url, headers) : undefined
     );
-    if (check.ok) {
+    if (check.ok || check.startWarning) {
       // On a shared machine a response header never makes a test copy (ADR 0014).
       if (check.testCopyHeader && !this.beta) {
         about.testCopy = true;
       }
-      this.sendJson(res, 200, { reachable: true, statusCode: check.status, ...about });
+      // A 4xx is reachable, but it is not the page the person expected: pass the warning through so the
+      // wizard can say so without blocking the Check-up (LC-007).
+      this.sendJson(res, 200, {
+        reachable: true,
+        statusCode: check.status,
+        ...(check.startWarning ? { startWarning: check.startWarning } : {}),
+        ...about,
+      });
     } else {
       const code = check.status ? 'ERR_SERVER_ERROR' : 'ERR_TARGET_UNREACHABLE';
       const suggestion = check.status
@@ -1720,6 +1564,7 @@ export class RunnerServer {
         code,
         statusCode: check.status,
         suggestion,
+        ...(check.startWarning ? { startWarning: check.startWarning } : {}),
         ...about,
       });
     }
@@ -2031,7 +1876,7 @@ export class RunnerServer {
    * the OS keychain only); or, when none are given and the person asked for them, the saved ones.
    */
   private async signInsFor(
-    body: TriggerRunBody,
+    body: RunStartBody,
     memory: SiteMemory | null,
     host: string
   ): Promise<{ roles?: RoleCredential[]; memory: SiteMemory | null; note?: string }> {
@@ -2164,30 +2009,17 @@ export class RunnerServer {
 
   /** The folder that holds one run's files: its scan, evidence and reports. */
   private runDir(runId: string): string {
-    return path.join(this.outputDir, 'runs', runId);
+    return this.session.report.dirFor(runId);
   }
 
   /** A path inside a run's folder, as the Wizard addresses it: /api/evidence/runs/<runId>/<path>. */
   private relativeToRun(runId: string, file?: string): string | undefined {
-    if (!file) return undefined;
-    const rel = path.relative(this.runDir(runId), file);
-    return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.replace(/\\/g, '/') : undefined;
+    return this.session.report.relativePath(runId, file);
   }
 
   /** Every finished check-up, newest first. A folder without a summary is a run that never finished. */
   private async listRuns(): Promise<RunSummary[]> {
-    const root = path.join(this.outputDir, 'runs');
-    const names = await fs.readdir(root).catch(() => [] as string[]);
-    const runs: RunSummary[] = [];
-    for (const name of names) {
-      if (!isRunId(name)) continue;
-      try {
-        runs.push(JSON.parse(await fs.readFile(path.join(root, name, 'summary.json'), 'utf8')) as RunSummary);
-      } catch {
-        // not finished
-      }
-    }
-    return runs.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    return this.session.report.list();
   }
 
   /**
@@ -2196,75 +2028,22 @@ export class RunnerServer {
    * Then only the newest RUNS_KEPT_PER_SITE runs of the site are kept.
    */
   private async keepRun(report: ReleaseReport, typedTargetUrl: string, siteHost: string | undefined): Promise<void> {
-    const dir = this.runDir(report.runId);
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, 'report.json'), JSON.stringify(report), 'utf8');
-    const verdict = releaseVerdict(report.findings);
-    let host = siteHost;
-    try {
-      host ??= new URL(typedTargetUrl).host;
-    } catch {
-      host ??= typedTargetUrl;
-    }
-    const summary: RunSummary = {
-      runId: report.runId,
-      targetUrl: typedTargetUrl,
-      host,
-      timestamp: report.timestamp,
-      durationMs: report.durationMs,
-      ready: verdict.ready,
-      stamp: verdict.stamp,
-      reason: verdict.reason,
-      counts: verdict.counts,
-      readOnly: report.scanMode === 'read-only' || report.scanMode === 'safe-public' || undefined,
-      testedWithApprovedPlan: report.testedWithApprovedPlan,
-    };
-    await fs.writeFile(path.join(dir, 'summary.json'), JSON.stringify(summary, null, 2), 'utf8');
-    for (const name of ['findings.json', 'fix-these.md', 'known-findings.json', 'AGENTS.snippet.md']) {
-      await fs.copyFile(path.join(dir, name), path.join(this.outputDir, name)).catch(() => {});
-    }
-    await this.pruneRuns(host);
+    return this.session.report.keep(report, typedTargetUrl, siteHost);
   }
 
   /** Deletes a site's runs past the newest RUNS_KEPT_PER_SITE, and folders of runs that never finished. */
   private async pruneRuns(host: string): Promise<void> {
-    const runs = await this.listRuns();
-    const old = runs.filter((r) => r.host === host).slice(RUNS_KEPT_PER_SITE);
-    for (const run of old) await fs.rm(this.runDir(run.runId), { recursive: true, force: true }).catch(() => {});
-    const finished = new Set(runs.map((r) => r.runId));
-    const root = path.join(this.outputDir, 'runs');
-    for (const name of await fs.readdir(root).catch(() => [] as string[])) {
-      if (
-        !isRunId(name) ||
-        finished.has(name) ||
-        name === this.currentRunId ||
-        [...this.parkedPlans.values()].some((r) => r.plan.runId === name)
-      )
-        continue;
-      await fs.rm(path.join(root, name), { recursive: true, force: true }).catch(() => {});
-    }
+    return this.session.report.prune(host);
   }
 
   /** The newest finished run's report, so a restart still has it. */
   private async loadLatestReport(): Promise<void> {
-    if (this.lastReport) return;
-    const [latest] = await this.listRuns();
-    if (!latest) return;
-    try {
-      this.lastReport = JSON.parse(await fs.readFile(path.join(this.runDir(latest.runId), 'report.json'), 'utf8'));
-    } catch {
-      // unreadable: the list still shows it
-    }
+    return this.session.report.loadLatest();
   }
 
   /** A run's report: the one just finished is in memory (its file may not be written yet), older ones on disk. */
   private async readRunReport(runId: string): Promise<ReleaseReport | null> {
-    if (this.lastReport?.runId === runId) return this.lastReport;
-    try {
-      return JSON.parse(await fs.readFile(path.join(this.runDir(runId), 'report.json'), 'utf8'));
-    } catch {
-      return null;
-    }
+    return this.session.report.read(runId);
   }
 
   private async handleRuns(rest: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -2513,35 +2292,8 @@ export class RunnerServer {
     });
   }
 
-  /**
-   * One screen per Layout Group (its first page visited), with its screenshot at each size: what the
-   * AI's visual review looks at.
-   */
   private screensForReview(report: ReleaseReport, draft?: DiscoveryDraft): VisualReviewItemInput[] {
-    const groupOf = new Map((draft?.plan?.pages ?? []).map((p) => [p.urlPath, p.layoutGroup || p.urlPath]));
-    const byGroup = new Map<string, VisualReviewItemInput>();
-    for (const result of report.results) {
-      if (result.flowId !== 'page-visit' || !result.breakpoint) continue;
-      const shot = [...result.stepEvidence].reverse().find((s) => s.screenshotPath);
-      if (!shot?.screenshotPath) continue;
-      let urlPath: string;
-      try {
-        urlPath = new URL(shot.urlAfter || shot.urlBefore).pathname;
-      } catch {
-        continue;
-      }
-      const group = groupOf.get(urlPath) ?? urlPath;
-      const screen = byGroup.get(group) ?? { layoutGroup: group, urlPath, screenshots: [] };
-      byGroup.set(group, screen);
-      if (screen.urlPath === urlPath && !screen.screenshots.some((s) => s.breakpoint === result.breakpoint)) {
-        // The report keeps evidence paths relative to the run's folder.
-        screen.screenshots.push({
-          breakpoint: result.breakpoint,
-          imagePath: path.resolve(this.runDir(report.runId), shot.screenshotPath),
-        });
-      }
-    }
-    return [...byGroup.values()];
+    return screensForReview(report, draft, this.runDir(report.runId));
   }
 
   /**
@@ -2960,9 +2712,9 @@ export class RunnerServer {
       return;
     }
 
-    let body: TriggerRunBody;
+    let body: RunStartBody;
     try {
-      body = await this.readJsonBody<TriggerRunBody>(req);
+      body = await this.readJsonBody<RunStartBody>(req);
     } catch {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(
@@ -3036,7 +2788,7 @@ export class RunnerServer {
     // A plan waiting for review is kept aside when another site is checked (one waiting plan per
     // site). Only a new check-up of the same site throws it away, so the caller has to say so.
     await this.ensurePlanLoaded();
-    const waiting = this.phase === 'awaiting-review' ? this.currentPlanRecord : null;
+    const waiting = this.phase === 'awaiting-review' ? this.session.plan.currentRecord : null;
     // Beta: a plan another visitor left waiting is kept aside for them, whatever the site, and is never named here.
     const othersPlan = this.beta && !!waiting && !this.isMine(waiting.plan.runId);
     const parkWaiting = !!waiting && (othersPlan || this.hostOfPlan(waiting) !== hostOfAddress(body.targetUrl));
@@ -3075,468 +2827,76 @@ export class RunnerServer {
     }
 
     if (this.betaLimitHit(res)) return;
-    if (parkWaiting && waiting) await this.parkPlan(waiting);
-    // A plan kept aside for this same site is replaced by the new check-up.
-    await this.unparkPlan(hostOfAddress(body.targetUrl));
-    await this.clearPlan();
 
-    const productId = body.productId || 'default-product';
-    // Generated here (not by the orchestrator) so the id we hand back in the 202 response
-    // is the SAME id the orchestrator will use for RUN_STARTED/RUN_COMPLETED — otherwise a
-    // UI that trusts this response id would never see it appear in the SSE stream.
-    const runId = `run-${Date.now()}`;
-    if (this.beta) {
-      const me = currentSessionId();
-      if (me) this.runOwners.set(runId, me);
+    let typed: URL;
+    try {
+      typed = new URL(body.targetUrl);
+    } catch {
+      typed = new URL(`http://${body.targetUrl}`);
     }
-    this.currentRunId = runId;
-    this.currentTargetUrl = body.targetUrl;
-    const customHeadersChecked = checkCustomHeaders(body.customHeaders);
-    this.currentCustomHeaders = customHeadersChecked.ok ? customHeadersChecked.value : undefined;
-    this.currentTunnelAuth = body.tunnelAuth;
-    this.currentUserAgent = body.userAgent;
-    this.currentHeaderHosts = body.headerHosts;
-    this.runEvents = [];
-    const generation = ++this.runGeneration;
-    // Saved sessions go to memory and nowhere else; the body is not kept past this point.
-    const sessions = checkSavedSessions(body.savedSessions, typedHostname);
-    if (sessions.ok && sessions.value) this.savedSessions.set(runId, sessions.value);
-    delete body.savedSessions;
-
-    this.isRunning = true;
-    this.phase = 'scanning';
-    this.lastRunError = null;
-    this.lastErrorCode = null;
-    this.activeAbortController = new AbortController();
-    this.finishController = new AbortController();
-
-    res.writeHead(202, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ runId }));
-
-    // Fire the actual run asynchronously — the HTTP response has already been sent;
-    // progress and completion are delivered exclusively over the SSE stream.
-    this.executeRun(body, productId, runId, generation).catch((err: unknown) => {
-      // Stopped or replaced: whatever stopped it has already said so.
-      if (generation !== this.runGeneration || isAbortError(err)) return;
-      this.savedSessions.delete(runId);
-      const msg = this.redactedMessage(err, body.roles);
-      const code = (err as { code?: string } | undefined)?.code || 'ERR_DISCOVERY_FAILED';
-      this.lastRunError = msg;
-      this.lastErrorCode = code;
-      this.phase = 'failed';
-      this.isRunning = false;
-      const signInReason = err instanceof SignInFailedError ? err.reason : undefined;
-      this.broadcastRunnerEvent({
-        type: 'RUN_FAILED',
-        runId,
-        error: msg,
-        code,
-        ...(signInReason ? { signInReason } : {}),
-        timestamp: Date.now(),
-      });
+    const siteHost = typed.host;
+    const memory = await loadSiteMemory(this.siteDir(), siteHost);
+    const marked = body.stagingHost !== undefined ? !!body.stagingHost : !!memory?.staging;
+    const signIns = await this.signInsFor(body, memory, siteHost);
+    const authorization = await resolveAuthorization({
+      targetUrl: body.targetUrl,
+      owner: body.owner,
+      ownerExplicit: body.owner === true,
+      signInConsent: body.signInConsent,
+      roles: signIns.roles,
+      testCopyMarked: marked,
+      stagingHost: body.stagingHost,
+      beta: this.beta,
+      hostChecks: this.hostChecks,
+      token: () => peekProofToken(typed.origin),
     });
+
+    try {
+      const { runId } = await this.checkupRun.start({ body, authorization });
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ runId }));
+    } catch (err: any) {
+      if (err?.code === 'ERR_PLAN_WAITING') {
+        this.sendJson(res, 409, {
+          error: err.message,
+          code: err.code,
+          suggestion: err.suggestion,
+          targetUrl: err.targetUrl,
+        });
+        return;
+      }
+      this.sendJson(res, 500, { error: this.redactedMessage(err) });
+    }
   }
 
   private async handleAbortRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const runId = this.currentRunId;
-    // { finish: true }: stop early but keep the work: the scan plans what it found, testing makes a
-    // partial report. Answered at once; the usual events follow.
     const body = await this.readJsonBody<{ finish?: boolean }>(req).catch(() => ({}) as { finish?: boolean });
-    if (body.finish && (this.phase === 'scanning' || this.phase === 'testing') && this.finishController) {
-      this.finishController.abort();
-      this.broadcastRunnerEvent({ type: 'RUN_FINISHING', runId, phase: this.phase, timestamp: Date.now() });
+    const result = await this.checkupRun.stop(body);
+    if (result.finishing) {
       this.sendJson(res, 200, { aborted: false, finishing: true });
       return;
     }
-    if (!this.isRunning && this.phase === 'idle') {
+    if (!result.aborted) {
       this.sendJson(res, 200, { aborted: false, message: 'No run currently active' });
       return;
     }
-
-    // Whatever is running is stale from here on: its events and results are dropped, and the
-    // signal makes the crawler, the planner and the orchestrator give up and close their browsers.
-    this.runGeneration++;
-    if (this.activeAbortController) {
-      try {
-        this.activeAbortController.abort();
-      } catch {}
-      this.activeAbortController = null;
-    }
-
-    // Stopping a test run keeps the approved plan, so it can be changed and approved again.
-    const record = this.currentPlanRecord;
-    const planKept = this.phase === 'testing' && !!record && record.plan.runId === runId;
-    if (planKept) {
-      this.phase = 'awaiting-review';
-      this.isRunning = true;
-      await this.savePlan(record!).catch(() => {});
-    } else {
-      this.isRunning = false;
-      this.phase = 'idle';
-      this.currentTargetUrl = null;
-      await this.clearPlan(runId ?? undefined);
-    }
-    this.lastErrorCode = 'ERR_RUN_ABORTED';
-    this.lastRunError = 'Run was manually stopped by user.';
-
-    this.broadcastRunnerEvent({
-      type: 'RUN_ABORTED',
-      runId,
-      planKept,
+    this.sendJson(res, 200, {
+      aborted: true,
+      planKept: result.planKept,
       code: 'ERR_RUN_ABORTED',
-      message: 'Run was stopped by the user.',
-      timestamp: Date.now(),
+      message: 'Run aborted successfully',
     });
-
-    this.sendJson(res, 200, { aborted: true, planKept, code: 'ERR_RUN_ABORTED', message: 'Run aborted successfully' });
   }
 
-  /**
-   * "Test again" may skip the review only when the scan found nothing the approved plan doesn't
-   * already cover: no new page, link, journey or question, and every page as it was when planned.
-   */
-  private nothingNew(draft: DiscoveryDraft, since: MemorySummary, memory: SiteMemory): boolean {
-    if (!since.seenBefore || since.newPages > 0 || since.newJourneys > 0 || since.newQuestions > 0) return false;
-    if (draft.plan?.navigation.some((n) => n.isNew)) return false;
-    const planned = memory.plan?.pages || {};
-    return draft.pages.every((p) => planned[p.urlPath] !== undefined && planned[p.urlPath].contentKey === p.contentKey);
-  }
 
-  private async executeRun(body: TriggerRunBody, productId: string, runId: string, generation: number): Promise<void> {
-    const targetUrl = this.resolveTargetUrl(body.targetUrl);
-    const signal = this.activeAbortController?.signal;
-    const runDir = this.runDir(runId);
-    /** False once this run was stopped or replaced. */
-    const current = () => generation === this.runGeneration;
 
-    if (body.mode === 'safe-public') {
-      // Read-only path: never touches DiscoveryAgent or FlowTestOrchestrator.
-      try {
-        this.phase = 'scanning';
-        const report = await runSafeWebsiteScan({
-          targetUrl,
-          productId: body.productId,
-          outputDir: runDir,
-          runId,
-          headless: body.headless ?? true,
-          onEvent: (event) => {
-            if (current()) this.forwardRunEvent(event);
-          },
-        });
-        if (!current()) return;
-        this.lastReport = report;
-        await this.keepRun(report, body.targetUrl, undefined).catch(() => {});
-        this.phase = 'done';
-      } catch (err) {
-        if (current()) this.phase = 'failed';
-        throw err;
-      } finally {
-        if (current()) this.isRunning = false;
-      }
-      return;
-    }
 
-    try {
-      // Full testing needs the owner's say-so and a test host. Decided here, not by the screen.
-      const typed = new URL(body.targetUrl);
-      const siteHost = typed.host;
-      let memory = await loadSiteMemory(this.siteDir(), siteHost);
-      // What the person chose for the site is remembered, so the next check-up starts from it.
-      if (body.stagingHost !== undefined || body.owner !== undefined || body.searchChecks !== undefined) {
-        memory = {
-          ...(memory ?? emptySiteMemory(siteHost)),
-          ...(body.stagingHost !== undefined ? { staging: body.stagingHost || undefined } : {}),
-          // "Owner" forced on by the sign-in consent is for this run only; a later run starts from what the person chose.
-          ...(body.owner !== undefined && !(body.signInConsent === true && !this.beta) ? { owner: body.owner } : {}),
-          ...(body.searchChecks !== undefined ? { searchChecks: body.searchChecks } : {}),
-        };
-        await saveSiteMemory(this.siteDir(), memory);
-      }
-      // Sign-ins: the ones given (remembered when asked), or the ones saved for the site.
-      const signIns = await this.signInsFor(body, memory, siteHost);
-      if (signIns.memory && signIns.memory !== memory) {
-        memory = signIns.memory;
-        await saveSiteMemory(this.siteDir(), memory);
-      }
-      // A role given only as a saved session still needs a role entry (no details to sign in with).
-      const sessionRoles = Object.keys(this.savedSessions.get(runId) ?? {});
-      const allRoles: RoleCredential[] = [
-        ...(signIns.roles ?? []),
-        ...sessionRoles
-          .filter((r) => !signIns.roles?.some((x) => x.role === r))
-          .map((r) => ({ role: r, username: '' })),
-      ];
-      const profile: ProductProfile | undefined = allRoles.length
-        ? { name: productId, productId, roles: allRoles }
-        : undefined;
-      // Test again tests at the screen sizes the plan was approved with, unless told otherwise; a
-      // new check-up at the sizes chosen in Settings.
-      const breakpoints: Breakpoint[] =
-        (body.breakpoints as Breakpoint[] | undefined) ||
-        (body.testAgain && memory?.plan?.screenSizes?.length ? memory.plan.screenSizes : undefined) ||
-        (await this.readDefaults()).screenSizes ||
-        ALL_SCREEN_SIZES;
-      const urlFirst = body.owner !== undefined;
-      const owner = body.owner ?? true;
-      const testHost = await this.testCopyOf(typed, !!memory?.staging);
-      // Test sign-in details count as consent to full testing on this machine (ADR 0022). Per run: never saved.
-      const { readOnly, consent } = resolveReadOnly({
-        beta: this.beta,
-        owner,
-        ownerExplicit: body.owner === true,
-        testHost,
-        signInConsent: body.signInConsent,
-        roles: signIns.roles,
-      });
-      // On a shared machine the browser reaches the target at the address that was just checked.
-      if (this.beta) {
-        const checked = await resolvePublic(typed.hostname, this.hostChecks);
-        setBrowserPolicy({
-          guard: makeRequestGuard(this.hostChecks),
-          pinned: checked.ok && !isIpLiteral(typed.hostname) ? { [typed.hostname]: checked.address } : undefined,
-        });
-      }
-      // How search engines see a site matters on the public site, not on a test copy, unless asked.
-      const searchChecks = body.searchChecks ?? memory?.searchChecks ?? (urlFirst ? !testHost : true);
-      const visibility =
-        (body.visibility as { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean } | undefined) ??
-        (searchChecks
-          ? { search: true, answers: true, aiSearch: true, marketing: true }
-          : { search: false, answers: false, aiSearch: false, marketing: false });
-
-      const aiCap = checkAiCap(body.aiCap);
-      const context: StoredPlanRecord['context'] = {
-        targetUrl,
-        productId,
-        runId,
-        profile,
-        breakpoints,
-        headless: body.headless ?? true,
-        releaseTarget: body.releaseTarget,
-        draft: undefined as unknown as DiscoveryDraft,
-        readOnly,
-        signInConsent: consent && !readOnly ? true : undefined,
-        siteHost,
-        productContext: body.productContext,
-        designNotes: body.designNotes,
-        searchChecks,
-        visibility,
-        aiCap: aiCap.ok ? aiCap.value : undefined,
-        testCap: checkTestCap(body.testCap),
-        customHeaders: this.currentCustomHeaders,
-        userAgent: body.userAgent,
-        tunnelAuth: body.tunnelAuth,
-        headerHosts: body.headerHosts,
-      };
-
-      if (body.specTestCases && body.specTestCases.length > 0) {
-        // Caller supplied an explicit spec — takes priority over AI discovery.
-        await this.executeTesting(
-          { plan: this.emptyPlan(runId, body.targetUrl), context },
-          body.specTestCases,
-          [],
-          generation
-        );
-        return;
-      }
-      if (!body.useAI && !urlFirst) {
-        await this.executeTesting(
-          { plan: this.emptyPlan(runId, body.targetUrl), context },
-          [this.defaultTestCase()],
-          [],
-          generation
-        );
-        return;
-      }
-
-      // "Plan with fixed rules now": the AI is still set up, so items can be re-planned with it later.
-      const ai = await this.prepareAI(body.planWithoutAI ? { ...body, useAI: true } : body);
-      context.aiModels = ai.models;
-      context.ai = ai.settings;
-      if (body.planWithoutAI) ai.provider = undefined;
-      const aiBudget = ai.provider ? await this.aiBudgetFor(ai.settings, ai.key, context.aiCap) : undefined;
-      if (!current()) return;
-
-      // Everything this run writes lives in its own folder.
-      await fs.mkdir(runDir, { recursive: true });
-      const runAuthDir = this.runAuthDir(runId);
-      await fs.mkdir(runAuthDir, { recursive: true, mode: 0o700 });
-
-      // Product Context: the files sent, then the docs-URL pages. A fetch problem becomes a note.
-      const docsNotes: string[] = [];
-      const documents: Array<{ name: string; text: string }> = [];
-      const checkedDocs = checkContextDocuments(body.contextDocuments);
-      if (checkedDocs.ok && checkedDocs.value) documents.push(...checkedDocs.value);
-      const docsUrl = checkContextUrl(body.contextUrl);
-      if (docsUrl.ok && docsUrl.value) {
-        // On the owner's own machine a private docs address is allowed only when the site is private too.
-        const guarded = this.beta || !isPrivateHost(typed.hostname);
-        const fetched = await fetchDocsPages(docsUrl.value, {
-          get: guarded ? makeGuardedDocsGet(this.hostChecks) : localDocsGet,
-        }).catch(() => null);
-        if (!fetched) {
-          docsNotes.push('The docs address couldn’t be read, so the Product Context comes from your files only.');
-        } else {
-          documents.push(...fetched.docs);
-          if (fetched.docs.length === 0) {
-            docsNotes.push(
-              `No pages could be read from the docs address${fetched.skipped[0] ? ` (${fetched.skipped[0].why})` : ''}.`
-            );
-          } else if (fetched.skipped.length > 0) {
-            docsNotes.push(
-              `${fetched.skipped.length} docs page(s) were left out (for example: ${fetched.skipped[0].why}).`
-            );
-          }
-        }
-      }
-      if (!current()) return;
-      let contextFilePath: string | undefined;
-      const contextText = documents.length
-        ? [body.productContext?.trim(), ...documents.map((d) => `# Document: ${d.name}\n${d.text}`)]
-            .filter(Boolean)
-            .join('\n\n')
-        : body.productContext;
-      if (documents.length) {
-        context.contextDocuments = documents;
-        context.productContext = contextText;
-      }
-      if (contextText?.trim()) {
-        contextFilePath = path.join(runDir, 'product-context.md');
-        await fs.writeFile(contextFilePath, contextText, 'utf8');
-        context.contextFilePath = contextFilePath;
-      }
-
-      this.phase = 'scanning';
-      this.broadcastRunnerEvent({ type: 'DISCOVERY_STARTED', runId, timestamp: Date.now() });
-      const outcome = await new DiscoveryAgent().discoverWithSession({
-        targetUrl,
-        productId,
-        profile,
-        contextFilePath,
-        contextDocuments: documents.length ? documents : undefined,
-        suppliedSessions: this.savedSessions.get(runId),
-        aiPacing: aiBudget?.pacing,
-        outputDir: runDir,
-        authDir: runAuthDir,
-        signal,
-        finishSignal: this.finishController?.signal,
-        aiProvider: ai.provider,
-        readOnly,
-        requireSignIn: consent ? true : undefined,
-        maxPages:
-          typeof body.maxPages === 'number' && body.maxPages > 0
-            ? Math.min(Math.floor(body.maxPages), 1000)
-            : undefined,
-        crawlConcurrency: checkCrawlConcurrency(body.crawlConcurrency),
-        crawlDelayMs: checkCrawlDelayMs(body.crawlDelayMs),
-        customHeaders: this.currentCustomHeaders,
-        userAgent: body.userAgent,
-        tunnelAuth: body.tunnelAuth,
-        headerHosts: body.headerHosts,
-        aiBudget,
-        aiModels: { model: ai.models?.text, fallbacks: ai.fallbacks },
-        onProgress: (progress) => {
-          if (current())
-            this.broadcastRunnerEvent({ type: 'DISCOVERY_PROGRESS', runId, ...progress, timestamp: Date.now() });
-        },
-        // The last approved Plan is reused where the site hasn't changed, unless asked to start afresh.
-        remembered: body.replanAll ? undefined : memory?.plan,
-      });
-      if (!current()) return;
-      const draft = outcome.draft;
-      context.preflight = outcome.preflight;
-      await this.recordModelOutcomes(draft.plan?.budget?.models);
-      const sinceLastRun = applySiteMemory(draft, memory);
-      context.draft = draft;
-      if (body.planWithoutAI && draft.exploration) {
-        draft.exploration.notes = [
-          'Planned with fixed rules, as you chose, so no AI requests were used. Re-plan any item with the AI when you have requests to spare.',
-          ...draft.exploration.notes.filter((n) => !n.startsWith('No AI key is set up')),
-        ];
-      }
-      if (docsNotes.length && draft.exploration) draft.exploration.notes = [...draft.exploration.notes, ...docsNotes];
-      context.reportNotes = [...(draft.exploration?.notes || []), ...(signIns.note ? [signIns.note] : [])];
-      if (consent && !readOnly) {
-        context.reportNotes.push(
-          'Tested with the sign-in details you gave, as you agreed: forms were filled in and sent. Pages that need no sign-in (such as sign-up or contact) were tested signed out, after the sign-in succeeded. Sensitive Actions (such as deleting or paying) were still skipped.'
-        );
-      }
-      context.pageCoverage = draft.exploration?.pageCoverage;
-      this.broadcastRunnerEvent({
-        type: 'DISCOVERY_COMPLETED',
-        runId,
-        flowsFound: draft.flows.length,
-        timestamp: Date.now(),
-      });
-
-      const record: StoredPlanRecord = { plan: this.emptyPlan(runId, body.targetUrl), context };
-      record.plan = this.buildPlan(
-        record,
-        sinceLastRun,
-        !!ai.provider,
-        readOnlyReason(owner, testHost, this.beta && !!memory?.staging)
-      );
-
-      // Test again: nothing new since the plan was approved, so it's tested as approved. The plan is
-      // still kept, so stopping or a failure can go back to it.
-      const approvedAt = memory?.planApprovedAt;
-      if (body.testAgain && approvedAt && memory && this.nothingNew(draft, sinceLastRun, memory)) {
-        applySafeAnswers(record.plan.questions);
-        applySafeAnswers(draft.ambiguityQuestions);
-        await saveSiteMemory(this.siteDir(), rememberRun(memory, siteHost, draft, { reviewed: false }));
-        const { specTestCases, notRun } = this.testsFor(record.context);
-        record.plan.testCases = specTestCases;
-        await this.savePlan(record);
-        context.reportNotes.push(...this.handCheckNotes(draft));
-        context.reportNotes.push(
-          `Nothing on the site had changed since the plan was approved on ${formatDay(approvedAt)}, so it was tested as approved, without a new review.`
-        );
-        await this.executeTesting(record, specTestCases, notRun, generation, { testedWithApprovedPlan: approvedAt });
-        return;
-      }
-
-      if (body.skipReview === false || body.testAgain) {
-        // Pause for review: the plan is written to disk and waits for the owner. After "Test again",
-        // only what's new since the approved plan is flagged.
-        await this.savePlan(record);
-        this.phase = 'awaiting-review';
-        this.broadcastRunnerEvent({
-          type: 'PLAN_READY',
-          runId,
-          pageCount: draft.pages.length,
-          flowCount: draft.flows.length,
-          questionCount: draft.ambiguityQuestions.length,
-          changedSinceApproval: body.testAgain ? true : undefined,
-          timestamp: Date.now(),
-        });
-        return;
-      }
-
-      // No review: every question gets its safe answer, and only what was there is remembered.
-      applySafeAnswers(draft.ambiguityQuestions);
-      await saveSiteMemory(this.siteDir(), rememberRun(memory, siteHost, draft, { reviewed: false }));
-      const { specTestCases, notRun } = this.testsFor(record.context);
-      context.reportNotes.push(...this.handCheckNotes(draft));
-      await this.executeTesting(record, specTestCases, notRun, generation);
-    } catch (err) {
-      // A stopped run's state was set by the stop.
-      if (current() && !isAbortError(err)) {
-        this.phase = 'failed';
-        this.isRunning = false;
-      }
-      throw err;
-    } finally {
-      if (this.phase !== 'awaiting-review') {
-        await this.cleanAuthDir(runId);
-      }
-    }
-  }
 
   /**
    * The text model for a run. Without a key or a free model there's no run: the plan is written by
    * the AI (ADR 0009). `key` is the key used, for reading its AI Request Budget; it isn't saved.
    */
-  private async prepareAI(body: TriggerRunBody): Promise<{
+  private async prepareAI(body: RunStartBody): Promise<{
     provider?: AIProvider;
     models?: { text?: string; vision?: string };
     settings?: StoredPlanRecord['context']['ai'];
@@ -3644,479 +3004,52 @@ export class RunnerServer {
     return this.makeAIProvider(settings.provider, apiKey, settings.model);
   }
 
-  private emptyPlan(runId: string, targetUrl: string): ReviewPlan {
-    return { runId, targetUrl, discoveredAt: new Date().toISOString(), pages: [], flows: [], questions: [] };
-  }
-
-  /** The plan the review shows, from the run's draft. Thumbnails are addressed relative to the report folder. */
-  private buildPlan(
-    record: StoredPlanRecord,
-    sinceLastRun: MemorySummary | undefined,
-    aiAvailable: boolean,
-    reason: string
-  ): ReviewPlan {
-    const { draft, readOnly } = record.context;
-    // Thumbnails are addressed inside the run's folder: /api/evidence/runs/<runId>/<path>.
-    const relative = (file?: string) => this.relativeToRun(record.context.runId, file);
-    const { specTestCases, wontRun, summary } = this.testsFor(record.context);
-    return {
-      runId: record.context.runId,
-      targetUrl: record.plan.targetUrl,
-      discoveredAt: record.plan.discoveredAt || new Date().toISOString(),
-      siteType: draft.siteType,
-      pages: draft.pages.map((p) => ({ ...p, screenshotPath: relative(p.screenshotPath) })),
-      flows: draft.flows,
-      questions: draft.ambiguityQuestions,
-      testCases: specTestCases,
-      usedFallbackDiscovery: draft.usedFallbackSynthesis,
-      readOnly: readOnly || undefined,
-      testCap: record.context.testCap,
-      intentsOff: draft.plan?.intentsOff?.length ? draft.plan.intentsOff : undefined,
-      readOnlyReason: reason || undefined,
-      notes: draft.exploration?.notes?.length ? draft.exploration.notes : undefined,
-      sinceLastRun: sinceLastRun?.seenBefore
-        ? {
-            newPages: sinceLastRun.newPages,
-            newJourneys: sinceLastRun.newJourneys,
-            newQuestions: sinceLastRun.newQuestions,
-            rememberedAnswers: sinceLastRun.rememberedAnswers,
-          }
-        : undefined,
-      aiAvailable,
-      signedInAs: draft.exploration?.signedInAs,
-      productContext: record.context.productContext,
-      designNotes: record.context.designNotes,
-      // The complete Plan (ADR 0009): every Plan Item, what won't run, and what approving runs.
-      planPages: draft.plan?.pages.map((p) => ({
-        ...p,
-        screenshotPath: relative(p.screenshotPath) ?? p.screenshotPath,
-      })),
-      navigation: draft.plan?.navigation,
-      gradedChecks: draft.plan ? this.gradedChecksFor(record) : undefined,
-      layoutGroups: draft.plan?.layoutGroups,
-      screenSizes: this.screenSizesOf(record.context),
-      roles: draft.plan
-        ? [...new Set(draft.pages.flatMap((p) => (p.reachedBy?.length ? p.reachedBy : ['visitor'])))]
-        : undefined,
-      wontRun,
-      budget: draft.plan?.budget,
-      summary,
-      otherHosts: draft.plan?.otherHosts,
-      plannedWhileCrawling: draft.plan?.plannedWhileCrawling || undefined,
-      notFound: draft.plan?.notFound?.length ? draft.plan.notFound : undefined,
-      documentedItems: draft.plan?.documentedItems,
-      rolesNotTested: draft.exploration?.signInFailures
-        ? Object.entries(draft.exploration.signInFailures).map(([role, reason]) => ({
-            role,
-            reason,
-            text: signInReasonText(reason),
-          }))
-        : undefined,
-      contextDocuments: record.context.contextDocuments?.map((d) => ({ name: d.name, chars: d.text.length })),
-    };
-  }
-
-  /** The graded checks, each saying up front when it can't be graded this time. */
-  private gradedChecksFor(record: StoredPlanRecord): ReviewPlan['gradedChecks'] {
-    const { context } = record;
-    const budget = context.draft.plan?.budget;
-    const noVision = !context.aiModels?.vision && context.ai?.provider === 'openrouter';
-    const noRequests = budget?.left !== undefined && budget.left <= 0;
-    const hasDesign = !!context.designNotes?.trim();
-    return GRADED_CHECKS.map((check) => {
-      if (check.id === 'check:looks' && !hasDesign && (!context.ai || noVision || noRequests)) {
-        return {
-          ...check,
-          notGraded: !context.ai
-            ? 'Needs the AI to look over the screens, and no AI is set up.'
-            : noVision
-              ? 'Needs an AI model that reads screenshots, and none is free right now. Choose one in Settings.'
-              : 'Needs AI requests to look over the screens, and none are left today. Finish it from the report later.',
-        };
-      }
-      if (check.id === 'check:findable' && context.searchChecks === false) {
-        return {
-          ...check,
-          notGraded: 'Not checked: this isn’t the public site. Broken links are still checked, under Works.',
-        };
-      }
-      return check;
-    });
-  }
-
-  /** The screen sizes a run uses. */
-  private screenSizesOf(context: StoredPlanRecord['context']): Breakpoint[] {
-    return context.breakpoints?.length ? context.breakpoints : ['375px', '768px', '1440px'];
-  }
-
-  /**
-   * The tests a plan runs, and the planned tests a live site leaves out (they need a test copy).
-   * A complete Plan is expanded by expandPlan, the one expansion the approval summary shares; a
-   * draft from before it runs its journeys and the page sweep.
-   */
-  private testsFor(context: StoredPlanRecord['context']): {
-    specTestCases: TestCase[];
-    notRun: RunOptions['notRun'];
-    wontRun?: ReviewPlan['wontRun'];
-    summary?: ReviewPlan['summary'];
-  } {
-    const { draft } = context;
-    const readOnly = !!context.readOnly;
-    if (draft.plan) {
-      const expanded = expandPlan(draft, {
-        readOnly,
-        screenSizes: this.screenSizesOf(context),
-        questions: draft.ambiguityQuestions,
-        testCap: context.testCap,
-      });
-      return {
-        specTestCases: expanded.testCases.length > 0 ? expanded.testCases : [this.defaultTestCase()],
-        notRun: expanded.notRun,
-        wontRun: expanded.wontRun,
-        summary: expanded.summary,
-      };
-    }
-    const specTestCases = [...new TestPlanner().plan(draft, { readOnly }).testCases, ...buildPageSweep(draft)];
-    const notRun = readOnly
-      ? draft.flows
-          .filter((f) => f.needsTestCopy && !f.outOfScope && !f.needsHelp?.length)
-          .map((f) => ({ id: `TC-${f.id}`, flowId: f.id, name: f.name, role: f.role, reason: NEEDS_TEST_COPY }))
-      : [];
-    return { specTestCases: specTestCases.length > 0 ? specTestCases : [this.defaultTestCase()], notRun };
-  }
-
-  /** The site as the plan saw it, kept in the report so the report can be drawn as a map. */
-  private siteMapOf(draft: DiscoveryDraft, runId: string): SiteMapSummary {
-    return {
-      siteType: draft.siteType,
-      pages: draft.pages.map((p) => ({
-        urlPath: p.urlPath,
-        title: p.title,
-        layoutGroup: p.layoutGroup,
-        screenshotPath: this.relativeToRun(runId, p.screenshotPath) ?? p.screenshotPath,
-        isNew: p.isNew,
-        reachedBy: p.reachedBy,
-      })),
-      journeys: draft.flows.map((f) => ({
-        id: f.id,
-        name: f.name,
-        reason: f.description,
-        pages: journeyPages(f),
-        needsTestCopy: f.needsTestCopy,
-        skipped: f.outOfScope || (f.needsHelp?.length ?? 0) > 0 || undefined,
-        source: f.source,
-      })),
-    };
-  }
-
-  /** Rules the owner added that no test can check: listed in the report for a person to check. */
-  private handCheckNotes(draft: DiscoveryDraft): string[] {
-    return draft.flows
-      .filter((f) => !f.outOfScope)
-      .flatMap((f) =>
-        (f.userRules || []).filter((r) => !r.checkable).map((r) => `Check by hand (“${f.name}”): ${r.text}`)
-      );
-  }
-
-  private async executeTesting(
-    record: StoredPlanRecord,
-    specTestCases: TestCase[],
-    notRun: RunOptions['notRun'],
-    generation: number,
-    extra: { testedWithApprovedPlan?: string } = {}
-  ): Promise<void> {
-    const { context } = record;
-    /** False once this run was stopped or replaced. */
-    const current = () => generation === this.runGeneration;
-    this.phase = 'testing';
-    this.isRunning = true;
-    this.currentTargetUrl = record.plan.targetUrl || this.currentTargetUrl;
-    this.broadcastRunnerEvent({
-      type: 'TESTING_STARTED',
-      runId: context.runId,
-      testCaseCount: specTestCases.length,
-      timestamp: Date.now(),
-    });
-
-    const runDir = this.runDir(context.runId);
-    await fs.mkdir(runDir, { recursive: true });
-    const runAuthDir = this.runAuthDir(context.runId);
-    await fs.mkdir(runAuthDir, { recursive: true, mode: 0o700 });
-    const orchestrator = new FlowTestOrchestrator();
-    let report: ReleaseReport;
-    try {
-      report = await orchestrator.run({
-        targetUrl: context.targetUrl,
-        productId: context.productId,
-        specTestCases,
-        profile: context.profile,
-        headless: context.headless ?? true,
-        // The run's own folder; sign-in sessions and the suppressions stay beside the runs.
-        outputDir: runDir,
-        authDir: runAuthDir,
-        customHeaders: context.customHeaders || this.currentCustomHeaders,
-        userAgent: context.userAgent || this.currentUserAgent,
-        tunnelAuth: context.tunnelAuth || this.currentTunnelAuth,
-        headerHosts: context.headerHosts || this.currentHeaderHosts,
-        preflight: context.preflight,
-        stateDir: this.outputDir,
-        evidenceUrlPrefix: `/api/evidence/runs/${context.runId}/`,
-        dataDir: this.dataDir,
-        signal: this.activeAbortController?.signal,
-        finishSignal: this.finishController?.signal,
-        breakpoints: context.breakpoints || ['375px', '768px', '1440px'],
-        repoRoot: process.cwd(),
-        runId: context.runId,
-        reportNotes: context.reportNotes,
-        aiModels: context.aiModels,
-        readOnly: context.readOnly,
-        // Under consent a role that can't sign in fails the run: nothing is sent signed out or half-tested.
-        requireSignIn: context.signInConsent && !context.readOnly ? true : undefined,
-        pageCoverage: context.pageCoverage ?? context.draft?.exploration?.pageCoverage,
-        notRun,
-        suppliedSessions: this.savedSessions.get(context.runId),
-        documentedNotFound: context.draft?.plan?.notFound?.map((n) => ({ docSource: n.docSource, reason: n.reason })),
-        siteMap: context.draft ? this.siteMapOf(context.draft, context.runId) : undefined,
-        testedWithApprovedPlan: extra.testedWithApprovedPlan,
-        searchChecks: context.searchChecks,
-        visibility: context.visibility,
-        stepTimeoutMs: this.stepTimeoutMs,
-        onEvent: (event) => {
-          if (current()) this.forwardRunEvent(event);
-        },
-      });
-    } catch (err) {
-      // Stopped: the stop has already put the plan back for review.
-      if (!current() || isAbortError(err)) return;
-      // Without a plan to go back to (a run that skipped the review), the caller reports the failure.
-      if (!context.draft || this.currentPlanRecord !== record) {
-        await this.clearPlan(context.runId);
-        throw err;
-      }
-      // Failed part-way: the plan stays, so it can be approved again once the site is working.
-      const msg = this.redactedMessage(err);
-      console.error('[executeTesting failed stack]', (err as any)?.stack || err);
-      await this.savePlan(record).catch(() => {});
-      this.phase = 'awaiting-review';
-      this.isRunning = true;
-      this.lastRunError = msg;
-      this.lastErrorCode = 'ERR_TEST_EXECUTION_FAILED';
-      this.broadcastRunnerEvent({
-        type: 'RUN_FAILED',
-        runId: context.runId,
-        error: msg,
-        code: 'ERR_TEST_EXECUTION_FAILED',
-        planKept: true,
-        timestamp: Date.now(),
-      });
-      return;
-    }
-    if (!current()) return;
-    // Tested: the plan no longer awaits review, so a restart mustn't bring it back.
-    record.status = 'done';
-    await this.savePlan(record).catch(() => {});
-    if (context.runId) {
-      this.savedSessions.delete(context.runId);
-      await this.cleanAuthDir(context.runId);
-    }
-    this.currentPlanRecord = null;
-
-    // What the site was seen doing (the error it shows for an empty field) confirms a guessed rule next time.
-    if (context.siteHost && context.draft) {
-      const memory = await loadSiteMemory(this.siteDir(), context.siteHost);
-      if (memory) {
-        rememberObservations(memory, context.draft, report);
-        await saveSiteMemory(this.siteDir(), memory).catch(() => {});
-      }
-    }
-
-    report.aiUsage = context.draft?.plan?.budget?.tokens;
-    const coverage = context.pageCoverage ?? context.draft?.exploration?.pageCoverage;
-    if (coverage) report.pageCoverage = coverage;
-
-    // The AI's visual review of one screen per layout, within what's left of today's AI requests.
-    // What it doesn't get to can be finished from the report.
-    if (context.draft && context.ai && context.ai.provider !== 'mock') {
-      const screens = this.screensForReview(report, context.draft);
-      if (screens.length > 0) {
-        this.broadcastRunnerEvent({
-          type: 'VISUAL_REVIEW_STARTED',
-          runId: context.runId,
-          screens: screens.length,
-          timestamp: Date.now(),
-        });
-        const reviewed = await this.visualReview(report, screens, {
-          provider: context.ai.provider,
-          apiKey: context.ai.apiKey,
-          vision: context.aiModels?.vision,
-        }).catch(() => null);
-        if (!current()) return;
-        if (!reviewed) {
-          report.notes = [
-            ...(report.notes || []),
-            'Looks and reads well wasn’t fully checked: no AI model that reads screenshots is set up. Choose one in Settings.',
-          ];
-        } else if (reviewed.remaining > 0) {
-          report.notes = [
-            ...(report.notes || []),
-            reviewed.outOfRequests
-              ? `The AI’s visual review looked at ${reviewed.reviewed} of ${screens.length} screens before today’s AI requests ran out. Finish it from the report when requests are available again.`
-              : `The AI’s visual review stopped after ${reviewed.reviewed} of ${screens.length} screens because the AI service didn’t answer. Finish it from the report later.`,
-          ];
-        }
-        if (reviewed) await this.saveReviewedReport(report);
-      }
-    }
-
-    // Redact any credentials, header tokens, or tunnel secrets in run artifacts.
-    const creds = context.profile?.roles || [];
-    const activeHeaders = context.customHeaders || this.currentCustomHeaders;
-    const headerSecrets: Array<Partial<RoleCredential>> = [];
-    if (activeHeaders) {
-      for (const val of Object.values(activeHeaders)) {
-        if (typeof val === 'string' && val.length >= 3) {
-          headerSecrets.push({ token: val });
-        }
-      }
-    }
-    const activeTunnel = context.tunnelAuth || this.currentTunnelAuth;
-    if (activeTunnel && activeTunnel.length >= 3) {
-      headerSecrets.push({ token: activeTunnel });
-    }
-    await new Redactor([...creds, ...headerSecrets]).files(runDir);
-
-    // Kept for Past check-ups, with its files, before the run is reported as done.
-    await this.keepRun(report, record.plan.targetUrl || context.targetUrl, context.siteHost).catch((err) =>
-      console.warn('[Release check-up] Couldn’t keep the run’s report:', this.redactedMessage(err))
-    );
-    this.lastReport = report;
-    this.savedSessions.delete(context.runId);
-    this.phase = 'done';
-    this.isRunning = false;
-    this.currentTargetUrl = null;
-  }
 
   private async ensurePlanLoaded(): Promise<StoredPlanRecord | null> {
-    if (this.currentPlanRecord) {
-      if (this.currentPlanRecord.status === 'done') return null;
-      return this.currentPlanRecord;
+    const record = await this.session.plan.current();
+    if (record && this.phase === 'idle') {
+      this.session.run.begin(record.plan.runId, record.plan.targetUrl);
+      this.session.run.setPhase('awaiting-review');
     }
-    const res = await readJsonSafe<StoredPlanRecord>(this.planFile, { currentVersion: 1 });
-    if (!res.data) return null;
-    const record = normalizeStoredPlan(res.data);
-    if (record?.plan && record?.context && record.status === 'awaiting-review') {
-      this.currentPlanRecord = record;
-      if (this.phase === 'idle') {
-        this.phase = 'awaiting-review';
-        this.isRunning = true;
-        this.currentRunId = record.plan.runId;
-      }
-      return this.currentPlanRecord;
-    }
-    return null;
+    return record;
   }
 
   /** The site a plan is for, as typed ("localhost:3050"). */
   private hostOfPlan(record: StoredPlanRecord): string {
-    return record.context.siteHost ?? hostOfAddress(record.plan.targetUrl);
+    return this.session.plan.hostOf(record);
   }
 
   private parkedFile(host: string): string {
-    return path.join(this.dataDir, 'waiting-plans', `${host.toLowerCase().replace(/[^a-z0-9.-]+/g, '_')}.json`);
+    return this.session.plan.parkedFileFor(host);
   }
 
   /** Keeps a waiting plan aside while another site is checked: in memory (with its sign-ins) and on disk (without). */
   private async parkPlan(record: StoredPlanRecord): Promise<void> {
-    const host = this.hostOfPlan(record);
-    this.parkedPlans.set(host, record);
-    const file = this.parkedFile(host);
-    await writeJsonAtomic(file, this.planForDisk(record));
+    return this.session.plan.park(record);
   }
 
   /** Takes a site's kept-aside plan back out, or null when there's none. */
   private async unparkPlan(host: string): Promise<StoredPlanRecord | null> {
-    let record = this.parkedPlans.get(host) ?? null;
-    if (!record) {
-      const res = await readJsonSafe<StoredPlanRecord>(this.parkedFile(host), { currentVersion: 1 });
-      if (res.data) {
-        record = normalizeStoredPlan(res.data);
-      }
-    }
-    this.parkedPlans.delete(host);
-    await fs.rm(this.parkedFile(host), { force: true }).catch(() => {});
-    return record?.plan && record.context ? record : null;
+    return this.session.plan.unpark(host);
   }
 
   /** Every plan kept aside, for the new check-up screen. */
   private async listParkedPlans(): Promise<
     Array<{ host: string; targetUrl: string; runId: string; discoveredAt: string; pages: number }>
   > {
-    const dir = path.join(this.dataDir, 'waiting-plans');
-    const list: Array<{ host: string; targetUrl: string; runId: string; discoveredAt: string; pages: number }> = [];
-    for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
-      if (!name.endsWith('.json')) continue;
-      const res = await readJsonSafe<StoredPlanRecord>(path.join(dir, name), { currentVersion: 1 });
-      if (res.data?.plan && res.data?.context) {
-        const record = normalizeStoredPlan(res.data);
-        list.push({
-          host: this.hostOfPlan(record),
-          targetUrl: record.plan.targetUrl,
-          runId: record.plan.runId,
-          discoveredAt: record.plan.discoveredAt,
-          pages: record.plan.planPages?.length ?? record.plan.pages.length,
-        });
-      }
-    }
-    return list;
+    const waiting = await this.session.plan.waiting();
+    return waiting.map(({ host, record }) => ({
+      host,
+      targetUrl: record.plan.targetUrl,
+      runId: record.plan.runId,
+      discoveredAt: record.plan.discoveredAt,
+      pages: record.plan.planPages?.length ?? record.plan.pages.length,
+    }));
   }
 
-  /**
-   * GET: the plans kept aside. POST { host }: brings one back for review; the plan waiting now, if
-   * any, is kept aside in its place. Not while scanning or testing.
-   */
-  private async handleWaitingPlans(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (req.method === 'GET') {
-      this.sendJson(res, 200, { plans: (await this.listParkedPlans()).filter((p) => this.isMine(p.runId)) });
-      return;
-    }
-    let body: { host?: string } = {};
-    try {
-      body = await this.readJsonBody(req);
-    } catch {
-      // checked below
-    }
-    if (this.phase === 'scanning' || this.phase === 'testing') {
-      this.sendJson(res, 409, {
-        error: 'A check-up is running. Wait for it to finish, or stop it first.',
-        code: 'ERR_RUN_IN_PROGRESS',
-      });
-      return;
-    }
-    if (this.beta && body.host && !this.isMine(this.parkedPlans.get(body.host)?.plan.runId)) {
-      this.sendJson(res, 404, { error: 'There’s no plan kept for that site.' });
-      return;
-    }
-    const record = body.host ? await this.unparkPlan(body.host) : null;
-    if (!record) {
-      this.sendJson(res, 404, { error: 'There’s no plan kept for that site.' });
-      return;
-    }
-    const current = await this.ensurePlanLoaded();
-    if (current && this.phase === 'awaiting-review') await this.parkPlan(current);
-    await this.savePlan(record);
-    this.phase = 'awaiting-review';
-    this.isRunning = true;
-    this.currentRunId = record.plan.runId;
-    this.currentTargetUrl = record.plan.targetUrl;
-    this.runEvents = [];
-    this.runGeneration++;
-    this.broadcastRunnerEvent({ type: 'PLAN_READY', runId: record.plan.runId, resumed: true, timestamp: Date.now() });
-    this.sendJson(res, 200, { resumed: true, runId: record.plan.runId, targetUrl: record.plan.targetUrl });
-  }
 
   private async savePlan(record: StoredPlanRecord): Promise<void> {
-    this.currentPlanRecord = record;
-    await writeJsonAtomic(this.planFile, this.planForDisk(record));
+    return this.session.plan.save(record);
   }
 
   /**
@@ -4124,1084 +3057,17 @@ export class RunnerServer {
    * restart the approval has to send them again.
    */
   private planForDisk(record: StoredPlanRecord): StoredPlanRecord {
-    const { profile, ai, customHeaders, tunnelAuth, preflight, ...context } = record.context;
-    const roles = profile?.roles || [];
-    const notSaved = [...new Set([...(context.signInNotSaved || []), ...roles.map((r) => r.role)])];
-    // Saved sessions are never written either: the file only says which roles need theirs sent again.
-    const sessions = this.savedSessions.get(context.runId) ?? {};
-    const sessionNotSaved = [...new Set([...(context.sessionNotSaved || []), ...Object.keys(sessions)])];
-    // A session's cookie values are masked too, should one ever reach the plan's text.
-    const sessionSecrets = Object.values(sessions).flatMap((s) =>
-      s.cookies.flatMap((c) => {
-        const value = (c as { value?: unknown } | null)?.value;
-        return typeof value === 'string' && value.length >= 8 ? [{ token: value }] : [];
-      })
-    );
-    const headerNames = Object.keys(customHeaders || this.currentCustomHeaders || {});
-    const customHeaderNames = [...new Set([...(context.customHeaderNames || []), ...headerNames])];
-    const headerSecrets: Array<Partial<RoleCredential>> = [];
-    const activeHeaders = customHeaders || this.currentCustomHeaders;
-    if (activeHeaders) {
-      for (const val of Object.values(activeHeaders)) {
-        if (typeof val === 'string' && val.length >= 3) {
-          headerSecrets.push({ token: val });
-        }
-      }
-    }
-    const activeTunnel = tunnelAuth || this.currentTunnelAuth;
-    if (activeTunnel && activeTunnel.length >= 3) {
-      headerSecrets.push({ token: activeTunnel });
-    }
-    return new Redactor([...roles, ...sessionSecrets, ...headerSecrets]).deep({
-      schemaVersion: 1,
-      status: record.status ?? 'awaiting-review',
-      plan: record.plan,
-      context: {
-        ...context,
-        sessionNotSaved: sessionNotSaved.length > 0 ? sessionNotSaved : undefined,
-        customHeaderNames: customHeaderNames.length > 0 ? customHeaderNames : undefined,
-        profile: profile && {
-          ...profile,
-          roles: roles.map(
-            ({
-              role,
-              loginPath,
-              usernameSelector,
-              passwordSelector,
-              submitSelector,
-              postLoginSelector,
-              postLoginUrl,
-            }) => ({
-              role,
-              username: '',
-              loginPath,
-              usernameSelector,
-              passwordSelector,
-              submitSelector,
-              postLoginSelector,
-              postLoginUrl,
-            })
-          ),
-        },
-        signInNotSaved: notSaved.length > 0 ? notSaved : undefined,
-        // An AI key sent with the request isn't kept either; a saved key is looked up again.
-        ai: ai && { provider: ai.provider, model: ai.model },
-      },
-    });
+    return this.session.plan.forDisk(record);
   }
 
   /** Forgets the paused plan; with a runId, only while it is still that run's plan (a newer run may have replaced it). */
   private async clearPlan(runId?: string): Promise<void> {
-    // The run's saved sessions go with its plan (a plan kept aside for later keeps its own).
-    if (runId) {
-      this.savedSessions.delete(runId);
-      await this.cleanAuthDir(runId);
-    } else if (this.currentPlanRecord && ![...this.parkedPlans.values()].includes(this.currentPlanRecord)) {
-      this.savedSessions.delete(this.currentPlanRecord.plan.runId);
-      await this.cleanAuthDir(this.currentPlanRecord.plan.runId);
-    }
-    if (runId && this.currentPlanRecord && this.currentPlanRecord.plan.runId !== runId) return;
-    this.currentPlanRecord = null;
-    await fs.rm(this.planFile, { force: true }).catch(() => {});
+    return this.session.plan.clear(runId);
   }
 
-  private async handleGetPlan(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const record = await this.ensurePlanLoaded();
-    // Also while testing: a page reopened mid-run draws the map from the approved plan.
-    if (!record || (this.phase !== 'awaiting-review' && this.phase !== 'scanning' && this.phase !== 'testing')) {
-      this.sendJson(res, 404, { error: 'No plan awaiting review' });
-      return;
-    }
-    this.sendJson(res, 200, planForClient(record.plan));
-  }
 
-  private async handlePatchPlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const record = await this.ensurePlanLoaded();
-    if (!record || this.phase !== 'awaiting-review') {
-      this.sendJson(res, 404, { error: 'No plan awaiting review' });
-      return;
-    }
 
-    interface PatchPlanBody {
-      flows?: DiscoveredFlow[];
-      questions?: Array<{ id: string; selectedAnswer: string }>;
-      answers?: Record<string, string>;
-      testCases?: TestCase[];
-      productContext?: string;
-      designNotes?: string;
-      /** Plan Items switched on or off: pages, tests on pages, Navigation Checks, journeys ("journey:<id>"). */
-      items?: Array<{ id: string; skipped: boolean }>;
-      /** The screen sizes the run uses. */
-      screenSizes?: Breakpoint[];
-      /**
-       * What a test or journey should lead to, confirmed or reworded by the person: it's theirs now,
-       * not the AI's guess. `expectations` left out confirms the AI's wording as it is.
-       */
-      expectations?: Array<{ id: string; text?: string }>;
-      /** 'quick': desktop only, and only the shared menus' links. */
-      preset?: 'quick';
-      /**
-       * What the person decided about an item that came from a document (its Source): the roles it
-       * applies to, how serious a difference is, that the document is out of date, or that the
-       * proposed roles are right as they are.
-       */
-      sourceEdits?: Array<{
-        itemId: string;
-        roles?: string[];
-        severity?: FindingSeverity;
-        stale?: boolean;
-        confirm?: boolean;
-      }>;
-      /** "Not found in app" entries the person removed from the list. */
-      notFoundEdits?: Array<{ id: string; remove?: boolean }>;
-      /** Intents switched off for the whole Plan (works, rejects, limits, denied); [] switches all on. */
-      intentsOff?: string[];
-    }
 
-    let body: PatchPlanBody;
-    try {
-      body = await this.readJsonBody<PatchPlanBody>(req);
-    } catch {
-      this.sendJson(res, 400, { error: 'Invalid JSON body' });
-      return;
-    }
-
-    let intentsOff: PlanIntent[] | undefined;
-    if (body.intentsOff !== undefined) {
-      const checked = checkIntentsOff(body.intentsOff);
-      if (!checked.ok) {
-        this.sendJson(res, 400, { error: checked.problem.error, code: checked.problem.code });
-        return;
-      }
-      intentsOff = checked.value;
-    }
-
-    // Every edit gets the same check as the AI's plan. An edited test aimed at something the scan
-    // never found is refused, and nothing in this request is applied.
-    const validator = new PlanValidator(record.plan.pages, record.context.draft?.forms);
-    if (Array.isArray(body.testCases)) {
-      const issues = validator.check(body.testCases.map(asFlow));
-      if (issues.length > 0) {
-        this.sendJson(res, 422, { error: 'Some steps are aimed at things that aren’t on the page.', issues });
-        return;
-      }
-    }
-
-    // A typed sign-in detail becomes its placeholder, so the plan never holds it.
-    const roles = record.context.profile?.roles || [];
-    for (const item of [
-      ...(Array.isArray(body.flows) ? body.flows : []),
-      ...(Array.isArray(body.testCases) ? body.testCases : []),
-    ]) {
-      replaceCredentialsWithPlaceholders(item.steps || [], roles);
-    }
-
-    if (body.questions && Array.isArray(body.questions)) {
-      for (const patchQ of body.questions) {
-        const target = record.plan.questions.find((q) => q.id === patchQ.id);
-        if (target) target.selectedAnswer = patchQ.selectedAnswer;
-        const draftTarget = record.context.draft?.ambiguityQuestions?.find((q) => q.id === patchQ.id);
-        if (draftTarget) draftTarget.selectedAnswer = patchQ.selectedAnswer;
-      }
-    }
-
-    if (body.answers && typeof body.answers === 'object') {
-      for (const [id, given] of Object.entries(body.answers)) {
-        // An empty answer clears it: the safe answer is used again.
-        const answer = given || undefined;
-        const target = record.plan.questions.find((q) => q.id === id);
-        if (target) target.selectedAnswer = answer;
-        const draftTarget = record.context.draft?.ambiguityQuestions?.find((q) => q.id === id);
-        if (draftTarget) draftTarget.selectedAnswer = answer;
-      }
-    }
-
-    if (body.flows && Array.isArray(body.flows)) {
-      validator.markFlowsNeedingHelp(body.flows);
-      record.plan.flows = body.flows;
-      if (record.context.draft) {
-        record.context.draft.flows = body.flows;
-        // An added or edited journey that sends a form needs a test copy too.
-        markJourneysNeedingTestCopy(record.context.draft);
-      }
-    }
-
-    if (body.testCases && Array.isArray(body.testCases)) {
-      record.plan.testCases = body.testCases;
-      record.context.customTestCases = true;
-    } else if (record.context.draft) {
-      record.plan.testCases = this.testsFor(record.context).specTestCases;
-      record.context.customTestCases = undefined;
-    }
-
-    if (body.productContext !== undefined) {
-      record.context.productContext = body.productContext;
-      record.plan.productContext = body.productContext;
-      if (body.productContext.trim()) {
-        const filePath =
-          record.context.contextFilePath || path.join(this.runDir(record.plan.runId), 'product-context.md');
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, body.productContext, 'utf8');
-        record.context.contextFilePath = filePath;
-      }
-    }
-
-    if (body.designNotes !== undefined) {
-      record.context.designNotes = body.designNotes;
-      record.plan.designNotes = body.designNotes;
-    }
-
-    // Plan Items switched on or off.
-    const draft = record.context.draft;
-    if (intentsOff && draft?.plan) draft.plan.intentsOff = intentsOff.length > 0 ? intentsOff : undefined;
-    for (const item of Array.isArray(body.items) ? body.items : []) {
-      const skipped = item.skipped ? true : undefined;
-      if (item.id.startsWith('journey:')) {
-        const flow = draft?.flows.find((f) => `journey:${f.id}` === item.id);
-        if (flow) flow.outOfScope = skipped;
-        continue;
-      }
-      const plan = draft?.plan;
-      const found =
-        plan?.pages.find((p) => p.id === item.id) ??
-        plan?.navigation.find((n) => n.id === item.id) ??
-        plan?.pages.flatMap((p) => p.tests).find((t) => t.id === item.id);
-      if (found) found.skipped = skipped;
-    }
-    const sizes = (body.screenSizes || []).filter((s): s is Breakpoint => ['375px', '768px', '1440px'].includes(s));
-    if (sizes.length > 0) record.context.breakpoints = sizes;
-
-    // Confirmed or reworded expectations: the person's own from now on.
-    const touched = new Set((body.items || []).map((i) => i.id));
-    for (const change of Array.isArray(body.expectations) ? body.expectations : []) {
-      touched.add(change.id);
-      const text = change.text?.trim();
-      if (change.id.startsWith('journey:')) {
-        const flow = draft?.flows.find((f) => `journey:${f.id}` === change.id);
-        if (!flow) continue;
-        flow.candidateExpectations = text
-          ? { text: { contains: text }, origin: 'user' }
-          : { ...(flow.candidateExpectations || {}), origin: 'user' };
-        continue;
-      }
-      const test = draft?.plan?.pages.flatMap((pg) => pg.tests).find((t) => t.id === change.id);
-      if (test)
-        test.expectations = text
-          ? { text: { contains: text }, origin: 'user' }
-          : { ...(test.expectations || {}), origin: 'user' };
-    }
-
-    // Source decisions: roles, severity, "document is out of date". Ours alone; nothing is re-planned.
-    for (const edit of Array.isArray(body.sourceEdits) ? body.sourceEdits : []) {
-      const test = draft?.plan?.pages.flatMap((pg) => pg.tests).find((t) => t.id === edit.itemId);
-      if (!test) continue;
-      touched.add(edit.itemId);
-      if (Array.isArray(edit.roles)) {
-        test.proposedRoles = edit.roles.filter((r) => typeof r === 'string' && r.trim());
-        test.rolesConfirmed = true;
-      }
-      if (edit.confirm) test.rolesConfirmed = true;
-      if (edit.severity && ['Blocker', 'Major', 'Minor', 'Suggestion'].includes(edit.severity)) {
-        test.docSeverity = edit.severity;
-      }
-      if (typeof edit.stale === 'boolean') test.docStale = edit.stale || undefined;
-    }
-    let notFoundChanged = false;
-    if (draft?.plan?.notFound && Array.isArray(body.notFoundEdits)) {
-      const gone = new Set(body.notFoundEdits.filter((e) => e.remove).map((e) => e.id));
-      if (gone.size > 0) {
-        draft.plan.notFound = draft.plan.notFound.filter((n) => !gone.has(n.id));
-        notFoundChanged = true;
-      }
-    }
-
-    // A quick check: desktop only, and each page's own links left out (the shared menus stay).
-    if (body.preset === 'quick' && draft?.plan) {
-      record.context.breakpoints = ['1440px'];
-      for (const nav of draft.plan.navigation) {
-        if (!nav.shared && !nav.leavesSite) {
-          nav.skipped = true;
-          touched.add(nav.id);
-        }
-      }
-    }
-
-    if (draft) this.refreshPlan(record);
-    await this.savePlan(record);
-    // Only switches, answers and sizes changed: the answer is what changed, not the whole plan.
-    const small =
-      body.intentsOff === undefined &&
-      !body.flows &&
-      !body.testCases &&
-      body.productContext === undefined &&
-      body.designNotes === undefined &&
-      !notFoundChanged;
-    this.sendJson(res, 200, small ? planDelta(record.plan, touched) : planForClient(record.plan));
-  }
-
-  private async handlePlanMarkdown(res: http.ServerResponse): Promise<void> {
-    const record = await this.ensurePlanLoaded();
-    if (!record || this.phase !== 'awaiting-review') {
-      this.sendJson(res, 404, { error: 'No plan awaiting review' });
-      return;
-    }
-    let host = 'site';
-    try {
-      host = new URL(record.plan.targetUrl).host.replace(/[^a-z0-9.-]/gi, '_');
-    } catch {
-      // keep "site"
-    }
-    res.writeHead(200, {
-      'Content-Type': 'text/markdown; charset=utf-8',
-      'Content-Disposition': `attachment; filename="test-plan-${host}.md"`,
-    });
-    res.end(planToMarkdown(record.plan));
-  }
-
-  private async handlePlanExport(res: http.ServerResponse): Promise<void> {
-    const record = await this.ensurePlanLoaded();
-    if (!record || this.phase !== 'awaiting-review') {
-      this.sendJson(res, 404, { error: 'No plan awaiting review' });
-      return;
-    }
-    let zip: Buffer;
-    try {
-      zip = zipFiles(planToPlaywrightProject(record.plan));
-    } catch {
-      this.sendJson(res, 409, { error: 'The plan has no tests to export yet' });
-      return;
-    }
-    let host = 'site';
-    try {
-      host = new URL(record.plan.targetUrl).host.replace(/[^a-z0-9.-]/gi, '_');
-    } catch {
-      // keep "site"
-    }
-    res.writeHead(200, {
-      'Content-Type': 'application/zip',
-      'Content-Disposition': `attachment; filename="playwright-export-${host}.zip"`,
-      'Content-Length': zip.length,
-    });
-    res.end(zip);
-  }
-
-  /** How re-planning should go for this plan: its site, the owner's notes, and what they asked for. */
-  private replanOptions(
-    record: StoredPlanRecord,
-    instructions: string | undefined,
-    report: (what: string) => void
-  ): ReplanOptions {
-    const roles = record.context.profile?.roles || [];
-    const redactor = new Redactor(roles);
-    return {
-      readOnly: !!record.context.readOnly,
-      productContext: record.context.productContext,
-      instructions: instructions?.trim() || undefined,
-      roles,
-      forbiddenActions: record.context.profile?.forbiddenActions,
-      redact: (text) => redactor.text(text),
-      onProgress: report,
-    };
-  }
-
-  /**
-   * Runs a change to the plan that needs the AI or the crawler in the background: answers 202 at
-   * once, reports progress as PLAN_UPDATE_PROGRESS events, and ends with PLAN_UPDATED (the plan is
-   * saved) or PLAN_UPDATE_FAILED. One at a time; approving waits until it's done.
-   */
-  private async startPlanUpdate(
-    res: http.ServerResponse,
-    what: string,
-    work: (record: StoredPlanRecord, ai: PacedAI | undefined, report: (step: string) => void) => Promise<string[]>
-  ): Promise<void> {
-    const record = await this.ensurePlanLoaded();
-    if (!record || this.phase !== 'awaiting-review' || !record.context.draft?.plan) {
-      this.sendJson(res, 404, { error: 'No plan awaiting review' });
-      return;
-    }
-    if (this.planUpdate) {
-      this.sendJson(res, 409, {
-        error: 'The plan is already being updated. Wait for it to finish.',
-        code: 'ERR_PLAN_UPDATING',
-      });
-      return;
-    }
-    const runId = record.plan.runId;
-    this.sendJson(res, 202, { updating: true, what });
-    this.broadcastRunnerEvent({ type: 'PLAN_UPDATE_STARTED', runId, what, timestamp: Date.now() });
-    this.planUpdate = (async () => {
-      try {
-        const provider = await this.aiFor(record.context);
-        const budget = provider
-          ? await this.aiBudgetFor(record.context.ai, undefined, record.context.aiCap)
-          : undefined;
-        const paced = provider
-          ? new PacedAI(provider, budget?.left ?? Infinity, { model: record.context.ai?.model, ...budget?.pacing })
-          : undefined;
-        const notes = await work(record, paced, (step) =>
-          this.broadcastRunnerEvent({
-            type: 'PLAN_UPDATE_PROGRESS',
-            runId,
-            what: step,
-            requestsUsed: paced?.used ?? 0,
-            timestamp: Date.now(),
-          })
-        );
-        const draft = record.context.draft;
-        const plan = draft.plan!;
-        const used = paced?.used ?? 0;
-        plan.budget = {
-          needed: plan.budget?.needed ?? 0,
-          ...plan.budget,
-          used: (plan.budget?.used ?? 0) + used,
-          tokens: addTokens(plan.budget?.tokens, paced?.tokens),
-          left: budget?.left !== undefined ? Math.max(0, budget.left - used) : plan.budget?.left,
-          limit: budget?.limit ?? plan.budget?.limit,
-        };
-        if (draft.exploration) draft.exploration.notes = [...new Set([...draft.exploration.notes, ...notes])];
-        await this.recordModelOutcomes(paced?.models);
-        this.refreshPlan(record);
-        await this.savePlan(record);
-        this.broadcastRunnerEvent({ type: 'PLAN_UPDATED', runId, what, timestamp: Date.now() });
-      } catch (err) {
-        this.broadcastRunnerEvent({
-          type: 'PLAN_UPDATE_FAILED',
-          runId,
-          what,
-          error: this.redactedMessage(err),
-          timestamp: Date.now(),
-        });
-      } finally {
-        this.planUpdate = null;
-      }
-    })();
-  }
-
-  /** { itemId, instructions?, promote? } plans one Plan Item again; { all: true, productContext? } plans everything again. */
-  private async handleReplan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    let body: { itemId?: string; all?: boolean; instructions?: string; productContext?: string; promote?: boolean };
-    try {
-      body = await this.readJsonBody(req);
-    } catch {
-      this.sendJson(res, 400, { error: 'Invalid JSON body' });
-      return;
-    }
-    const id = body.itemId || '';
-    const what = body.all
-      ? 'Re-planning everything'
-      : body.promote
-        ? `Testing ${id.replace(/^page:/, '')} on its own`
-        : 'Re-planning with the AI';
-    await this.startPlanUpdate(res, what, async (record, ai, report) => {
-      const draft = record.context.draft;
-      if (body.productContext !== undefined) {
-        record.context.productContext = body.productContext;
-        record.plan.productContext = body.productContext;
-      }
-      const options = this.replanOptions(record, body.instructions, report);
-      const productId = record.context.productId;
-      if (body.all) return replanAll(draft, ai, { ...options, productId });
-      if (id.startsWith('journey:')) {
-        const flow = draft.flows.find((f) => `journey:${f.id}` === id);
-        const asked = `Re-plan the journey “${flow?.name ?? id}”${options.instructions ? `: ${options.instructions}` : ''}. Keep the other journeys as they are.`;
-        return replanJourneys(draft, ai, { ...options, productId, instructions: asked });
-      }
-      if (id.startsWith('page:'))
-        return replanPage(draft, id.slice('page:'.length), ai, { ...options, promote: body.promote });
-      if (id.startsWith('pagetest:'))
-        return replanPage(draft, id.slice('pagetest:'.length, id.lastIndexOf(':')), ai, options);
-      const nav = draft.plan!.navigation.find((n) => n.id === id);
-      if (nav?.shared) return replanMenus(draft, ai, options);
-      if (nav) return replanPage(draft, nav.startPage, ai, options);
-      throw new Error('That item isn’t in the plan any more.');
-    });
-  }
-
-  /** { address }: a page no link reaches, added by the person; it's opened and planned like the rest. */
-  private async handleAddPage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const record = await this.ensurePlanLoaded();
-    let body: { address?: string };
-    try {
-      body = await this.readJsonBody(req);
-    } catch {
-      this.sendJson(res, 400, { error: 'Invalid JSON body' });
-      return;
-    }
-    if (!record?.context.draft) {
-      this.sendJson(res, 404, { error: 'No plan awaiting review' });
-      return;
-    }
-    let target: URL;
-    try {
-      target = new URL((body.address || '').trim(), record.context.targetUrl);
-    } catch {
-      this.sendJson(res, 400, { error: 'That doesn’t look like an address on this site.' });
-      return;
-    }
-    if (!isSameSite(target.host, new URL(record.context.targetUrl).host)) {
-      this.sendJson(res, 400, {
-        error: 'That address isn’t on this site. Links to other sites are listed under Navigation.',
-      });
-      return;
-    }
-    const address = target.pathname + target.search;
-    if (record.context.draft.pages.some((p) => pathOf(p.urlPath) === target.pathname)) {
-      this.sendJson(res, 400, { error: 'That page is already in the plan.' });
-      return;
-    }
-    await this.startPlanUpdate(res, `Adding ${address}`, async (rec, ai, report) => {
-      report(`Opening ${address}`);
-      const found = await this.crawlMore(rec, rec.context.targetUrl, {
-        startPaths: [address],
-        maxPages: 1,
-        exploreClicks: false,
-      });
-      if (found.pages.length === 0) throw new Error(`${address} couldn’t be opened, or it asks for a sign-in.`);
-      return (
-        await addPagesToPlan(rec.context.draft, found, ai, {
-          ...this.replanOptions(rec, undefined, report),
-          added: true,
-        })
-      ).notes;
-    });
-  }
-
-  /** { host }: another host the site links to, explored and planned like the site's own pages. */
-  private async handleIncludeHost(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const record = await this.ensurePlanLoaded();
-    let body: { host?: string };
-    try {
-      body = await this.readJsonBody(req);
-    } catch {
-      this.sendJson(res, 400, { error: 'Invalid JSON body' });
-      return;
-    }
-    const draft = record?.context.draft;
-    const other = draft?.plan?.otherHosts.find((h) => h.host === body.host);
-    const link = draft?.pages
-      .flatMap((p) => p.links || [])
-      .find((l) => l.leavesSite && new URL(l.to).host === body.host);
-    if (!record || !draft || !other || !link) {
-      this.sendJson(res, 400, { error: 'That host isn’t linked from this site.' });
-      return;
-    }
-    if (other.included) {
-      this.sendJson(res, 400, { error: 'That host is already in the plan.' });
-      return;
-    }
-    const origin = new URL(link.to).origin;
-    if (await this.refuseTarget(res, origin)) return;
-    await this.startPlanUpdate(res, `Adding ${other.host}`, async (rec, ai, report) => {
-      report(`Exploring ${other.host}`);
-      const crawled = await this.crawlMore(rec, `${origin}/`, {
-        maxPages: INCLUDED_HOST_PAGES,
-        exploreClicks: true,
-        onPage: (_page, n) => report(`Exploring ${other.host}: ${n} ${n === 1 ? 'page' : 'pages'} found`),
-      });
-      if (crawled.pages.length === 0) throw new Error(`${other.host} couldn’t be explored.`);
-      const out = await addPagesToPlan(
-        rec.context.draft,
-        onOtherHost(crawled, origin),
-        ai,
-        this.replanOptions(rec, undefined, report)
-      );
-      const included = rec.context.draft.plan!.otherHosts.find((h) => h.host === other.host);
-      if (included) included.included = true;
-      return out.notes;
-    });
-  }
-
-  /**
-   * { role, username, password, loginPath? }: signs in from the review, explores what that role
-   * sees, and adds it to the plan: pages only it reaches are planned, and pages everyone reaches are
-   * also visited as it. The details stay in memory, like a sign-in given with the scan.
-   */
-  private async handleAddSignIn(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const record = await this.ensurePlanLoaded();
-    let body: Partial<RoleCredential>;
-    try {
-      body = await this.readJsonBody(req);
-    } catch {
-      this.sendJson(res, 400, { error: 'Invalid JSON body' });
-      return;
-    }
-    const role =
-      (body.role || 'member')
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9 _-]/g, '')
-        .slice(0, 40) || 'member';
-    if (!body.username?.trim() || !body.password) {
-      this.sendJson(res, 400, { error: 'Enter the username and password to sign in with.' });
-      return;
-    }
-    if (!record?.context.draft?.plan) {
-      this.sendJson(res, 404, { error: 'No plan awaiting review' });
-      return;
-    }
-    if (record.context.profile?.roles.some((r) => r.role === role)) {
-      this.sendJson(res, 400, { error: `There’s already a sign-in called “${role}”. Give this one another name.` });
-      return;
-    }
-    const credential: RoleCredential = {
-      role,
-      username: body.username.trim(),
-      password: body.password,
-      loginPath: body.loginPath?.trim() || undefined,
-    };
-    await this.startPlanUpdate(res, `Adding the sign-in “${role}”`, async (rec, ai, report) => {
-      report(`Signing in as ${role}`);
-      const profile: ProductProfile = {
-        name: rec.context.productId,
-        productId: rec.context.productId,
-        roles: [credential],
-      };
-      const browser = new BrowserManager();
-      let found: Awaited<ReturnType<RunnerServer['crawlMore']>>;
-      try {
-        const runAuthDir = this.runAuthDir(rec.context.runId);
-        await fs.mkdir(runAuthDir, { recursive: true, mode: 0o700 });
-        const signedIn = await new PreFlightChecker().runPreFlight(
-          rec.context.targetUrl,
-          profile,
-          rec.context.tunnelAuth || this.currentTunnelAuth,
-          {
-            browserManager: browser,
-            authDir: runAuthDir,
-            customHeaders: rec.context.customHeaders || this.currentCustomHeaders,
-            userAgent: rec.context.userAgent || this.currentUserAgent,
-            headerHosts: rec.context.headerHosts || this.currentHeaderHosts,
-          }
-        );
-        const storageState = signedIn.roleStorageStates?.[role];
-        if (!storageState)
-          throw new Error(`Signing in as “${role}” didn’t work. Check the username, password and sign-in page.`);
-        const landing = signedIn.roleLandingPaths?.[role];
-        found = await this.crawlMore(rec, rec.context.targetUrl, {
-          startPaths: landing ? [landing] : [],
-          maxPages: SIGNED_IN_PAGES,
-          exploreClicks: true,
-          storageState,
-          who: role,
-          onPage: (_page, n) => report(`Exploring as ${role}: ${n} ${n === 1 ? 'page' : 'pages'} found`),
-        });
-      } finally {
-        await browser.close();
-      }
-      const draft = rec.context.draft;
-      // The sign-in is part of the check-up now: testing signs in as it too.
-      rec.context.profile = {
-        ...(rec.context.profile ?? { name: rec.context.productId, productId: rec.context.productId, roles: [] }),
-      };
-      rec.context.profile.roles = [...rec.context.profile.roles, credential];
-      // Pages everyone reaches are visited as this role too.
-      const known = new Map(draft.pages.map((p) => [pathOf(p.urlPath), p]));
-      for (const page of found.pages) {
-        const before = known.get(pathOf(page.urlPath));
-        if (!before) continue;
-        before.reachedBy = [...new Set([...(before.reachedBy?.length ? before.reachedBy : ['visitor']), role])];
-        const planned = draft.plan!.pages.find((p) => p.urlPath === before.urlPath);
-        if (planned) planned.reachedBy = [...new Set([...planned.reachedBy, role])];
-      }
-      const out = await addPagesToPlan(draft, found, ai, this.replanOptions(rec, undefined, report));
-      // Pages the sign-in wall kept out, now reached.
-      if (draft.exploration) {
-        const reached = new Set(found.pages.map((p) => pathOf(p.urlPath)));
-        draft.exploration.notReached = draft.exploration.notReached?.filter((p) => !reached.has(pathOf(p)));
-        draft.exploration.signedInAs = [...new Set([...(draft.exploration.signedInAs || []), role])];
-        draft.exploration.notes = draft.exploration.notes.filter(
-          (n) => !/not reached|Add a sign-in/i.test(n) || (draft.exploration!.notReached?.length ?? 0) > 0
-        );
-      }
-      return [
-        `Signed in as “${role}”: ${out.pages.length} new ${out.pages.length === 1 ? 'page' : 'pages'} added to the plan.`,
-        ...out.notes,
-      ];
-    });
-  }
-
-  /**
-   * Crawls more for the review: a page added by its address, another host's pages, or what a new
-   * sign-in sees (`storageState`, as `who`). It goes as easy on the site as the scan did: robots.txt
-   * and a pause between pages on sites we don't own.
-   */
-  private async crawlMore(
-    record: StoredPlanRecord,
-    target: string,
-    options: {
-      startPaths?: string[];
-      maxPages: number;
-      exploreClicks: boolean;
-      onPage?: (page: PageInventoryItem, n: number) => void;
-      storageState?: string | StorageStateData;
-      who?: string;
-    }
-  ): Promise<{ pages: PageInventoryItem[]; forms: NonNullable<DiscoveryDraft['forms']> }> {
-    const browser = new BrowserManager();
-    const origin = new URL(target);
-    const ownMachine = isPrivateHost(origin.hostname);
-    const who = options.who ?? 'visitor';
-    try {
-      const context = await browser.createContext({
-        baseUrl: target,
-        storageState: options.storageState,
-        customHeaders: record.context.customHeaders || this.currentCustomHeaders,
-        userAgent: record.context.userAgent || this.currentUserAgent,
-        tunnelAuth: record.context.tunnelAuth || this.currentTunnelAuth,
-        headerHosts: record.context.headerHosts || this.currentHeaderHosts,
-      });
-      if (record.context.readOnly) await blockChanges(context);
-      const result = await new DeterministicSpider(
-        record.context.profile?.forbiddenActions || [],
-        options.maxPages
-      ).crawl(context, target, {
-        startPaths: options.startPaths,
-        exploreClicks: options.exploreClicks,
-        robots: ownMachine ? undefined : await RobotsPolicy.fetch(origin.origin, 'QA-Benchmarking-Bot'),
-        pageDelayMs: ownMachine ? 0 : 2000,
-        screenshotDir: path.join(this.runDir(record.context.runId), 'plan-pages'),
-        screenshotPrefix: `more-${Date.now()}`,
-        onPage: options.onPage,
-      });
-      return {
-        pages: result.pages.map((p) => ({
-          ...p,
-          reachedBy: [who],
-          links: p.links?.map((l) => ({ ...l, seenBy: [who] })),
-        })),
-        forms: result.forms.map((f) => ({
-          urlPath: f.urlPath,
-          inputs: f.inputs.map((i) => ({
-            selector: i.selector,
-            type: i.type,
-            label: i.label,
-            required: i.required,
-            pattern: i.pattern,
-            min: i.min,
-            max: i.max,
-            minLength: i.minLength,
-            maxLength: i.maxLength,
-          })),
-          submitButtonSelector: f.submitButtonSelector,
-          method: f.method,
-          ...(f.opening?.length ? { opening: f.opening } : {}),
-        })),
-      };
-    } finally {
-      await browser.close();
-    }
-  }
-
-  /** Rebuilds the reviewed plan from the draft after a change: the summary, what won't run and the tests follow. */
-  private refreshPlan(record: StoredPlanRecord): void {
-    const before = record.plan;
-    const since: MemorySummary | undefined = before.sinceLastRun
-      ? { seenBefore: true, ...before.sinceLastRun }
-      : undefined;
-    const custom = record.context.customTestCases ? before.testCases : undefined;
-    record.plan = this.buildPlan(record, since, before.aiAvailable ?? true, before.readOnlyReason || '');
-    if (custom) record.plan.testCases = custom;
-  }
-
-  /**
-   * Turns a sentence into a test for one page ({ sentence, urlPath, role }), or into a rule for one
-   * journey ({ kind: 'rule', sentence, flowId }). Nothing is added: the person confirms first, and
-   * the wizard then sends the result with a PATCH.
-   */
-  private async handleInterpret(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const record = await this.ensurePlanLoaded();
-    if (!record || this.phase !== 'awaiting-review' || !record.context.draft) {
-      this.sendJson(res, 404, { error: 'No plan awaiting review' });
-      return;
-    }
-    let body: { sentence?: string; urlPath?: string; role?: string; kind?: 'test' | 'rule'; flowId?: string };
-    try {
-      body = await this.readJsonBody(req);
-    } catch {
-      this.sendJson(res, 400, { error: 'Invalid JSON body' });
-      return;
-    }
-    const ai = await this.aiFor(record.context);
-    const draft = record.context.draft;
-    if (body.kind === 'rule') {
-      const flow = draft.flows.find((f) => f.id === body.flowId);
-      if (!flow) {
-        this.sendJson(res, 404, { ok: false, message: 'That journey isn’t in the plan any more.' });
-        return;
-      }
-      this.sendJson(res, 200, await interpretRule({ sentence: body.sentence || '', flow, draft, ai }));
-      return;
-    }
-    const interpretation = await interpretTest({
-      sentence: body.sentence || '',
-      urlPath: body.urlPath || '/',
-      role: body.role,
-      draft,
-      ai,
-    });
-    if (interpretation.ok) {
-      replaceCredentialsWithPlaceholders(interpretation.flow.steps, record.context.profile?.roles || []);
-      if (needsTestCopy(interpretation.flow, draft.pages, draft.forms)) interpretation.flow.needsTestCopy = true;
-    }
-    this.sendJson(res, 200, interpretation);
-  }
-
-  private async handleApprovePlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const idempotencyKey = (req.headers['idempotency-key'] as string | undefined)?.trim();
-    if (idempotencyKey && this.recentApprovals.has(idempotencyKey)) {
-      const existing = this.recentApprovals.get(idempotencyKey)!;
-      if (Date.now() - existing.timestamp < 60 * 60 * 1000) {
-        this.sendJson(res, 409, {
-          error: 'This plan was already approved and is currently being tested.',
-          code: 'ERR_DUPLICATE_APPROVAL',
-          runId: existing.runId,
-        });
-        return;
-      }
-    }
-
-    const record = await this.ensurePlanLoaded();
-    if (!record || this.phase !== 'awaiting-review') {
-      this.sendJson(res, 404, { error: 'No plan awaiting review' });
-      return;
-    }
-    if (this.planUpdate) {
-      this.sendJson(res, 409, {
-        error: 'The plan is still being updated. Approve it when that’s done.',
-        code: 'ERR_PLAN_UPDATING',
-      });
-      return;
-    }
-
-    const body: {
-      breakpoints?: string[];
-      roles?: RoleCredential[];
-      savedSessions?: unknown;
-      customHeaders?: unknown;
-    } = await this.readJsonBody<{
-      breakpoints?: string[];
-      roles?: RoleCredential[];
-      savedSessions?: unknown;
-      customHeaders?: unknown;
-    }>(req).catch(() => ({}));
-    if (body?.breakpoints) {
-      record.context.breakpoints = body.breakpoints as Breakpoint[];
-    }
-
-    // Custom headers are never saved to disk either: a plan read back after restart needs them again.
-    if (body?.customHeaders !== undefined) {
-      const checked = checkCustomHeaders(body.customHeaders);
-      if (!checked.ok) {
-        this.sendJson(res, 400, { error: checked.problem.error, code: checked.problem.code });
-        return;
-      }
-      if (checked.value) {
-        record.context.customHeaders = { ...(record.context.customHeaders || {}), ...checked.value };
-        this.currentCustomHeaders = { ...(this.currentCustomHeaders || {}), ...checked.value };
-      }
-    }
-    const headersMissing = (record.context.customHeaderNames || []).filter(
-      (h) => !record.context.customHeaders?.[h] && !this.currentCustomHeaders?.[h]
-    );
-    if (headersMissing.length > 0) {
-      this.sendJson(res, 409, {
-        error: `Release check-up restarted since this plan was made, and custom headers are never saved to disk. Send them again for: ${headersMissing.join(', ')}.`,
-        code: 'ERR_HEADERS_NOT_SAVED',
-        needsHeaders: headersMissing,
-      });
-      return;
-    }
-
-    // Saved sessions are never saved to disk either: a plan read back after a restart needs them again.
-    if (body?.savedSessions !== undefined) {
-      let hostname = '';
-      try {
-        hostname = new URL(record.context.targetUrl).hostname;
-      } catch {
-        // checked by the session rules
-      }
-      const checked = checkSavedSessions(body.savedSessions, hostname);
-      if (!checked.ok) {
-        this.sendJson(res, 400, { error: checked.problem.error, code: checked.problem.code });
-        return;
-      }
-      if (checked.value) {
-        const runId = record.plan.runId;
-        this.savedSessions.set(runId, { ...(this.savedSessions.get(runId) ?? {}), ...checked.value });
-        const sentRoles = new Set(Object.keys(checked.value));
-        record.context.sessionNotSaved = (record.context.sessionNotSaved || []).filter((r) => !sentRoles.has(r));
-        // A session stands in for the sign-in details of its role.
-        record.context.signInNotSaved = (record.context.signInNotSaved || []).filter((r) => !sentRoles.has(r));
-      }
-    }
-    const sessionsMissing = (record.context.sessionNotSaved || []).filter(
-      (r) => !this.savedSessions.get(record.plan.runId)?.[r]
-    );
-    if (sessionsMissing.length > 0) {
-      this.sendJson(res, 409, {
-        error: `Release check-up restarted since this plan was made, and saved sessions are never saved to disk. Send them again for: ${sessionsMissing.join(', ')}.`,
-        code: 'ERR_SESSION_NOT_SAVED',
-        needsSession: sessionsMissing,
-      });
-      return;
-    }
-
-    // Sign-in details are never saved to disk, so a plan read back after a restart needs them again.
-    const notSaved = record.context.signInNotSaved || [];
-    if (!record.context.profile && notSaved.length > 0) {
-      record.context.profile = {
-        name: record.context.productId || 'default',
-        productId: record.context.productId || 'default',
-        roles: notSaved.map((r) => ({ role: r, username: '' })),
-      };
-    }
-
-    if (Array.isArray(body?.roles) && record.context.profile) {
-      const knownRoleNames = new Set(record.context.profile.roles.map((r) => r.role));
-      const validSent = body.roles.filter((r) => r && typeof r.role === 'string' && knownRoleNames.has(r.role));
-      const sentMap = new Map(validSent.map((r) => [r.role, r]));
-
-      record.context.profile.roles = record.context.profile.roles.map((saved) => {
-        const sent = sentMap.get(saved.role);
-        if (!sent) return saved;
-        return {
-          ...saved,
-          username: sent.username !== undefined ? sent.username : saved.username,
-          password: sent.password !== undefined ? sent.password : saved.password,
-          loginPath: sent.loginPath || saved.loginPath,
-          usernameSelector: sent.usernameSelector || saved.usernameSelector,
-          passwordSelector: sent.passwordSelector || saved.passwordSelector,
-          submitSelector: sent.submitSelector || saved.submitSelector,
-          postLoginSelector: sent.postLoginSelector || saved.postLoginSelector,
-          postLoginUrl: sent.postLoginUrl || saved.postLoginUrl,
-        };
-      });
-
-      if (notSaved.length > 0) {
-        // Clear from signInNotSaved only roles that supplied passwords
-        record.context.signInNotSaved = notSaved.filter((role) => {
-          const sent = sentMap.get(role);
-          return !(sent && sent.password);
-        });
-      }
-    }
-
-    const stillMissing = record.context.signInNotSaved || [];
-    if (stillMissing.length > 0) {
-      this.sendJson(res, 409, {
-        error: `Release check-up restarted since this plan was made, and sign-in details are never saved to disk. Send them again for: ${stillMissing.join(', ')}.`,
-        code: 'ERR_SIGN_IN_REQUIRED',
-        needsSignIn: stillMissing,
-        needsSignInDetails: stillMissing.map((r) => {
-          const saved = record.context.profile?.roles.find((x) => x.role === r);
-          return { role: r, loginPath: saved?.loginPath };
-        }),
-      });
-      return;
-    }
-
-    // Full testing was agreed to with test sign-in details (ADR 0022): without them there is no
-    // consent left, so nothing is run (never a look-only or signed-out run in its place).
-    if (record.context.signInConsent && !hasCompleteSignIn(record.context.profile?.roles)) {
-      const missing = (record.context.profile?.roles || [])
-        .filter((r) => !r.username || !r.password)
-        .map((r) => r.role);
-      this.sendJson(res, 409, {
-        error: CONSENT_NEEDS_SIGN_IN,
-        code: 'ERR_SIGN_IN_REQUIRED',
-        needsSignIn: missing.length > 0 ? missing : undefined,
-        needsSignInDetails: missing.map((r) => ({
-          role: r,
-          loginPath: record.context.profile?.roles.find((x) => x.role === r)?.loginPath,
-        })),
-      });
-      return;
-    }
-
-    // A shared machine looks again before anything is sent: a proof removed since the plan was made
-    // turns the run back to look-only (ADR 0014).
-    if (this.beta && !record.context.readOnly) {
-      try {
-        const typed = new URL(record.context.targetUrl);
-        const memory = record.context.siteHost
-          ? await loadSiteMemory(this.siteDir(), record.context.siteHost).catch(() => null)
-          : null;
-        if (!(await this.testCopyOf(typed, !!memory?.staging))) record.context.readOnly = true;
-      } catch {
-        record.context.readOnly = true;
-      }
-    }
-
-    // The owner's own answers are remembered for the site; safe answers filled in now are not.
-    const draft = record.context.draft;
-    const answeredByOwner = Object.fromEntries(
-      (draft?.ambiguityQuestions || []).filter((q) => q.key && q.selectedAnswer).map((q) => [q.key!, q.selectedAnswer!])
-    );
-    applySafeAnswers(record.plan.questions);
-    if (draft?.ambiguityQuestions) applySafeAnswers(draft.ambiguityQuestions);
-
-    let specTestCases: TestCase[];
-    let notRun: RunOptions['notRun'] = [];
-    if (record.context.customTestCases && record.plan.testCases?.length) {
-      specTestCases = record.plan.testCases;
-    } else if (draft) {
-      ({ specTestCases, notRun } = this.testsFor(record.context));
-      record.plan.testCases = specTestCases;
-    } else {
-      specTestCases = [this.defaultTestCase()];
-    }
-    if (draft) {
-      record.context.reportNotes = [...(record.context.reportNotes || []), ...this.handCheckNotes(draft)];
-      if (record.context.siteHost) {
-        const memory = await loadSiteMemory(this.siteDir(), record.context.siteHost);
-        await saveSiteMemory(
-          this.siteDir(),
-          rememberRun(memory, record.context.siteHost, draft, {
-            reviewed: true,
-            answeredByOwner,
-            screenSizes: this.screenSizesOf(record.context),
-          })
-        );
-      }
-    }
-
-    if (idempotencyKey) {
-      const now = Date.now();
-      for (const [k, v] of this.recentApprovals) {
-        if (now - v.timestamp > 60 * 60 * 1000) this.recentApprovals.delete(k);
-      }
-      this.recentApprovals.set(idempotencyKey, { timestamp: now, runId: record.plan.runId });
-    }
-
-    record.status = 'approved';
-    await this.savePlan(record);
-
-    this.sendJson(res, 200, { status: 'approved', runId: record.plan.runId });
-
-    const generation = ++this.runGeneration;
-    this.activeAbortController = new AbortController();
-    this.finishController = new AbortController();
-    this.lastErrorCode = null;
-    this.lastRunError = null;
-    // A page that opens during testing catches up on this testing, not on the scan or an earlier try.
-    this.runEvents = [];
-    this.executeTesting(record, specTestCases, notRun, generation).catch((err: unknown) => {
-      // Stopped or replaced: whatever stopped it has already said so.
-      if (generation !== this.runGeneration || isAbortError(err)) return;
-      const msg = this.redactedMessage(err);
-      this.lastRunError = msg;
-      this.lastErrorCode = 'ERR_TEST_EXECUTION_FAILED';
-      this.phase = 'failed';
-      this.isRunning = false;
-      this.broadcastRunnerEvent({
-        type: 'RUN_FAILED',
-        runId: record.plan.runId,
-        error: msg,
-        code: 'ERR_TEST_EXECUTION_FAILED',
-        timestamp: Date.now(),
-      });
-    });
-  }
 
   private async handleServeBaseline(fileName: string, res: http.ServerResponse): Promise<void> {
     const target = path.resolve(this.baselineDir, fileName);
@@ -5573,15 +3439,4 @@ export class RunnerServer {
     }
   }
 
-  private defaultTestCase(): TestCase {
-    return {
-      id: 'TC-DEFAULT-001',
-      flowId: 'landing-verification',
-      name: 'Home page sanity check',
-      role: 'anonymous',
-      startPage: '/',
-      steps: [{ action: 'wait', name: 'Wait for page load' }],
-      expectations: { url: { pattern: '/*' } },
-    };
-  }
 }

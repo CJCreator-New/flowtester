@@ -1,4 +1,4 @@
-import type { StorageStateData } from '@qa/types/src/evidence-finding.js';
+import type { StorageStateData } from '@qa/types/src/browser.js';
 
 /** A saved session file is small; anything larger is not one. */
 export const MAX_SESSION_BYTES = 256 * 1024;

@@ -32,8 +32,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { isActiveFinding, releaseVerdict, isSupportedContextName, summarizeDocument, parseHeaderText } from '@qa/types';
 import { githubAnnotations, docxToMarkdown } from '@qa/core';
-import type { AIProviderType, Finding, ReleaseReport, SiteAspectGrades } from '@qa/types';
-import { RunnerServer } from './server.js';
+import type { AIProviderType, Finding, ReleaseReport, SiteAspectGrades, RunStartBody } from '@qa/types';
+import {
+  createCheckupSession,
+  createCheckupRun,
+  resolveAuthorization,
+} from './session/checkup-session.js';
 
 export type FailOn = 'blocker' | 'major' | 'none' | 'standard';
 
@@ -255,11 +259,11 @@ function parseTestCap(raw: string | undefined): number | undefined {
 }
 
 /** The body for POST /api/runner/run. Test sign-in details, when set, are the consent for a full test. */
-export function buildRunBody(args: CheckupArgs, documents: CheckupDocument[] = []): Record<string, unknown> {
+export function buildRunBody(args: CheckupArgs, documents: CheckupDocument[] = []): RunStartBody {
   const hasKey = !!args.apiKey;
   const signIns: RoleSignIn[] = args.signIns ?? (args.signIn ? [{ role: 'member', ...args.signIn }] : []);
   return {
-    targetUrl: args.url,
+    targetUrl: args.url ?? '',
     productId: 'ci',
     // A test copy, or a test sign-in, is tested fully. Anything else is read-only: nothing is sent to it.
     owner: args.staging || signIns.length > 0,
@@ -421,21 +425,15 @@ export async function runCheckup(args: CheckupArgs): Promise<number> {
   await fs.mkdir(args.outputDir, { recursive: true });
   // Outside the report folder: what the runner keeps while it works must never be uploaded with the report.
   // That includes the sign-in sessions (cookies), so they live here too and are deleted when the run ends.
-  const port = Number(process.env.QA_CHECKUP_PORT) || DEFAULT_PORT;
+  const _port = Number(process.env.QA_CHECKUP_PORT) || DEFAULT_PORT;
+  void _port;
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'qa-checkup-'));
-  const server = new RunnerServer({
-    port,
+  const session = createCheckupSession({
     outputDir: args.outputDir,
     dataDir: workDir,
     authDir: path.join(workDir, 'auth'),
   });
-  try {
-    await server.start();
-  } catch (err) {
-    await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
-    throw err;
-  }
-  const base = `http://localhost:${port}`;
+  const checkupRun = createCheckupRun(session);
 
   try {
     const hasKey = !!args.apiKey;
@@ -451,38 +449,45 @@ export async function runCheckup(args: CheckupArgs): Promise<number> {
           : '[checkup] No QA_AI_API_KEY set: the plan is written by fixed rules, with no AI.'
       );
     }
-    const res = await fetch(`${base}/api/runner/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildRunBody(args, documents)),
+
+    const body = buildRunBody(args, documents);
+    const signIns: RoleSignIn[] = args.signIns ?? (args.signIn ? [{ role: 'member', ...args.signIn }] : []);
+    const authorization = await resolveAuthorization({
+      targetUrl: args.url,
+      owner: args.staging || signIns.length > 0,
+      ownerExplicit: args.staging || signIns.length > 0,
+      signInConsent: signIns.length > 0,
+      roles: body.roles,
+      testCopyMarked: args.staging,
+      stagingHost: args.staging,
     });
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string; suggestion?: string };
+
+    try {
+      await checkupRun.start({ body, authorization });
+    } catch (err: unknown) {
+      const e = err as { message?: string; suggestion?: string } | undefined;
       throw new Error(
         scrub(
-          `The check-up could not start: ${body.error ?? `HTTP ${res.status}`}${body.suggestion ? ` ${body.suggestion}` : ''}`,
+          `The check-up could not start: ${e?.message ?? String(err)}${e?.suggestion ? ` ${e.suggestion}` : ''}`,
           args
         )
       );
     }
 
-    const deadline = Date.now() + RUN_TIMEOUT_MS;
-    let status: { isRunning: boolean; lastRunError: string | null; lastErrorCode?: string | null } = {
-      isRunning: true,
-      lastRunError: null,
-    };
-    while (status.isRunning && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 3000));
-      status = (await (await fetch(`${base}/api/runner/status`)).json()) as typeof status;
-    }
-    if (status.isRunning) throw new Error('The check-up took longer than 40 minutes and was stopped.');
-    if (status.lastErrorCode === 'ERR_SIGN_IN_FAILED' && status.lastRunError) {
-      // The fixed reason text only, never built from the typed details.
-      throw new Error(`Sign-in failed. ${scrub(status.lastRunError, args)}`);
-    }
-    if (status.lastRunError) throw new Error(scrub(status.lastRunError, args));
+    await checkupRun.waitFor(RUN_TIMEOUT_MS);
 
-    const report = (await (await fetch(`${base}/api/report`)).json()) as ReleaseReport;
+    if (session.run.isRunning) throw new Error('The check-up took longer than 40 minutes and was stopped.');
+    const errInfo = session.report.error();
+    if (errInfo.code === 'ERR_SIGN_IN_FAILED' && errInfo.message) {
+      // The fixed reason text only, never built from the typed details.
+      throw new Error(`Sign-in failed. ${scrub(errInfo.message, args)}`);
+    }
+    if (errInfo.message) throw new Error(scrub(errInfo.message, args));
+
+    const report = session.report.last;
+    if (!report) {
+      throw new Error('No completed run yet');
+    }
     const verdict = releaseVerdict(report.findings, undefined, report.grades);
     console.log(`\n[checkup] ${verdict.stamp}: ${verdict.reason}`);
     console.log(`[checkup] Report written to ${args.outputDir}`);
@@ -502,7 +507,7 @@ export async function runCheckup(args: CheckupArgs): Promise<number> {
       );
     return code;
   } finally {
-    await server.stop();
+    await checkupRun.stop();
     // Success, failure or stop: the sessions and the rest of the working folder go.
     await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }

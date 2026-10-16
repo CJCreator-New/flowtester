@@ -60,6 +60,10 @@ _Avoid_: Orphan flow, rogue flow, undocumented feature
 One pass of the tool over an App, as the person sees it: the scan, the Plan Review, testing and the report. Each finished check-up keeps its report under Past check-ups.
 _Avoid_: Run, scan or check (in UI text; "check" means a Navigation Check or a graded check)
 
+**Check-up Session**:
+The module in the runner that owns the state of one Check-up and the operations on it: the run slot, the Plan under review (and parked waiting Plans), the report, the event log, and the run's session secrets. It owns state and operations, never transport or policy (access tokens, allowed origins, beta limits, and host policy stay in the server).
+_Avoid_: Run manager, session object, runner state
+
 **Plan**:
 The complete list of everything a run does: every page visit, Navigation Check, journey and check, at each screen size and for each role, plus what won't run and why. Nothing runs that isn't in the Plan.
 _Avoid_: Test case matrix, test suite, spec
@@ -167,6 +171,22 @@ _Avoid_: Scan, attack, pentest
 **Domain Allowlist**:
 The hosts the crawler may follow links into: the host the start address lands on after redirects, its `www` twin, and any other host the person ticks in the Plan Review. Links to any other host are listed as leaving the site and only checked for being broken.
 _Avoid_: Host filter, URL scope
+
+**Role**:
+One set of sign-in details the person gave for an App: a role name, a username and a password, plus optional custom headers, a token or `localStorage` entries. A Check-up crawls once as a visitor and once per Role, starting from the page that Role landed on. A Role counts as signed in only when its sign-in ran and succeeded: a Role that was never attempted (no browser to sign in with) is reported as not signed in, never as verified.
+_Avoid_: User, account, persona
+
+**Sign-in Wall**:
+A page the App will not open without a sign-in: it answered 401, it is the Role's sign-in page, or the App sent the crawl to a page that is nothing but a sign-in form. A page that merely shows a password field — a change-password form, a two-factor step — is not a wall. A wall is reported with the path that was asked for, not the route key.
+_Avoid_: Login page, auth wall, bounce
+
+**Skipped Page**:
+A page the crawl found but did not record, with one reason: `page-limit`, `did-not-load`, `robots`, `sign-in`, `http-error`, `timeout`, `off-site-redirect`, `time-limit`, `trap-limit`, `session-lost` or `duplicate`. The Plan lists them under what was not reached; a Skipped Page is never a failure.
+_Avoid_: Ignored page, missing page
+
+**Route Telemetry**:
+One row per route the crawl attempted: the path asked for (redacted), the HTTP status, where it landed, the outcome (`recorded` or `skipped`), the skip reason when skipped, how many attempts, how long it took, and which Role or visitor it was. Route Telemetry is the crawl's own account of itself, so the page count and the Plan's map can be checked against it.
+_Avoid_: Crawl log, request log, trace
 
 **Canonical Finding**:
 A unique, deduplicated defect or non-conformance record maintained by the Report Hub, representing an underlying issue across multiple developer runs and releases.

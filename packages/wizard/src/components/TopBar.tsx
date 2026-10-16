@@ -47,10 +47,10 @@ export function TopBar({
   const tone = (active?: string) =>
     active ? 'bg-panel text-ink underline decoration-stamp decoration-2 underline-offset-8' : 'text-ink-soft';
   return (
-    <header className="sticky top-0 z-50 border-b border-rule/60 bg-surface/80 backdrop-blur-md supports-[backdrop-filter]:bg-surface/70">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-1 px-4 py-1 sm:px-6">
+    <header className="sticky top-0 z-50 border-b border-rule/80 bg-surface/85 backdrop-blur-md shadow-level-1 supports-[backdrop-filter]:bg-surface/75">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-1 px-4 py-1.5 sm:px-6">
         <div className="flex items-center gap-4">
-          <Link to={PATHS.new} className="inline-flex min-h-[44px] items-center gap-2 font-bold text-ink">
+          <Link to={PATHS.new} className="inline-flex min-h-[44px] items-center gap-2 font-bold text-ink hover:text-stamp transition-colors">
             <Mark />
             Release check-up
           </Link>
@@ -89,11 +89,10 @@ export function TopBar({
               <Link to={PATHS.new} aria-current={current(['new'])} className={`${item} ${tone(current(['new']))}`}>
                 New check-up
                 {checkupInProgress && route.name !== 'new' && (
-                  <span
-                    className="ml-1.5 inline-block h-2 w-2 rounded-full bg-stamp"
-                    aria-label="(a check-up is in progress)"
-                    role="img"
-                  />
+                  <span className="relative ml-2 flex h-2 w-2" aria-label="(a check-up is in progress)" role="img">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-stamp opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-stamp" />
+                  </span>
                 )}
               </Link>
             </li>
@@ -137,18 +136,18 @@ export function TopBar({
         </nav>
       </div>
       {route.name !== 'landing' && (
-        <div className="border-t border-rule/50 bg-surface/50">
+        <div className="border-t border-rule/50 bg-panel/40">
           <nav
             aria-label="Breadcrumb"
-            className="mx-auto flex max-w-6xl items-center gap-1.5 px-4 py-1 text-xs text-ink-soft sm:px-6"
+            className="mx-auto flex max-w-6xl items-center gap-1.5 px-4 py-1 text-xs text-ink-soft sm:px-6 font-mono"
           >
-            <Link to={PATHS.landing} className="hover:text-ink">
+            <Link to={PATHS.landing} className="font-sans hover:text-ink">
               Home
             </Link>
-            <span aria-hidden="true" className="text-edge">
+            <span aria-hidden="true" className="text-edge/70 px-0.5">
               /
             </span>
-            <span aria-current="page" className="font-medium text-ink">
+            <span aria-current="page" className="font-sans font-medium text-ink">
               {route.name === 'new'
                 ? 'New check-up'
                 : route.name === 'reports'

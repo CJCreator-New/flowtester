@@ -32,7 +32,6 @@ export type SignInResult =
 
 export interface PreFlightResult extends BasePreFlightResult {
   roleDiagnostics: Record<string, { ok: boolean; failedStep?: SignInStep; attempts: number; landedPath?: string }>;
-  startWarning?: 'start-4xx';
 }
 
 const USERNAME_SELECTOR =
@@ -174,7 +173,7 @@ export class PreFlightChecker {
           ['staging', 'test', 'development', 'dev'].includes((res.headers.get('x-environment') || '').toLowerCase());
 
         const isOk = res.status < 400 || res.status === 401 || res.status === 403;
-        const startWarning = res.status >= 400 && res.status < 500 ? 'start-4xx' : undefined;
+        const startWarning = !isOk && res.status >= 400 && res.status < 500 ? 'start-4xx' : undefined;
 
         return {
           ok: isOk,
@@ -237,6 +236,52 @@ export class PreFlightChecker {
         step: 'goto',
       });
       return { ok: false, reason: 'needs-more', failedStep: 'goto', attempts: 1 };
+    }
+
+    // Apply per-role headers and localStorage initialization if specified
+    const roleHeaders = {
+      ...credential.headers,
+      ...(credential.token ? { Authorization: `Bearer ${credential.token}` } : {}),
+    };
+    if (Object.keys(roleHeaders).length > 0) {
+      await context.setExtraHTTPHeaders(roleHeaders).catch(() => {});
+    }
+    if (credential.localStorageEntries && Object.keys(credential.localStorageEntries).length > 0) {
+      await context.addInitScript((entries) => {
+        for (const [k, v] of Object.entries(entries)) {
+          try {
+            localStorage.setItem(k, v);
+          } catch {}
+        }
+      }, credential.localStorageEntries).catch(() => {});
+    }
+
+    // Direct token/header/localStorage session verification (when no password given)
+    if (!credential.password && (credential.token || Object.keys(roleHeaders).length > 0 || credential.localStorageEntries)) {
+      let page: Page | undefined;
+      try {
+        page = await context.newPage();
+        const testPath = credential.postLoginUrl || credential.loginPath || '/';
+        const verifyUrl = new URL(testPath, baseUrl).toString();
+        const navRes = await navigate(page, verifyUrl, { timeoutMs: options?.gotoTimeoutMs ?? 12000, retries: 0 });
+        if (navRes.ok && (!navRes.status || navRes.status < 400)) {
+          const hasLogin = await anyVisible(page.locator(PASSWORD_SELECTOR));
+          if (!hasLogin) {
+            if (saveStorageStatePath) {
+              await context.storageState({ path: saveStorageStatePath });
+              await fs.chmod(saveStorageStatePath, 0o600).catch(() => {});
+            }
+            const landed = new URL(page.url());
+            const landingPath = landed.pathname + landed.search;
+            await page.close().catch(() => {});
+            return { ok: true, landingPath, attempts: 1 };
+          }
+        }
+      } catch (err) {
+        debugLog('auth', 'direct header/token session verification failed', { role: credential.role, error: String(err) });
+      } finally {
+        if (page) await page.close().catch(() => {});
+      }
     }
 
     let lastFailure: { reason: SignInFailureReason; failedStep: SignInStep } = {
@@ -584,6 +629,8 @@ export class PreFlightChecker {
       string,
       { ok: boolean; failedStep?: SignInStep; attempts: number; landedPath?: string }
     > = {};
+    // Set when a Role was left unverified because there was no browser to sign in with.
+    let unverified = false;
 
     if (profile?.roles && profile.roles.length > 0) {
       if (options?.authDir) {
@@ -627,10 +674,15 @@ export class PreFlightChecker {
 
           let context: BrowserContext | undefined;
           try {
+            const roleHeaders = {
+              ...options.customHeaders,
+              ...role.headers,
+              ...(role.token ? { Authorization: `Bearer ${role.token}` } : {}),
+            };
             context = await options.browserManager.createContext({
               baseUrl: targetUrl,
               tunnelAuth,
-              customHeaders: options.customHeaders,
+              customHeaders: roleHeaders,
               userAgent: options.userAgent,
               headerHosts: options.headerHosts,
             });
@@ -657,23 +709,65 @@ export class PreFlightChecker {
             await context?.close().catch(() => {});
           }
         } else {
-          roleResults[role.role] = true;
-          roleDiagnostics[role.role] = { ok: true, attempts: 0 };
+          // No browser to sign in with: nothing was verified, so nothing may be reported as signed in.
+          // The reachability check above still ran; only the Role results fail closed (LC-005).
+          roleResults[role.role] = false;
+          roleFailures[role.role] = 'unreachable';
+          roleDiagnostics[role.role] = { ok: false, failedStep: 'goto', attempts: 0 };
+          unverified = true;
         }
       }
     }
 
+    // The sign-in page, asked once per distinct path (not once per Role): a Role is signed in only after a
+    // sign-in ran, so this says whether the page a person signs in on answered at all (LC-006). Every distinct
+    // path is asked, so a Role whose own page does not answer can be told apart from one whose page answered.
+    const loginPathReachable = new Map<string, boolean>();
+    let loginReachable: boolean = urlCheck.ok;
+    for (const loginPath of [...new Set((profile?.roles ?? []).map((role) => role.loginPath || '/login'))]) {
+      try {
+        const loginUrl = new URL(loginPath, targetUrl).toString();
+        const check = await this.checkUrlReachable(
+          loginUrl,
+          tunnelAuth,
+          undefined,
+          options?.customHeaders,
+          options?.headerHosts
+        );
+        loginPathReachable.set(loginPath, check.ok);
+      } catch {
+        loginPathReachable.set(loginPath, false);
+      }
+      loginReachable = loginReachable && loginPathReachable.get(loginPath) === true;
+    }
+
+    // A browser was available but the Role's own sign-in page never answered, so it cannot have signed in:
+    // report `unreachable` rather than a reason that suggests the page was read (LC-006).
+    for (const role of profile?.roles ?? []) {
+      if (roleResults[role.role] === true) continue;
+      if (loginPathReachable.get(role.loginPath || '/login') !== false) continue;
+      roleResults[role.role] = false;
+      roleFailures[role.role] = 'unreachable';
+      const previous = roleDiagnostics[role.role];
+      roleDiagnostics[role.role] = {
+        ok: false,
+        failedStep: 'goto',
+        attempts: previous?.attempts ?? 0,
+      };
+    }
+
     return {
-      ok: true,
+      ok: !unverified,
       url: targetUrl,
       statusCode: urlCheck.status,
-      loginReachable: true,
+      loginReachable,
       roleAuthResults: roleResults,
       roleStorageStates,
       ...(Object.keys(roleFailures).length > 0 ? { roleFailures } : {}),
       roleLandingPaths,
       roleDiagnostics,
       ...(urlCheck.startWarning ? { startWarning: urlCheck.startWarning } : {}),
+      ...(unverified ? { error: 'No browser was available to sign in, so no Role could be verified.' } : {}),
     };
   }
 

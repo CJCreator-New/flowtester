@@ -4,7 +4,7 @@
  * CSS paths, URLs and internal event names never reach the screen.
  */
 
-import { isSignInFailureReason, signInReasonText } from '@qa/types/src/signin.js';
+import { isSignInFailureReason, signInReasonText } from '@qa/types/src/browser.js';
 
 export type RunMode = 'product' | 'website';
 

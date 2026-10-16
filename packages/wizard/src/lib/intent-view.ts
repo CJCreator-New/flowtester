@@ -1,5 +1,5 @@
 import type { DiscoveredFlow, PlanIntent, PlanPageTest, ReviewPlan, TestCaseStep } from '@qa/types';
-import { INTENTS, intentOf } from '@qa/types/src/intent.js';
+import { INTENTS, intentOf } from '@qa/types/src/browser.js';
 import { stepToSentence } from './plan-translate.js';
 
 /** The Intents in the words Plan Review uses. */

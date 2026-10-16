@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import path from 'path';
+import http from 'http';
 import { promises as fs } from 'fs';
 import { server as fixtureServer } from '../../../fixtures/test-app/server.js';
 import { DiscoveryAgent } from '../src/discovery/discovery-agent.js';
@@ -7,6 +8,7 @@ import { FlowTestOrchestrator } from '../src/orchestrator.js';
 import { PreFlightChecker } from '../src/preflight.js';
 import { DeterministicSpider } from '../src/discovery/deterministic-spider.js';
 import { BrowserManager } from '../src/browser.js';
+import { RobotsPolicy } from '../src/competitive/robots.js';
 import type { TestCase, ProductProfile } from '@qa/types';
 
 describe('T-117 Auth and crawl end-to-end (auth-crawl-e2e.test.ts)', () => {
@@ -323,6 +325,260 @@ describe('T-117 Auth and crawl end-to-end (auth-crawl-e2e.test.ts)', () => {
       process.env.QA_RELOGIN = prevRelogin;
     }
   }, 60000);
+
+  // LC-001 (T-304): the crawl asks the robots policy about the route's path, so a path the site asked
+  // crawlers to leave alone is left alone and reported. The politeness note is written by the Discovery
+  // Agent, which only sends a policy on a host that is not private — the fixture is localhost — so the
+  // gate is asserted here, where the policy is actually passed to the Spider.
+  it('end-to-end: a path robots.txt disallows is left alone and reported (LC-001)', async () => {
+    const robotsText = await (await fetch(`${base}/robots.txt`)).text();
+    expect(robotsText).toContain('Disallow: /private/');
+
+    const browserManager = new BrowserManager();
+    const crawlOnce = async (robots: RobotsPolicy) => {
+      const context = await browserManager.createContext({ baseUrl: base });
+      try {
+        return await new DeterministicSpider([], 40).crawl(context, `${base}/`, {
+          concurrency: 2,
+          exploreClicks: false,
+          seedSitemap: false,
+          robots,
+        });
+      } finally {
+        await context.close();
+      }
+    };
+
+    try {
+      const gated = await crawlOnce(RobotsPolicy.parse(robotsText, 'qa-crawler'));
+      const recorded = gated.pages.map((p) => p.urlPath);
+      expect(recorded).not.toContain('/private/');
+      expect(recorded).not.toContain('/private/reports');
+      expect(gated.skippedByRobots).toEqual(expect.arrayContaining(['/private/', '/private/reports']));
+      expect(gated.skipped?.find((s) => s.urlPath === '/private/')?.why).toBe('robots');
+
+      // The same crawl with no rules reaches them: the gate is what changed, not the fixture.
+      const openCrawl = await crawlOnce(RobotsPolicy.allowAll());
+      expect(openCrawl.pages.map((p) => p.urlPath)).toEqual(expect.arrayContaining(['/private/', '/private/reports']));
+    } finally {
+      await browserManager.close();
+    }
+  }, 180000);
+
+  // LC-002 (T-301): an ordinary page that shows a password field is recorded, keeps the fact, and is never
+  // named as a page that asks for a sign-in.
+  it('end-to-end: an ordinary page with a password field is recorded, not called a sign-in wall (LC-002)', async () => {
+    const outputDir = path.join(tmpDir, 'security-page');
+    const outcome = await DiscoveryAgent.discoverWithSession({
+      targetUrl: `${base}/account`,
+      productId: 'security-page',
+      outputDir,
+      authDir: path.join(outputDir, 'auth'),
+      maxPages: 25,
+      profile: {
+        name: 'Manager',
+        productId: 'security-page',
+        roles: [
+          { role: 'manager', username: 'manager@example.com', password: 'manager-password', loginPath: '/signin' },
+        ],
+      },
+    });
+
+    const security = outcome.draft.pages.find((p) => p.urlPath === '/account/security');
+    expect(security).toBeTruthy();
+    expect(security?.formsCount).toBeGreaterThan(0);
+    // It keeps the fact that a password field was on it...
+    expect(security?.hasSignInForm).toBe(true);
+    // ...and is never named as a page that asks for a sign-in.
+    expect((outcome.draft.exploration?.notes || []).join('\n')).not.toContain('/account/security');
+
+    // LC-003: every route a crawl attempted has exactly one row, so a recovery cannot leave a hole.
+    const routes = outcome.draft.exploration?.pageCoverage?.routes || [];
+    expect(routes.length).toBeGreaterThan(0);
+    expect(new Set(routes.map((r) => `${r.who ?? ''} ${r.requestedPath}`)).size).toBe(routes.length);
+  }, 180000);
+
+  // LC-001 (T-304, T-309): the politeness note is written by the Discovery Agent, and the Agent only passes a
+  // robots policy on a host that is not private (discovery-agent.ts:469) — the fixture runs on localhost. The
+  // host check is therefore the one thing stubbed here; the robots fetch, the parse, the gate and the note are
+  // the code that ships. The contrast with no rules at all is asserted in the same run.
+  it('end-to-end: the politeness note names the pages robots.txt asks crawlers to leave alone (LC-001)', async () => {
+    vi.resetModules();
+    vi.doMock('../src/competitive/safe-crawler.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../src/competitive/safe-crawler.js')>()),
+      isPrivateHost: () => false,
+    }));
+
+    try {
+      const { DiscoveryAgent: HonouringAgent } = await import('../src/discovery/discovery-agent.js');
+      const { RobotsPolicy: FreshRobots } = await import('../src/competitive/robots.js');
+      const outputDir = path.join(tmpDir, 'robots-note');
+
+      const crawl = (name: string) =>
+        HonouringAgent.discoverWithSession({
+          targetUrl: `${base}/`,
+          productId: 'robots-note',
+          outputDir: path.join(outputDir, name),
+          authDir: path.join(outputDir, name, 'auth'),
+          maxPages: 12,
+          crawlDelayMs: 0,
+        });
+
+      const gated = await crawl('gated');
+      const gatedPaths = gated.draft.pages.map((p) => p.urlPath);
+      expect(gatedPaths).not.toContain('/private/');
+      expect(gatedPaths).not.toContain('/private/reports');
+
+      const skipped = gated.draft.exploration?.pageCoverage?.skipped || [];
+      expect(skipped.find((s) => s.urlPath === '/private/')?.why).toBe('robots');
+      expect(skipped.find((s) => s.urlPath === '/private/reports')?.why).toBe('robots');
+
+      // The note the person reads, including the paths: the rule is visible, not silent.
+      const notes = (gated.draft.exploration?.notes || []).join('\n');
+      expect(notes).toContain('robots.txt asks crawlers to leave alone');
+      expect(notes).toContain('/private/');
+      expect(notes).toContain('/private/reports');
+
+      // The rules are the gate, not the fixture: the same crawl with an empty policy reaches those pages,
+      // and then there is nothing to be polite about.
+      const fetchSpy = vi.spyOn(FreshRobots, 'fetch').mockResolvedValue(FreshRobots.allowAll());
+      try {
+        const open = await crawl('open');
+        expect(open.draft.pages.map((p) => p.urlPath)).toEqual(
+          expect.arrayContaining(['/private/', '/private/reports'])
+        );
+        expect((open.draft.exploration?.notes || []).join('\n')).not.toContain('robots.txt asks crawlers');
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    } finally {
+      vi.doUnmock('../src/competitive/safe-crawler.js');
+      vi.resetModules();
+    }
+  }, 180000);
+
+  // LC-003 / LC-004 (T-305, T-309): when the Role's session dies part-way the crawl asks for a fresh one and
+  // carries on: the route it had reached is retried, gets its single row marked `session-recovered`, and the
+  // Role is not reported as lost (no "stopped working" note).
+  // The fixture's own `/lab/expire-session` invalidates every session for good, so a fresh sign-in could never
+  // restore it; the ticket allows a small server of this test's own instead (T-309 implementation notes).
+  it('end-to-end: a Role whose session dies mid-crawl is restored and the crawl continues (LC-003, LC-004)', async () => {
+    const account = { email: 'manager@example.com', password: 'manager-password' };
+    const behindSignIn = ['/orders', '/invoices', '/reports', '/settings', '/team', '/billing', '/exports'];
+    const validTokens = new Set<string>();
+    let tokens = 0;
+
+    const signInForm = `<form method="post" action="/signin">
+        <label for="signin-email">Email</label><input id="signin-email" name="email" type="email">
+        <label for="signin-password">Password</label><input id="signin-password" name="password" type="password">
+        <button type="submit" data-testid="signin-btn">Sign in</button>
+      </form>`;
+    const page = (title: string, extra = '') =>
+      `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><meta name="description" content="${title} of the session recovery test app."></head><body><h1>${title}</h1>${extra}</body></html>`;
+    const links = (paths: string[]) => `<nav>${paths.map((h) => `<a href="${h}">${h}</a>`).join(' ')}</nav>`;
+
+    const recoveryServer = http.createServer((req, res) => {
+      const url = new URL(req.url || '/', 'http://localhost');
+      const send = (html: string, status = 200, headers: Record<string, string> = {}) => {
+        res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', ...headers });
+        res.end(html);
+      };
+
+      if (url.pathname === '/signin' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', (chunk) => (raw += chunk));
+        req.on('end', () => {
+          const form = new URLSearchParams(raw);
+          if (form.get('email') === account.email && form.get('password') === account.password) {
+            const fresh = `s${++tokens}`;
+            validTokens.add(fresh);
+            send('', 302, { 'Set-Cookie': `recovery_session=${fresh}; Path=/; HttpOnly`, Location: '/account' });
+            return;
+          }
+          send(page('Sign in', signInForm));
+        });
+        return;
+      }
+      if (url.pathname === '/invalidate' && req.method === 'POST') {
+        // Every session handed out so far stops working; a new sign-in works again.
+        validTokens.clear();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      if (url.pathname === '/') return send(page('Recovery app', links(['/account', ...behindSignIn])));
+      if (url.pathname === '/signin') return send(page('Sign in', signInForm));
+
+      const token = (req.headers.cookie || '').match(/recovery_session=([\w-]+)/)?.[1];
+      if (!token || !validTokens.has(token)) {
+        // What the fixture does for its signed-in area: the sign-in page, by redirect.
+        return send('', 302, { Location: '/signin' });
+      }
+      send(page(url.pathname, links(behindSignIn.filter((p) => p !== url.pathname))));
+    });
+
+    let recoveryBase = '';
+    await new Promise<void>((resolve) =>
+      recoveryServer.listen(0, () => {
+        const addr = recoveryServer.address();
+        if (addr && typeof addr === 'object') recoveryBase = `http://localhost:${addr.port}`;
+        resolve();
+      })
+    );
+
+    const outputDir = path.join(tmpDir, 'session-recovery');
+    // Pages the Role had reached when the session died: what it reaches after that is the crawl carrying on.
+    const reachedBeforeDeath = new Set<string>();
+    let died = false;
+
+    try {
+      const outcome = await DiscoveryAgent.discoverWithSession({
+        targetUrl: recoveryBase,
+        productId: 'session-recovery',
+        outputDir,
+        authDir: path.join(outputDir, 'auth'),
+        maxPages: 20,
+        crawlDelayMs: 0,
+        profile: {
+          name: 'Manager',
+          productId: 'session-recovery',
+          roles: [{ role: 'manager', username: account.email, password: account.password, loginPath: '/signin' }],
+        },
+        onProgress: (progress) => {
+          if (progress.stage !== 'crawling' || !progress.signedInAs) return;
+          if (died) return;
+          reachedBeforeDeath.add(progress.urlPath);
+          died = true;
+          // The Role's session stops working while its crawl is still running.
+          void fetch(`${recoveryBase}/invalidate`, { method: 'POST' });
+        },
+      });
+
+      expect(died).toBe(true);
+      const exploration = outcome.draft.exploration;
+      const notes = (exploration?.notes || []).join('\n');
+
+      // LC-004: the Role is not reported as lost, so the crawl is not written off and no note says it stopped.
+      expect(notes).not.toContain('stopped working');
+      expect(exploration?.signInFailures?.manager).toBeUndefined();
+
+      const routes = exploration?.pageCoverage?.routes || [];
+      const roleRoutes = routes.filter((r) => r.who === 'manager');
+      // LC-003: one row per attempted route, and the recovered one is on record as recovered.
+      expect(roleRoutes.length).toBeGreaterThan(0);
+      expect(new Set(roleRoutes.map((r) => r.requestedPath)).size).toBe(roleRoutes.length);
+      expect(roleRoutes.some((r) => r.detail === 'session-recovered')).toBe(true);
+
+      // LC-003: the crawl kept exploring instead of stopping at the wall.
+      const rolePages = outcome.draft.pages
+        .filter((p) => p.reachedBy?.includes('manager'))
+        .map((p) => p.urlPath);
+      expect(rolePages.some((p) => !reachedBeforeDeath.has(p))).toBe(true);
+      expect((exploration?.pageCoverage?.skipped || []).some((s) => s.why === 'session-lost')).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => recoveryServer.close(() => resolve()));
+    }
+  }, 180000);
 
   // Regression test 5: Custom headers propagation on test run
   it('regression: custom headers propagate to every request during test run', async () => {

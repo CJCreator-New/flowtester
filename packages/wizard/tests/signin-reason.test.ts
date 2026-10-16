@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SIGN_IN_FAILURE_REASONS, signInReasonText } from '@qa/types/src/signin.js';
+import { SIGN_IN_FAILURE_REASONS, signInReasonText } from '@qa/types/src/browser.js';
 import { addSiteSignIn, testSiteSignIn, RunnerError } from '../src/api';
 
 function stubRunner(status: number, body: unknown) {

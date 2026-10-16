@@ -1,5 +1,5 @@
-import type { RouteSkipReason } from '@qa/types/src/route-telemetry.js';
-import type { ScanProgress } from '../screens/ScanningScreen';
+import type { RouteSkipReason } from '@qa/types/src/browser.js';
+import type { ScanProgress } from './scan-progress';
 
 /**
  * Plain-language descriptions for skipped crawl routes.

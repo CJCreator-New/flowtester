@@ -17,13 +17,14 @@ const STEPS: Array<{ id: Step; label: string }> = [
 export function StepBar({ current, links = {} }: { current: Step; links?: Partial<Record<Step, string>> }) {
   const index = STEPS.findIndex((s) => s.id === current);
   return (
-    <nav aria-label="Check-up steps" className="border-b border-rule bg-panel">
-      <div className="mx-auto max-w-6xl px-4 py-2 sm:px-6">
+    <nav aria-label="Check-up steps" className="border-b border-rule/80 bg-panel/90 backdrop-blur-sm shadow-level-1">
+      <div className="mx-auto max-w-6xl px-4 py-2.5 sm:px-6">
         {/* Phones: just where you are. */}
-        <p className="text-sm text-ink-soft sm:hidden">
-          Step {index + 1} of {STEPS.length}: <strong className="text-ink">{STEPS[index].label}</strong>
+        <p className="text-sm text-ink-soft sm:hidden flex items-center gap-2">
+          <span className="badge-tech-stamp text-[10px] px-1.5">STEP {index + 1} / {STEPS.length}</span>
+          <strong className="text-ink">{STEPS[index].label}</strong>
         </p>
-        <ol className="hidden items-center gap-2 text-sm sm:flex">
+        <ol className="hidden items-center gap-3 text-sm sm:flex">
           {STEPS.map((step, i) => {
             const state = i < index ? 'done' : i === index ? 'current' : 'todo';
             const href = state === 'done' ? links[step.id] : undefined;
@@ -31,17 +32,17 @@ export function StepBar({ current, links = {} }: { current: Step; links?: Partia
               <>
                 <span
                   aria-hidden="true"
-                  className={`flex h-6 w-6 items-center justify-center rounded-full border-2 text-xs font-bold transition-colors duration-200 ${
+                  className={`flex h-6 w-6 items-center justify-center rounded-full border-2 text-xs font-bold transition-all duration-200 ${
                     state === 'done'
-                      ? 'border-stamp bg-stamp text-surface'
+                      ? 'border-stamp bg-stamp text-surface shadow-level-1'
                       : state === 'current'
-                        ? 'border-stamp bg-surface text-stamp ring-2 ring-stamp/30'
-                        : 'border-edge text-ink-soft'
+                        ? 'border-stamp bg-surface text-stamp ring-2 ring-stamp/40 shadow-level-1 font-bold'
+                        : 'border-edge/50 bg-panel text-ink-soft'
                   }`}
                 >
                   {state === 'done' ? '✓' : i + 1}
                 </span>
-                <span className={state === 'todo' ? 'text-ink-soft' : 'font-bold text-ink'}>{step.label}</span>
+                <span className={state === 'todo' ? 'text-ink-soft font-medium' : 'font-bold text-ink'}>{step.label}</span>
                 <span className="sr-only">
                   {state === 'done' ? '(done)' : state === 'current' ? '(current step)' : '(to come)'}
                 </span>
@@ -50,7 +51,7 @@ export function StepBar({ current, links = {} }: { current: Step; links?: Partia
             return (
               <li
                 key={step.id}
-                className="flex items-center gap-2"
+                className="flex items-center gap-3"
                 aria-current={state === 'current' ? 'step' : undefined}
               >
                 {href ? (
@@ -66,7 +67,9 @@ export function StepBar({ current, links = {} }: { current: Step; links?: Partia
                 {i < STEPS.length - 1 && (
                   <span
                     aria-hidden="true"
-                    className={`h-px w-6 transition-colors duration-200 ${i < index ? 'bg-stamp' : 'bg-edge'}`}
+                    className={`h-0.5 w-8 rounded-full transition-all duration-200 ${
+                      i < index ? 'bg-stamp shadow-[0_0_8px_rgba(108,155,242,0.4)]' : 'bg-rule'
+                    }`}
                   />
                 )}
               </li>

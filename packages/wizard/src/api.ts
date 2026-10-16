@@ -3,18 +3,15 @@ import type {
   RoleCredential,
   ReviewPlan,
   DiscoveredFlow,
-  TestCase,
   RunSummary,
   BenchmarkJob,
   ReleaseGateCriteria,
   SignInFailureReason,
   RunCap,
-  FindingSeverity,
-  PlanIntent,
 } from '@qa/types';
-import type { StorageStateData } from '@qa/types/src/evidence-finding.js';
-import { isSignInFailureReason, signInReasonText } from '@qa/types/src/signin.js';
-import { normalizePlanIntents } from '@qa/types/src/intent.js';
+// The check-up API's shapes live in @qa/types (T-201): the runner and this client share one copy.
+import type { PlanPatchBody, RunnerStatusReply, RunStartBody } from '@qa/types';
+import { isSignInFailureReason, normalizePlanIntents, signInReasonText } from '@qa/types/src/browser.js';
 
 /**
  * Every call to the runner lives here, and every failure becomes a RunnerError whose message is a
@@ -65,25 +62,22 @@ async function json<T>(res: Response): Promise<T> {
   }
 }
 
-export type RunnerPhase = 'idle' | 'scanning' | 'awaiting-review' | 'testing' | 'done' | 'failed';
+/** The runner's phase, shared with the runner so the two ends cannot drift apart. */
+export type { RunnerPhase } from '@qa/types';
 
-export interface RunnerStatus {
-  isRunning: boolean;
-  hasReport: boolean;
-  lastRunError: string | null;
+/**
+ * What the runner says about itself: the shared status reply (T-201), plus the client's own `busy`.
+ * `lastErrorCode`, `reportRunId` and `beta` are the three fields the runner always writes but a page may not
+ * have seen yet — the wizard optimistically shows a run it has just started (App.tsx) before the next poll,
+ * so they are optional here. `RunnerStatusReply` is what is actually on the wire.
+ */
+export type RunnerStatus = Omit<RunnerStatusReply, 'lastErrorCode' | 'reportRunId' | 'beta'> & {
   lastErrorCode?: string | null;
-  phase?: RunnerPhase;
-  hasPlan?: boolean;
-  runId?: string | null;
-  /** The site the check-up in progress is for, as typed. */
-  targetUrl?: string | null;
-  /** The run the latest report belongs to. */
   reportRunId?: string | null;
-  /** A copy shared with other people (the free online one): check-ups and reports are visible to all of them. */
   beta?: boolean;
   /** Shared copy only: another visitor's check-up is running, so a new one would have to wait. */
   busy?: boolean;
-}
+};
 
 /** null means the runner can't be reached (not started yet, or stopped). */
 export async function getStatus(): Promise<RunnerStatus | null> {
@@ -296,8 +290,8 @@ export async function checkDomainProof(targetUrl: string): Promise<DomainProofSt
 }
 
 export type Reachability =
-  | ({ ok: true; statusCode?: number } & SiteFacts)
-  | ({ ok: false; reason: string; code: string; suggestion: string; statusCode?: number } & SiteFacts);
+  | ({ ok: true; statusCode?: number; startWarning?: 'start-4xx' } & SiteFacts)
+  | ({ ok: false; reason: string; code: string; suggestion: string; statusCode?: number; startWarning?: 'start-4xx' } & SiteFacts);
 
 export async function checkReachable(targetUrl: string): Promise<Reachability> {
   const res = await call('/api/runner/preflight', { method: 'POST', body: JSON.stringify({ targetUrl }) }, 15000);
@@ -308,11 +302,15 @@ export async function checkReachable(targetUrl: string): Promise<Reachability> {
       code?: string;
       suggestion?: string;
       statusCode?: number;
+      /** The start address answered with a 4xx: reachable, but not the page the person expected. */
+      startWarning?: 'start-4xx';
       error?: string;
     } & SiteFacts
   >(res);
   const facts: SiteFacts = { host: body.host, testCopy: body.testCopy, remembered: body.remembered };
-  if (body.reachable) return { ok: true, statusCode: body.statusCode, ...facts };
+  if (body.reachable) {
+    return { ok: true, statusCode: body.statusCode, startWarning: body.startWarning, ...facts };
+  }
   if (body.reason === 'server-error' || body.code === 'ERR_SERVER_ERROR') {
     return {
       ok: false,
@@ -320,6 +318,7 @@ export async function checkReachable(targetUrl: string): Promise<Reachability> {
       code: body.code || 'ERR_SERVER_ERROR',
       suggestion: 'Check the site is working, then try again.',
       statusCode: body.statusCode,
+      startWarning: body.startWarning,
       ...facts,
     };
   }
@@ -330,6 +329,7 @@ export async function checkReachable(targetUrl: string): Promise<Reachability> {
       code: body.code || 'ERR_INVALID_URL',
       suggestion: 'Check the address, for example shop.example.com or localhost:3050.',
       statusCode: body.statusCode,
+      startWarning: body.startWarning,
       ...facts,
     };
   }
@@ -356,58 +356,11 @@ export async function checkReachable(targetUrl: string): Promise<Reachability> {
   };
 }
 
-export interface StartRunRequest {
-  targetUrl: string;
-  owner: boolean;
-  /** The person says this live-looking address is a test copy of their site. */
-  stagingHost?: boolean;
-  roles?: RoleCredential[];
-  productContext?: string;
-  designNotes?: string;
-  /** Pages the crawl explores at most (default 200). */
-  maxPages?: number;
-  /** Throw away a plan that's waiting for review. */
-  replacePlan?: boolean;
-  /** Test with the approved plan when nothing on the site is new. */
-  testAgain?: boolean;
-  /** The AI service saved in Settings. OpenRouter when not given. */
-  aiProvider?: AiProviderId;
-  /** Plan with fixed rules now, spending no AI requests; re-plan items with the AI later. */
-  planWithoutAI?: boolean;
-  /** False when there is no AI key at all: no AI is used, and fixed rules write the plan. */
-  useAI?: boolean;
-  /**
-   * Check how search engines and AI assistants see the site. Off for a test copy by default: it
-   * matters on the public site.
-   */
-  searchChecks?: boolean;
-  /** Granular 4-lens visibility flags: search, answers, aiSearch, marketing. */
-  visibility?: { search: boolean; answers: boolean; aiSearch: boolean; marketing: boolean };
-  /** Remember the sign-ins for this site (passwords in the computer's keychain). */
-  rememberSignIns?: boolean;
-  /** Sign in with the ones saved for the site. */
-  useSavedSignIns?: boolean;
-  /** Product Context files (.md / .txt), kept apart so each Source keeps its document name. */
-  contextDocuments?: Array<{ name: string; text: string }>;
-  /** A docs address; same-site pages are read (at most 20). */
-  contextUrl?: string;
-  /** Saved sessions per role. Held in the runner's memory only, never saved. */
-  savedSessions?: Record<string, StorageStateData>;
-  /** Optional limit on AI requests and/or dollars for this check-up. */
-  aiCap?: RunCap;
-  /** The person accepted that forms are filled in and sent with the typed sign-in details. */
-  signInConsent?: boolean;
-  /** Start testing without the plan review step. Only sent with consent. */
-  skipReview?: boolean;
-  /** Most Tests the Check-up runs (the Test cap); the QA Tool's default applies when not given. */
-  testCap?: number;
-  /** Spider concurrency (1 to 5, default 2). */
-  crawlConcurrency?: number;
-  /** Per-page pacing delay in ms (0-2000, default 100ms). */
-  crawlDelayMs?: number;
-  /** Custom HTTP headers sent with every request (e.g. X-QA-Bypass-Token). */
-  customHeaders?: Record<string, string>;
-}
+/**
+ * What this client sends to start a check-up: the run-start body the runner accepts (T-201), under the
+ * name the wizard has always used. It carries no fields of its own.
+ */
+export type StartRunRequest = RunStartBody;
 
 /** Starts a check-up: the scan, then the plan waits for review. Returns the run id. */
 export async function startRun(request: StartRunRequest): Promise<string> {
@@ -487,34 +440,8 @@ export async function getPlan(): Promise<ReviewPlan> {
   return normalizePlanIntents(await json<ReviewPlan>(res));
 }
 
-export interface PatchPlanBody {
-  flows?: DiscoveredFlow[];
-  questions?: Array<{ id: string; selectedAnswer: string }>;
-  answers?: Record<string, string>;
-  testCases?: TestCase[];
-  productContext?: string;
-  designNotes?: string;
-  /** Plan Items switched on or off: pages, tests, Navigation Checks, journeys ("journey:<id>"). */
-  items?: Array<{ id: string; skipped: boolean }>;
-  /** The screen sizes the run uses. */
-  screenSizes?: Array<'375px' | '768px' | '1440px'>;
-  /** Confirms the AI's guess of what should happen (no text), or replaces it with the person's words. */
-  expectations?: Array<{ id: string; text?: string }>;
-  /** 'quick': desktop only, and only the shared menus' links. */
-  preset?: 'quick';
-  /** Plan Review edits on a Source: confirm or correct roles, set severity, mark the document out of date. */
-  sourceEdits?: Array<{
-    itemId: string;
-    roles?: string[];
-    severity?: FindingSeverity;
-    stale?: boolean;
-    confirm?: boolean;
-  }>;
-  /** "Not found in app" entries: remove one from the list. */
-  notFoundEdits?: Array<{ id: string; remove?: boolean }>;
-  /** The Intents switched off (Works, Rejects, Limits, Denied); an empty list switches all on. */
-  intentsOff?: PlanIntent[];
-}
+/** The Plan-change body the runner accepts: the shared shape (T-201), under the name the wizard uses. */
+export type PatchPlanBody = PlanPatchBody;
 
 /** What a small change (a switch, an answer, the sizes) changed: merged into the plan on screen. */
 export interface PlanDelta {

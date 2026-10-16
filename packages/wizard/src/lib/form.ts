@@ -1,6 +1,5 @@
 import type { RoleCredential, RunCap } from '@qa/types';
-import type { StorageStateData } from '@qa/types/src/evidence-finding.js';
-import { parseHeaderText } from '@qa/types/src/input-rules.js';
+import { parseHeaderText, type StorageStateData } from '@qa/types/src/browser.js';
 import { capFromInputs } from './cap';
 import { toContextDocuments, type ReferenceFile } from './context';
 

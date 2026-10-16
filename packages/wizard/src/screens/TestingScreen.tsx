@@ -83,17 +83,25 @@ export function TestingScreen({
 
   return (
     <div className="flex min-h-[calc(100vh-7rem)] flex-col">
-      <div className="border-b border-rule bg-surface px-4 py-4 sm:px-6">
+      <div className="border-b border-rule/80 bg-surface/90 backdrop-blur-md px-4 py-4 sm:px-6 shadow-level-1">
         <div className="mx-auto flex max-w-6xl flex-wrap items-end justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <FocusHeading className="break-words text-2xl font-bold sm:text-3xl">Testing {host}</FocusHeading>
-            <p role="status" className="mt-1 text-ink">
-              {feed.status === 'completed'
-                ? 'All done. Putting your report together…'
-                : total > 0
-                  ? `Test ${position} of ${total}${left ? ` · ${left}` : ''}`
-                  : 'Getting ready to test…'}
-            </p>
+            <FocusHeading className="break-words text-2xl font-bold sm:text-3xl text-ink">Testing {host}</FocusHeading>
+            <div className="mt-1 flex flex-wrap items-center gap-2" role="status">
+              <span className="text-ink font-medium">
+                {feed.status === 'completed'
+                  ? 'All done. Putting your report together…'
+                  : total > 0
+                    ? `Test ${position} of ${total}`
+                    : 'Getting ready to test…'}
+              </span>
+              {left && total > 0 && (
+                <span className="badge-tech font-mono text-[11px]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-stamp animate-pulse" />
+                  {left} LEFT
+                </span>
+              )}
+            </div>
             {total > 0 ? (
               <div
                 role="progressbar"
@@ -101,17 +109,17 @@ export function TestingScreen({
                 aria-valuemin={0}
                 aria-valuemax={total}
                 aria-valuenow={feed.progress?.done ?? 0}
-                className="mt-2 h-2 max-w-xl overflow-hidden rounded-full bg-rule"
+                className="mt-3 h-2.5 max-w-xl overflow-hidden rounded-pill bg-panel border border-rule/50 shadow-inner"
               >
                 <div
-                  className="h-full rounded-full bg-stamp transition-[width] motion-reduce:transition-none"
+                  className="h-full rounded-pill bg-stamp shadow-[0_0_10px_rgba(108,155,242,0.5)] transition-[width] duration-300 motion-reduce:transition-none"
                   style={{ width: `${((feed.progress?.done ?? 0) / total) * 100}%` }}
                 />
               </div>
             ) : (
               running && (
-                <div aria-hidden="true" className="mt-2 h-2 max-w-xl overflow-hidden rounded-full bg-rule">
-                  <div className="progress-indeterminate h-full w-1/3 rounded-full bg-stamp" />
+                <div aria-hidden="true" className="mt-3 h-2.5 max-w-xl overflow-hidden rounded-pill bg-panel border border-rule/50 shadow-inner">
+                  <div className="progress-indeterminate h-full w-1/3 rounded-pill bg-stamp shadow-[0_0_10px_rgba(108,155,242,0.5)]" />
                 </div>
               )
             )}
@@ -119,7 +127,7 @@ export function TestingScreen({
           {running && (
             <button
               type="button"
-              className="btn-quiet border-fail text-fail hover:border-fail hover:bg-fail-tint"
+              className="btn-quiet border-fail text-fail hover:border-fail hover:bg-fail-tint font-bold"
               onClick={onStop}
             >
               Stop testing
@@ -214,19 +222,26 @@ export function TestingScreen({
                 {problems.slice(0, 20).map((problem) => (
                   <li
                     key={problem.key}
-                    className={`rounded border-l-4 bg-surface px-3 py-2 text-sm ${problem.serious ? 'border-l-fail' : 'border-l-warn'}`}
+                    className={`blueprint-card p-3 border-l-4 text-sm transition-all ${
+                      problem.serious ? 'border-l-fail' : 'border-l-warn'
+                    }`}
                   >
-                    <span className="block text-ink">
-                      {problem.title}
-                      {problem.count > 1 && <span className="text-ink-soft"> ×{problem.count}</span>}
-                    </span>
-                    <span className="block break-all text-sm text-ink-soft">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="block font-semibold text-ink leading-snug">
+                        {problem.title}
+                        {problem.count > 1 && <span className="text-ink-soft font-mono text-xs"> ×{problem.count}</span>}
+                      </span>
+                      <span className={problem.serious ? 'badge-tech-fail shrink-0 text-[10px] py-0' : 'badge-tech-warn shrink-0 text-[10px] py-0'}>
+                        {problem.serious ? 'HIGH' : 'WARN'}
+                      </span>
+                    </div>
+                    <span className="mt-1 block break-all text-xs text-ink-soft">
                       {problem.pages.length === 1 ? (
-                        <span className="font-mono">{problem.pages[0]}</span>
+                        <span className="font-mono text-ink-soft">{problem.pages[0]}</span>
                       ) : (
                         `${problem.pages.length} pages`
                       )}
-                      {problem.sizes.length > 0 ? ` · at ${problem.sizes.join(', ')}` : ''}
+                      {problem.sizes.length > 0 ? ` · ${problem.sizes.join(', ')}` : ''}
                     </span>
                   </li>
                 ))}

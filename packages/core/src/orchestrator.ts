@@ -22,6 +22,7 @@ import { BrowserManager, BREAKPOINT_VIEWPORTS, locateElement, type BrowserEngine
 import { EvidenceCollector } from './evidence.js';
 import { captureVisualShot, readBaselineMode, writeVisualBaseline } from './visual-capture.js';
 import { PreFlightChecker, SignInFailedError, type PreFlightResult } from './preflight.js';
+import { restoreSession } from './discovery/discovery-agent.js';
 import { navigate, looksLikeLogin } from './navigate.js';
 import { debugLog } from './debug-log.js';
 import { SourceLocator } from './source-locator.js';
@@ -740,10 +741,20 @@ export class FlowTestOrchestrator {
                     credential,
                     statePath
                   );
+                  // The whole session, not only its cookies: the one restore helper (LC-004). The retry still
+                  // starts from the state file on disk, so a failure here cannot strand the run.
+                  const reloginState = reloginRes.ok ? await reloginContext.storageState().catch(() => null) : null;
                   await reloginContext.close().catch(() => {});
 
                   if (reloginRes.ok) {
                     roleStorageStates[testCase.role] = statePath;
+                    if (reloginState) {
+                      await restoreSession(page.context(), reloginState).catch(() => {
+                        debugLog('auth', 'restoring the refreshed session into the live page failed', {
+                          role: testCase.role,
+                        });
+                      });
+                    }
                     throw new StepsFailed('Session refreshed, retrying point');
                   }
                 }

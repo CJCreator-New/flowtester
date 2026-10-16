@@ -1,4 +1,4 @@
-import { summarizeDocument, type DocumentSummary } from '@qa/types/src/context-parse.js';
+import { summarizeDocument, type DocumentSummary } from '@qa/types/src/browser.js';
 
 export interface ReferenceFile {
   name: string;

@@ -55,7 +55,7 @@ type AddressCheck =
   | { state: 'empty' }
   | { state: 'invalid'; reason: string }
   | { state: 'checking'; url: string }
-  | { state: 'ok'; url: string; facts: SiteFacts }
+  | { state: 'ok'; url: string; facts: SiteFacts; statusCode?: number; startWarning?: 'start-4xx' }
   | { state: 'unreachable'; url: string; reason: string; suggestion?: string; facts: SiteFacts };
 
 /** What starting needs from the address check. */
@@ -145,7 +145,13 @@ export function NewCheckupScreen({
         const facts: SiteFacts = { host: result.host, testCopy: result.testCopy, remembered: result.remembered };
         setCheck(
           result.ok
-            ? { state: 'ok', url: normal.url, facts }
+            ? {
+                state: 'ok',
+                url: normal.url,
+                facts,
+                statusCode: result.statusCode,
+                startWarning: result.startWarning,
+              }
             : { state: 'unreachable', url: normal.url, reason: result.reason, suggestion: result.suggestion, facts }
         );
       } catch (err) {
@@ -335,8 +341,9 @@ export function NewCheckupScreen({
           else setRecheck((n) => n + 1);
         }}
       >
-        <label htmlFor="url-input" className="label">
-          Site address
+        <label htmlFor="url-input" className="label text-ink font-mono text-xs uppercase tracking-wider flex items-center justify-between">
+          <span>Target Site Address</span>
+          <span className="text-ink-soft normal-case font-sans font-normal">Public URL or local dev server</span>
         </label>
         <input
           id="url-input"
@@ -345,7 +352,7 @@ export function NewCheckupScreen({
           inputMode="url"
           autoComplete="url"
           spellCheck={false}
-          className="field h-14 text-lg"
+          className="field h-14 text-lg font-mono placeholder:font-sans focus:border-stamp focus:ring-2 focus:ring-stamp/40 shadow-inner"
           placeholder="shop.example.com or localhost:3050"
           value={form.address}
           onChange={(e) => {
@@ -361,21 +368,31 @@ export function NewCheckupScreen({
         />
         <div id="url-status" role="status" className="mt-2 min-h-[1.6em] text-sm">
           {check.state === 'checking' && <Spinner label="Checking the address…" />}
-          {check.state === 'invalid' && <span className="text-fail">{check.reason}</span>}
+          {check.state === 'invalid' && <span className="text-fail font-medium">{check.reason}</span>}
           {check.state === 'ok' && kind && (
-            <span className="block space-y-0.5">
-              <span className="block text-ink-soft">
-                <span className="font-bold text-pass">✓ Found</span>{' '}
-                <span className="break-all font-mono text-ink">{check.url}</span>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <span className="badge-tech-pass">
+                <span className="h-1.5 w-1.5 rounded-full bg-pass" />
+                ✓ REACHABLE
               </span>
-              <span className="block font-bold text-ink">
+              <span className="font-mono text-xs text-ink break-all px-2 py-0.5 rounded bg-panel border border-rule">
+                {check.url}
+              </span>
+              <span className={kind.isTestCopy && form.owner ? "badge-tech-warn" : "badge-tech"}>
                 {kind.isTestCopy && form.owner
-                  ? 'Test copy: forms can be filled in and sent.'
+                  ? 'TEST COPY (FORMS ACTIVE)'
                   : kind.isTestCopy
-                    ? 'Only looked at, nothing is sent or changed. Choose “Test it fully” below to fill in and send forms.'
-                    : 'Live site: only looked at, nothing is sent or changed.'}
+                    ? 'LOOK-ONLY MODE'
+                    : 'LIVE INSPECTION (READ-ONLY SAFE)'}
               </span>
-            </span>
+            </div>
+          )}
+          {check.state === 'ok' && check.startWarning && (
+            <p className="mt-1 text-warn">
+              {check.statusCode
+                ? `This address answered with a ${check.statusCode}. There may be nothing here to check.`
+                : 'This address answered, but not with a page. There may be nothing here to check.'}
+            </p>
           )}
         </div>
         {check.state === 'unreachable' && (
@@ -426,13 +443,13 @@ export function NewCheckupScreen({
         )}
 
         <details
-          className="mt-6 rounded-lg border-2 border-edge bg-surface"
+          className="mt-6 blueprint-card overflow-hidden"
           open={hasNonDefaultOptions(form) || undefined}
           data-testid="more-options"
         >
-          <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center gap-x-2 px-4 py-3 font-bold">
-            More options
-            <span className="font-normal text-ink-soft">(optional)</span>
+          <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center gap-x-2 px-5 py-3.5 font-bold hover:bg-panel/40 transition-colors">
+            <span>More options</span>
+            <span className="font-normal text-xs text-ink-soft font-mono">(optional)</span>
           </summary>
           <div className="border-t border-rule px-4 pb-4">
             <div className="mt-6 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
@@ -670,11 +687,11 @@ export function NewCheckupScreen({
               </div>
             )}
 
-            <details className="mt-6 rounded-lg border-2 border-edge bg-surface" open={added > 0 || undefined}>
-              <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center gap-x-2 px-4 py-3 font-bold">
-                Add specs, design notes or journeys
-                <span className="font-normal text-ink-soft">(optional)</span>
-                {added > 0 && <span className="rounded border border-pass px-1.5 text-xs text-pass">Added</span>}
+            <details className="mt-6 rounded-card border border-rule/80 bg-surface/60 overflow-hidden" open={added > 0 || undefined}>
+              <summary className="flex min-h-[48px] cursor-pointer flex-wrap items-center gap-x-2 px-5 py-3 font-bold hover:bg-panel/40 transition-colors">
+                <span>Add specs, design notes or journeys</span>
+                <span className="font-normal text-xs text-ink-soft font-mono">(optional)</span>
+                {added > 0 && <span className="badge-tech-pass text-[10px] py-0 px-2">Added</span>}
               </summary>
               <div className="space-y-5 border-t border-rule p-4">
                 <p className="text-sm text-ink-soft">
@@ -723,7 +740,7 @@ export function NewCheckupScreen({
         <div className="mt-8 flex flex-wrap items-center gap-x-4 gap-y-2">
           <button
             type="submit"
-            className="btn-primary px-8"
+            className="btn-primary min-h-[50px] px-8 font-bold shadow-level-2 hover:shadow-level-3"
             disabled={starting || !canStart}
             aria-describedby={blockedHint ? 'scan-blocked-hint' : 'start-hint'}
           >

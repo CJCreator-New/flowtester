@@ -73,6 +73,8 @@ Tests, by area (browser tests need Chromium; add `--no-file-parallelism`):
 
 Fixture `/lab/*` routes (unlinked from `/`, so crawl and benchmark counts do not change): `/lab/signup` (required, email, pattern; `?mode=server` refuses with `role=alert`), `/lab/lenient` (accepts anything), `/lab/toast` (error in a `div.toast` with no role), `/lab/tabs`, `/lab/modal`, `/lab/crud`, and `/lab/stats` (JSON counts of POST, DELETE and cancelled deletes; `/lab/stats/reset` zeroes them). After a Spider crawl `/lab/stats` must show zero POSTs and zero DELETEs. Run `pnpm benchmark --sites fixture --no-ai` before release since the fixture grew.
 
+Fixture routes added for the sign-in and crawling fixes (T-303): `/private/` and `/private/reports` are disallowed in the fixture's `robots.txt` (and linked from the home page), and `/account/security` is a change-password form inside the signed-in area, so it shows a password field without being a sign-in page. Both are used end to end by `packages/core/tests/auth-crawl-e2e.test.ts` and `packages/runner/tests/auth-crawl-run.test.ts` (T-309); `/Settings` redirects `302` to `/settings/` to stand in for an App that answers under a different case and trailing slash.
+
 Limits of the export (also in the README of the zip):
 
 - Checkers and findings are not exported, only steps and expectations.

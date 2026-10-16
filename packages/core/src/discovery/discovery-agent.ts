@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import type { BrowserContext } from 'playwright';
 import type {
   ProductProfile,
   DiscoveryDraft,
@@ -244,7 +245,8 @@ function describeExploration(
   for (const { result } of crawls) {
     for (const s of result.skipped || []) {
       const urlPath = new URL(s.urlPath, 'http://x').pathname;
-      if (!reachedPaths.has(urlPath) && !skippedPages.has(urlPath)) {
+      const existing = skippedPages.get(urlPath);
+      if (!reachedPaths.has(urlPath) && (!existing || (existing.why === 'page-limit' && s.why !== 'page-limit'))) {
         skippedPages.set(urlPath, {
           urlPath,
           why: s.why,
@@ -283,6 +285,46 @@ function describeExploration(
     notReached: merged.signInWalls,
     notes,
   };
+}
+
+/** One origin's `localStorage` entries, as a saved session holds them. */
+interface SessionStorageArg {
+  origin: string;
+  entries: Array<{ name: string; value: string }>;
+}
+
+/**
+ * Puts a whole saved session back into a live browser context: what is already there is cleared first, then
+ * the session's cookies and every origin's `localStorage` are restored. A site that keeps its token in
+ * `localStorage` — supported at sign-in — recovers the same way it signed in (LC-004). Nothing about the
+ * session is logged. `BrowserContext` is a type-only import, so the wizard bundle stays free of Node code.
+ */
+export async function restoreSession(context: BrowserContext, state: StorageStateData): Promise<void> {
+  await context.clearCookies().catch(() => {});
+  const cookies = (state.cookies ?? []) as Parameters<BrowserContext['addCookies']>[0];
+  if (cookies.length > 0) await context.addCookies(cookies);
+
+  const applyStorage = ({ origin: wanted, entries: values }: SessionStorageArg) => {
+    try {
+      if (window.location.origin !== wanted) return;
+      for (const { name, value } of values) window.localStorage.setItem(name, value);
+    } catch {
+      // Storage can be unavailable (a sandboxed frame); the signed-in session is unaffected.
+    }
+  };
+
+  for (const raw of state.origins ?? []) {
+    const origin = (raw as { origin?: string }).origin;
+    const entries = (raw as { localStorage?: Array<{ name: string; value: string }> }).localStorage;
+    if (!origin || !entries?.length) continue;
+    // An init script, the way Playwright's own storageState works, covers every page that opens later.
+    await context.addInitScript(applyStorage, { origin, entries });
+    // A page that is already open never runs an init script for the page it is already on, so its own
+    // storage is set directly — the mid-crawl case, where the page being retried already exists.
+    for (const openPage of context.pages()) {
+      await openPage.evaluate(applyStorage, { origin, entries }).catch(() => {});
+    }
+  }
 }
 
 export class DiscoveryAgent {
@@ -516,6 +558,20 @@ export class DiscoveryAgent {
       const roleContext = await newContext(storageState);
       const roleMaxPages = Math.min(totalMaxPages, Math.max(20, Math.floor(totalMaxPages / 2)));
       const roleSpider = new DeterministicSpider(options.profile?.forbiddenActions || [], roleMaxPages);
+      const reloginHandler = async (): Promise<boolean> => {
+        try {
+          const freshContext = await newContext();
+          const outcome = await new PreFlightChecker().signIn(freshContext, options.targetUrl, role);
+          const freshState = outcome.ok ? await freshContext.storageState().catch(() => null) : null;
+          await freshContext.close().catch(() => {});
+          if (!freshState) return false;
+          // The whole session, not only its cookies: one restore path for every call site (LC-004).
+          await restoreSession(roleContext, freshState);
+          return true;
+        } catch {
+          return false;
+        }
+      };
       const roleResult = await roleSpider.crawl(roleContext, options.targetUrl, {
         ...crawlOptions,
         startPaths: [...(landing ? [landing] : []), ...addedBefore],
@@ -524,6 +580,7 @@ export class DiscoveryAgent {
         role: role.role,
         isSignedIn: true,
         knownLoginPaths: [role.loginPath || '/login'],
+        reloginHandler,
         deadlineAt,
       });
       crawls.push({

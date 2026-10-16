@@ -31,12 +31,18 @@ All notable changes. Format follows [Keep a Changelog](https://keepachangelog.co
 - Wizard text-file cap is 500 KB (was 1 MB), matching the runner
 
 - Sign-in test now names why it failed (wrong details, no sign-in form found, site unreachable or timed out, needs more than a password) and handles two-step and modal sign-ins (T-18)
+- Internal: Check-up Session module (`session/`) and modular Route Table (`routes/`) in `@qa/runner`. The session owns one Check-up's state and operations (Plan under review, run slot, report, event log, run secrets) while policy and transport stay in the server; plan routes are registered in the route table as standalone functions over the session, and CLI check-ups run directly on the session without binding a port (ADR 0027, T-201–T-211)
 - Internal: split packages/types/src/index.ts into area files; exports unchanged (T-23a)
 - Fixture benchmark: every finding is labelled in the answer key (real, or known noise), fixture pages got a viewport, icon, description and h1, the fixture's sitemap address follows its port, and thresholds are calibrated
+- `robots.txt` is now actually honoured: the crawl asks the policy about each route's path and query (it was asking about the full address, so no `Disallow` rule ever matched) and names the pages it left alone in the politeness note. This changes what a Check-up of a live site contains
+- A start address that answers 404 (any 4xx) is now flagged next to the address before the Check-up starts, instead of being shown as fine. A 401/403 still reads as reachable, because a site that asks for a sign-in is a real site
+- The pre-flight result no longer claims what was not checked: a Role is reported as signed in only when its sign-in ran and succeeded, so a caller with no browser can no longer see every Role as verified, and `loginReachable` is true only when the sign-in page actually answered
 
 ### Fixed
 
 - A document's description fell back to its heading; it is now the first prose line, or empty
+- A page that shows a password field for its own reasons is no longer mistaken for a sign-in page: a change-password form, a two-factor step, or a page reached through a redirect, a trailing slash or different casing is now crawled and appears in the Plan, and the "these pages ask for a sign-in" note no longer names it. The pages in that note and in the coverage list are now the paths as asked for, not internal route keys, so they can be opened
+- A session restored mid-crawl no longer leaves a hole: the route that triggered the recovery is retried and gets its own row in the crawl's route table, and restoring a session puts back cookies **and** `localStorage`, so an App that keeps its token in `localStorage` recovers as well
 
 ## [0.1.0] - 2026-10-08
 

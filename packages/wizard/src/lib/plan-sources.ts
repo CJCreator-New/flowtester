@@ -1,6 +1,6 @@
 import type { DocSource, FindingSeverity, PlanNotFound, PlanPageTest, ReviewPlan } from '@qa/types';
 import type { PatchPlanBody } from '../api.js';
-import { intentOf } from '@qa/types/src/intent.js';
+import { intentOf } from '@qa/types/src/browser.js';
 
 type SourceEdit = NonNullable<PatchPlanBody['sourceEdits']>[number];
 

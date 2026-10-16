@@ -130,6 +130,10 @@ export interface RoleCredential {
   postLoginSelector?: string;
   /** A path the page should land on after sign-in (relative to the target) */
   postLoginUrl?: string;
+  /** Custom per-role HTTP headers (e.g. Authorization: Bearer <token>) */
+  headers?: Record<string, string>;
+  /** Key-value entries injected into localStorage for this role */
+  localStorageEntries?: Record<string, string>;
 }
 
 export interface ProductProfile {
@@ -169,12 +173,19 @@ export interface PreFlightResult {
   ok: boolean;
   url: string;
   statusCode?: number;
+  /** Whether the sign-in page answered. True only after that page was actually asked for (LC-006). */
   loginReachable?: boolean;
+  /**
+   * Role → signed in. A Role is `true` here **only after a sign-in that ran and succeeded**: a Role that
+   * was never attempted (no browser to sign in with) is `false`, and `ok` is `false` too (LC-005).
+   */
   roleAuthResults: Record<string, boolean>;
   roleStorageStates?: Record<string, string | StorageStateData>;
   /** Why a role could not sign in; that role is not tested. */
   roleFailures?: Record<string, SignInFailureReason>;
   /** The page each role landed on after signing in; exploring as that role starts there. */
   roleLandingPaths?: Record<string, string>;
+  /** The start address answered with a 4xx: reachable, but not the page the person expected (LC-007). */
+  startWarning?: 'start-4xx';
   error?: string;
 }

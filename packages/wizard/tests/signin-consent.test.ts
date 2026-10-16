@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SIGN_IN_FAILURE_REASONS, signInReasonText } from '@qa/types/src/signin.js';
+import { SIGN_IN_FAILURE_REASONS, signInReasonText } from '@qa/types/src/browser.js';
 import {
   afterStart,
   consentRequestOf,

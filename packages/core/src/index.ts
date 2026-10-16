@@ -58,6 +58,7 @@ export * from './plan/rejects.js';
 export * from './plan/markdown.js';
 export * from './plan/playwright-export.js';
 export * from './plan/zip.js';
+export * from './plan/build.js';
 export * from './finding-groups.js';
 export * from './scoring.js';
 export * from './recommendations.js';

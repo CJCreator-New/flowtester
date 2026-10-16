@@ -45,7 +45,9 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/robots.txt') {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(`User-agent: *\nAllow: /\n\nUser-agent: GPTBot\nAllow: /\n\nSitemap: ${origin}/sitemap.xml\n`);
+    res.end(
+      `User-agent: *\nAllow: /\nDisallow: /private/\n\nUser-agent: GPTBot\nAllow: /\n\nSitemap: ${origin}/sitemap.xml\n`
+    );
     return;
   }
 
@@ -548,8 +550,21 @@ const server = http.createServer((req, res) => {
         'My account',
         `<h1>My account</h1><p>Signed in as ${session}.</p>
          <a href="/account/orders">Orders</a> <a href="/account/profile">Profile</a> <a href="/account/team">Team</a>
+         <a href="/account/security">Security</a>
          ${session === 'admin' ? '<a href="/account/users/new">Create user</a>' : ''}
          <a href="/signout">Sign out</a>`
+      );
+    }
+    // Planted: a page with a visible password field that is not the sign-in page (T-301).
+    if (url.pathname === '/account/security') {
+      return html(
+        'Security',
+        `<h1>Security</h1>
+         <form id="change-password-form" action="/account/security" method="post">
+           <label for="display-name">Display name</label><input id="display-name" name="display-name" type="text" value="Sam">
+           <label for="current-password">Current password</label><input id="current-password" name="current-password" type="password">
+           <button type="submit" data-testid="save-password">Save</button>
+         </form>`
       );
     }
     if (url.pathname === '/account/orders') return html('Orders', '<h1>Orders</h1><p>No orders yet.</p>');
@@ -817,6 +832,22 @@ const server = http.createServer((req, res) => {
     setTimeout(() => html('Reports', '<h1>Reports</h1><p>Monthly totals.</p>'), 2000);
     return;
   }
+  // Planted: the path the site really uses, asked for under a different case and slash (T-301, T-303).
+  if (url.pathname === '/Settings') {
+    res.writeHead(302, { Location: '/settings/' });
+    res.end();
+    return;
+  }
+  if (url.pathname === '/settings/') {
+    return html('Settings', '<h1>Settings</h1><p>Workspace settings for the fixture app.</p>');
+  }
+  // robots.txt asks crawlers to leave /private/ alone; a crawl that ignores it reaches these (T-304).
+  if (url.pathname === '/private/') {
+    return html('Private', '<h1>Private</h1><p>Pages robots.txt asks crawlers to leave alone.</p>');
+  }
+  if (url.pathname === '/private/reports') {
+    return html('Private reports', '<h1>Private reports</h1><p>Internal numbers.</p>');
+  }
 
   // Default for the HTML pages below; the 404 fallback overrides it (writeHead would throw if sent twice).
   res.statusCode = 200;
@@ -842,6 +873,9 @@ const server = http.createServer((req, res) => {
             <a href="/account" data-testid="nav-account">My account</a>
             <a href="/about" data-testid="nav-about">About</a>
             <a href="/reports" data-testid="nav-reports">Reports</a>
+            <a href="/settings/" data-testid="nav-settings">Settings</a>
+            <a href="/private/" data-testid="nav-private">Private</a>
+            <a href="/private/reports" data-testid="nav-private-reports">Private reports</a>
           </nav>
         </header>
         <main>

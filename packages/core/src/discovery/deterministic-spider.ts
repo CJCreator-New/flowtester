@@ -119,6 +119,8 @@ export interface CrawlOptions {
   includeHash?: boolean;
   /** Whether to seed crawl with /sitemap.xml (default true) */
   seedSitemap?: boolean;
+  /** On-demand session re-authenticator when consecutive auth walls are hit */
+  reloginHandler?: () => Promise<boolean>;
 }
 
 /** Links and buttons that would end a signed-in session. */
@@ -129,6 +131,29 @@ export const RISKY_TO_CLICK =
 /** Buttons whose name suggests they only move to another screen. */
 export const NAVIGATION_WORDS =
   /checkout|cart|basket|bag|view|details|more|next|continue|back|browse|shop|start|explore|profile|account|settings|dashboard|home|open|target/i;
+/** Fields a sign-in form asks for: a password, an e-mail address, a user name or a one-time code. */
+const CREDENTIAL_FIELD = /user|email|login|otp|code|phone|token/i;
+
+/**
+ * Whether the page is nothing but the site's way in: exactly one visible form asks for a password, it is
+ * the only visible form, and every field in it could be a sign-in field. A page that shows a password
+ * field beside other fields — a change-password form, a two-factor step — is a page like any other, not a
+ * wall a Role has to get past (LC-002).
+ */
+function isSignInOnlyForm(forms: ReadForm[]): boolean {
+  const visible = forms.filter((f) => f.visible);
+  const withPassword = visible.filter((f) => f.inputs.some((i) => i.type === 'password'));
+  if (withPassword.length !== 1) return false;
+  if (visible.some((f) => f !== withPassword[0])) return false;
+  return withPassword[0].inputs.every(
+    (i) =>
+      i.type === 'password' ||
+      i.type === 'email' ||
+      i.type === 'tel' ||
+      CREDENTIAL_FIELD.test(`${i.name} ${i.label}`)
+  );
+}
+
 const MAX_CLICKS_PER_PAGE = 8;
 const MAX_EXPLORATION_CLICKS = 100;
 /** Pages a crawl visits at most: enough to list a whole site, not so many that a shop's catalogue runs for hours. */
@@ -407,6 +432,7 @@ export class DeterministicSpider {
             const res = await context.request.get(smUrl, { timeout: 10000 });
             if (!res.ok()) continue;
             const text = await res.text();
+            const isIndex = /<sitemapindex/i.test(text);
             const matches = text.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi);
             for (const m of matches) {
               if (m[1]) {
@@ -414,9 +440,15 @@ export class DeterministicSpider {
                 try {
                   const locUrl = new URL(loc, site);
                   if (onSite(locUrl)) {
-                    enqueue(loc, 1);
-                    locCount++;
-                    if (locCount >= 200) break;
+                    if (isIndex || (loc.endsWith('.xml') && !loc.endsWith('.html'))) {
+                      if (sitemapUrls.length < 25 && !sitemapUrls.includes(locUrl.toString())) {
+                        sitemapUrls.push(locUrl.toString());
+                      }
+                    } else {
+                      enqueue(loc, 1);
+                      locCount++;
+                      if (locCount >= 200) break;
+                    }
                   }
                 } catch {}
               }
@@ -480,11 +512,25 @@ export class DeterministicSpider {
         idleResolvers.push(onWake);
       });
 
-    const evaluatePage = async (page: Page, requested: string, requestedPath: string, requestedDepth = 0) => {
-      const fullUrl = new URL(requested, site).toString();
-      if (options.robots && !options.robots.isAllowed(requested)) {
-        skippedByRobots.push(requestedPath);
-        skipped.push({ urlPath: requestedPath, why: 'robots' });
+    const evaluatePage = async (
+      page: Page,
+      requested: string,
+      requestedPath: string,
+      requestedDepth = 0,
+      /** True when this visit is the retry that followed a mid-crawl session restore. */
+      retried = false
+    ) => {
+      const requestedUrl = new URL(requested, site);
+      const fullUrl = requestedUrl.toString();
+      // The path as it was asked for, for anything a person reads. `requestedPath` is the route key
+      // (lower-cased, trailing slash trimmed) and exists only so the frontier does not crawl a page twice (LC-009).
+      const requestedAsAsked = redactUrl(requestedUrl.pathname);
+      // The policy takes a path and query (RFC 9309), not an absolute URL: a `/`-rooted rule cannot match
+      // `https://…`, so passing the URL left every rule dead (LC-001). One policy, for the start origin;
+      // judging a rebased origin by its own robots.txt is a follow-up.
+      if (options.robots && !options.robots.isAllowed(requestedUrl.pathname + requestedUrl.search)) {
+        skippedByRobots.push(requestedAsAsked);
+        skipped.push({ urlPath: requestedAsAsked, why: 'robots' });
         const rTel: RouteTelemetry = {
           requestedPath: redactUrl(requestedPath),
           outcome: 'skipped',
@@ -529,7 +575,7 @@ export class DeterministicSpider {
             who: options.role || (isRoleSignedIn ? 'signed-in' : 'visitor'),
           };
           routes.push(rTel);
-          skipped.push({ urlPath: requestedPath, why: 'did-not-load', detail });
+          skipped.push({ urlPath: requestedAsAsked, why: 'did-not-load', detail });
           debugLog('crawl', 'route navigation failed', {
             path: rTel.requestedPath,
             outcome: 'skipped',
@@ -545,6 +591,26 @@ export class DeterministicSpider {
           who: options.role || (isRoleSignedIn ? 'signed-in' : 'visitor'),
         });
 
+        // One page-limit skip, so the wording and the telemetry row cannot drift between the early gate and
+        // the race guard. Callers return on true; nothing of the page's work is kept.
+        const skipForPageLimit = (): boolean => {
+          if (pages.length < this.maxPages) return false;
+          telemetry.outcome = 'skipped';
+          telemetry.skipReason = 'page-limit';
+          routes.push(telemetry);
+          skipped.push({ urlPath: requestedAsAsked, why: 'page-limit' });
+          debugLog('crawl', 'route hit the page limit', {
+            path: telemetry.requestedPath,
+            status: telemetry.status,
+            finalPath: telemetry.finalPath,
+            outcome: 'skipped',
+            reason: 'page-limit',
+            attempts: telemetry.attempts,
+            ms: telemetry.durationMs,
+          });
+          return true;
+        };
+
         // Classification 1: Navigation did not succeed (timeout, network error)
         if (!navRes.ok) {
           const skipWhy: RouteSkipReason = navRes.error?.kind === 'timeout' ? 'timeout' : 'did-not-load';
@@ -553,7 +619,7 @@ export class DeterministicSpider {
           telemetry.skipReason = skipWhy;
           telemetry.detail = detail;
           routes.push(telemetry);
-          skipped.push({ urlPath: requestedPath, why: skipWhy, status: navRes.status, detail });
+          skipped.push({ urlPath: requestedAsAsked, why: skipWhy, status: navRes.status, detail });
           debugLog('crawl', 'route failed to load', {
             path: telemetry.requestedPath,
             status: telemetry.status,
@@ -571,21 +637,57 @@ export class DeterministicSpider {
         // service does not move the site to that service.
         const hasSignInForm = await looksLikeLogin(page, options.knownLoginPaths);
         const isLoginPath = options.knownLoginPaths?.includes(landed.pathname);
-        const isWall = (hasSignInForm && (landed.pathname !== requestedPath || isLoginPath)) || navRes.status === 401;
+        // Compare like with like: the requested path against the route key (lower-cased, trailing slash
+        // trimmed) is what made an ordinary page look like a bounce (LC-002).
+        const bouncedAway = normRoute(landed.toString()).key !== normRoute(requested).key;
+        // A password field is a wall only when the page is nothing but the site's way in. A page that shows
+        // one beside other fields is recorded like any other page, and the reason it was decided is kept.
+        const wallReason =
+          navRes.status === 401
+            ? 'http-401'
+            : hasSignInForm && isLoginPath
+              ? 'login-path'
+              : hasSignInForm && bouncedAway && isSignInOnlyForm(await readPageForms(page))
+                ? 'sign-in-form'
+                : undefined;
 
-        if (isWall) {
-          signInWalls.push(requestedPath);
+        if (wallReason) {
+          // Ask for a fresh session while there is still a crawl to save. A recovered route is retried once,
+          // and the retry's row is that route's only row, so recovery leaves no hole in the route table (LC-003).
+          let recovered = false;
           if (isRoleSignedIn) {
-            consecutiveWalls++;
-            if (consecutiveWalls >= stopAfterWalls) {
-              sessionLost = true;
+            if (!retried && options.reloginHandler) {
+              debugLog('crawl', 'attempting mid-crawl session recovery', { role: options.role });
+              try {
+                recovered = await options.reloginHandler();
+              } catch (rErr) {
+                debugLog('crawl', 'mid-crawl session recovery failed', { role: options.role });
+              }
+              if (recovered) {
+                consecutiveWalls = 0;
+                debugLog('crawl', 'mid-crawl session restored', { role: options.role });
+              }
+            }
+            if (!recovered) {
+              consecutiveWalls++;
+              if (consecutiveWalls >= stopAfterWalls) sessionLost = true;
             }
           }
+
+          if (recovered) {
+            // The route is not lost: this visit is retried once, now that the session works again. The
+            // frontier already holds the key, so it is re-run here rather than admitted again.
+            await evaluatePage(page, requested, requestedPath, requestedDepth, true);
+            return;
+          }
+
+          signInWalls.push(requestedAsAsked);
           const skipWhy: RouteSkipReason = isRoleSignedIn ? 'session-lost' : 'sign-in';
           telemetry.outcome = 'skipped';
           telemetry.skipReason = skipWhy;
+          telemetry.detail = wallReason;
           routes.push(telemetry);
-          skipped.push({ urlPath: requestedPath, why: skipWhy, status: navRes.status });
+          skipped.push({ urlPath: requestedAsAsked, why: skipWhy, status: navRes.status });
           debugLog('crawl', 'route hit sign-in wall or session loss', {
             path: telemetry.requestedPath,
             status: telemetry.status,
@@ -617,7 +719,7 @@ export class DeterministicSpider {
             telemetry.outcome = 'skipped';
             telemetry.skipReason = 'off-site-redirect';
             routes.push(telemetry);
-            skipped.push({ urlPath: requestedPath, why: 'off-site-redirect', status: navRes.status });
+            skipped.push({ urlPath: requestedAsAsked, why: 'off-site-redirect', status: navRes.status });
             debugLog('crawl', 'start address redirected off-site', {
               path: telemetry.requestedPath,
               status: telemetry.status,
@@ -637,7 +739,7 @@ export class DeterministicSpider {
           telemetry.skipReason = 'off-site-redirect';
           routes.push(telemetry);
           skipped.push({
-            urlPath: requestedPath,
+            urlPath: requestedAsAsked,
             why: 'off-site-redirect',
             status: navRes.status,
             finalPath: redactUrl(landed.pathname + landed.search),
@@ -659,7 +761,7 @@ export class DeterministicSpider {
           telemetry.outcome = 'skipped';
           telemetry.skipReason = 'http-error';
           routes.push(telemetry);
-          skipped.push({ urlPath: requestedPath, why: 'http-error', status: navRes.status });
+          skipped.push({ urlPath: requestedAsAsked, why: 'http-error', status: navRes.status });
           debugLog('crawl', 'route returned http-error', {
             path: telemetry.requestedPath,
             status: telemetry.status,
@@ -708,6 +810,10 @@ export class DeterministicSpider {
 
         const pageUrl = page.url();
         const title = await page.title().catch(() => currentPath);
+
+        // The gate: the page limit is checked before the page's inventory, so a full crawl does not pay for
+        // elements, forms, a fingerprint and a screenshot it is about to throw away (LC-008).
+        if (skipForPageLimit()) return;
 
         // Dismiss overlays (cookie banners) before link extraction
         await dismissOverlays(page);
@@ -813,17 +919,6 @@ export class DeterministicSpider {
         // The fingerprint itself names the group: the same template gets the same name in every
         // crawl (signed out or as any role) and on every run.
         const fingerprint = await readLayoutFingerprint(page);
-        let screenshotPath: string | undefined;
-        if (options.screenshotDir) {
-          screenshotIndex++;
-          screenshotPath = path.join(
-            options.screenshotDir,
-            `${options.screenshotPrefix || 'page'}-${screenshotIndex}.jpg`
-          );
-          await page
-            .screenshot({ path: screenshotPath, type: 'jpeg', quality: 55 })
-            .catch(() => (screenshotPath = undefined));
-        }
 
         const pageItem: SpiderPageInventoryItem = {
           urlPath: currentPath,
@@ -833,21 +928,27 @@ export class DeterministicSpider {
           elements,
           hasSignInForm: hasSignInForm || undefined,
           layoutGroup: fingerprint ? `layout-${fingerprint}` : undefined,
-          screenshotPath,
           links,
           contentKey: contentKeyOf(elements, pageForms.length),
         };
-        if (pages.length >= this.maxPages) {
-          telemetry.outcome = 'skipped';
-          telemetry.skipReason = 'page-limit';
-          routes.push(telemetry);
-          skipped.push({ urlPath: requestedPath, why: 'page-limit' });
-          return;
-        }
+        // Race guard for the limit (workers share `pages`): the slot is taken before anything is written, so
+        // `pages.length` never passes the limit and no screenshot is left for a page that is not in `pages`.
+        if (skipForPageLimit()) return;
         pages.push(pageItem);
+        if (options.screenshotDir) {
+          screenshotIndex++;
+          pageItem.screenshotPath = path.join(
+            options.screenshotDir,
+            `${options.screenshotPrefix || 'page'}-${screenshotIndex}.jpg`
+          );
+          await page
+            .screenshot({ path: pageItem.screenshotPath, type: 'jpeg', quality: 55 })
+            .catch(() => (pageItem.screenshotPath = undefined));
+        }
         recorded = true;
         telemetry.outcome = 'recorded';
         telemetry.skipReason = undefined;
+        if (retried) telemetry.detail = 'session-recovered';
         routes.push(telemetry);
         debugLog('crawl', 'route recorded', {
           path: telemetry.requestedPath,
@@ -954,7 +1055,7 @@ export class DeterministicSpider {
       } catch {
         // Double-record fix: only record as skipped if page was not already recorded
         if (!recorded) {
-          skipped.push({ urlPath: requestedPath, why: 'did-not-load' });
+          skipped.push({ urlPath: requestedAsAsked, why: 'did-not-load' });
         }
       }
     };
@@ -1092,6 +1193,7 @@ export class DeterministicSpider {
     if (this.safetyFilter.isSensitive(el.name, el.selector)) return false;
     const scriptLink = el.role === 'link' && (!el.href || el.href === '#' || el.href.startsWith('javascript:'));
     const navButton = el.role === 'button' && NAVIGATION_WORDS.test(el.name);
-    return scriptLink || navButton;
+    const inNavLandmark = (el.landmark === 'nav' || el.landmark === 'header') && (el.role === 'button' || el.role === 'link');
+    return scriptLink || navButton || inNavLandmark;
   }
 }

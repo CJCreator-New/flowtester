@@ -89,18 +89,20 @@ Clamp ranges and invalid inputs:
 
 `--docs` and `QA_DOCS` follow the wizard's limits (text 500 KB, Word 2 MB, 10 documents; PDF and old `.doc` are refused). Word files are converted in-process. With no `QA_AI_API_KEY`, Plan Items from the documents are written by fixed rules ([ADR 0023](adr/0023-word-in-scope-and-structured-spec-parsing.md)). A document that yields nothing prints a warning; if every document does, the check-up exits with code 2. `QA_ROLES` adds to `QA_USERNAME`/`QA_PASSWORD` (role `member`); any sign-in is the ADR 0022 consent. Usernames and passwords are never printed.
 
-Setting both `QA_USERNAME` and `QA_PASSWORD` is the consent to sign in and test fully ([ADR 0022](adr/0022-test-sign-in-as-consent.md)): the run is sent with `owner: true` and `signInConsent: true`. Use a test account on a test copy. Without them the check-up is unchanged. A failed sign-in prints a fixed reason and exits with code 2. The password and username are never printed or written to the summary. The signed-in session lives in a temporary folder outside `QA_OUTPUT_DIR` (so it is not in the uploaded artifact) and is deleted when the run ends. `QA_CHECKUP_PORT` (default 3601) changes the local port the check-up's runner listens on.
+Setting both `QA_USERNAME` and `QA_PASSWORD` is the consent to sign in and test fully ([ADR 0022](adr/0022-test-sign-in-as-consent.md)): the run is sent with `owner: true` and `signInConsent: true`. Use a test account on a test copy. Without them the check-up is unchanged. A failed sign-in prints a fixed reason and exits with code 2. The password and username are never printed or written to the summary. The signed-in session lives in a temporary folder outside `QA_OUTPUT_DIR` (so it is not in the uploaded artifact) and is deleted when the run ends. `QA_CHECKUP_PORT` is now unused and ignored: the CI check-up executes directly on the Check-up Session without binding a network port ([ADR 0027](adr/0027-checkup-session-module-and-route-table.md)).
 
 **Sign-in in GitHub Actions is a manual step.** `.github/workflows/qa-check.yml` does not pass `QA_USERNAME`, `QA_PASSWORD` or `QA_LOGIN_PATH`, so a CI Check-up there is unchanged. To use them, add the values as repository secrets (Settings, Secrets and variables, Actions), then add them to the `env:` block of the check-up job yourself (for example `QA_USERNAME: ${{ secrets.QA_USERNAME }}`). Adding them is your consent to sign in and send forms on that address for every run of the workflow, per [ADR 0022](adr/0022-test-sign-in-as-consent.md). Use a test account only. Never write the values into the workflow file.
 
-The CI check-up listens on port 3601 unless `QA_CHECKUP_PORT` is set. When `GITHUB_ACTIONS=true` it also prints annotations for active Blockers (error) and Majors (warning); there is no setting for it.
+The CI check-up runs in-process on the Check-up Session without binding a network port (`QA_CHECKUP_PORT` is ignored). When `GITHUB_ACTIONS=true` it also prints annotations for active Blockers (error) and Majors (warning); there is no setting for it.
 
 ## Sign-in and crawl limits
 
 - **Supported login shapes:** Single-page form (`username` + `password` + `submit`), two-step login (username -> continue -> password -> submit), and modal openers (sign-in form inside a modal, drawer, or dialog opened by a button). Custom selectors can be specified per role via `usernameSelector`, `passwordSelector`, `submitSelector`, `postLoginSelector`, and `postLoginUrl`.
 - **Not supported:** CAPTCHA, one-time passwords (OTP/2FA/SMS), and external SSO/OAuth identity providers. Workaround: saved sessions via Playwright `storageState` JSON passed in `savedSessions` ([ADR 0021](adr/0021-saved-sessions-memory-only-and-confined-docs-fetch.md)).
 - **Caps and budgets:**
-  - Pages: Crawler defaults to 200 pages (`DEFAULT_MAX_PAGES`), CLI defaults to 50 (`QA_MAX_PAGES`, clamped 1..1000).
+  - Pages: Crawler defaults to 200 pages (`DEFAULT_MAX_PAGES`), CLI defaults to 50 (`QA_MAX_PAGES`, clamped 1..1000). The limit is checked before a page's work, so a page it drops costs no browser round trip and leaves no screenshot behind (T-307).
+  - Route shapes and depth: at most 25 pages per route shape (`maxPerShape`, default 25) and depth 8 from the start (`maxDepth`, default 8). A page's shape replaces digit runs, UUIDs and 6+ character hex tokens with `:n` / `:id`, which is what bounds traps.
+  - Route keys are not paths: the Spider dedupes on a lower-cased, trailing-slash-trimmed key (`normalizeRoute`), while everything a person reads — `skipped[].urlPath`, `signInWalls`, the robots note — carries the path as it was asked for.
   - Clicks: At most 8 clicks per page (`MAX_CLICKS_PER_PAGE`), at most 100 exploration clicks total (`MAX_EXPLORATION_CLICKS`).
   - Modal openers: At most 6 interactive openers evaluated per page (`MAX_OPENERS_PER_PAGE`).
   - Time budgets: Crawl limit 10 minutes (`QA_CRAWL_MAX_MINUTES`), discovery limit 20 minutes (`QA_DISCOVERY_MAX_MINUTES`), runner check-up timeout 40 minutes (`RUN_TIMEOUT_MS`).
@@ -120,7 +122,7 @@ The CI check-up listens on port 3601 unless `QA_CHECKUP_PORT` is set. When `GITH
   - `trap-limit`: Repeated structural patterns flagged as a crawl trap.
   - `session-lost`: Session expired or was invalidated during crawl.
   - `duplicate`: Canonical or fingerprint duplicate of an already visited page.
-- **Robots behaviour:** The spider reads the target site's `robots.txt` and obeys disallow rules for public website scans. On a verified Test Copy (`QA_STAGING=true`), robots restrictions may be bypassed to ensure thorough test coverage.
+- **Robots behaviour:** On a host that is not private or loopback (`isPrivateHost`), the Discovery Agent fetches the start origin's `robots.txt` (as `CRAWLER_TOKEN`) and the Spider asks that policy about each route's path and query before the page opens; a disallowed route is skipped with reason `robots` and named in the crawl's politeness note. One policy covers the crawl, taken from the start origin — a site that rebases onto another host is judged by the start origin's rules. On the person's own machine no policy is sent and no pacing delay is added.
 
 ## Wizard (front end)
 
@@ -153,5 +155,5 @@ No new variable. This applies only when the Check-up runs against a Test Copy (s
 ## Ports
 
 - `3001`: the QA Tool (wizard at `/`, API under `/api`)
-- `3601`: CI check-up only (default; change with `QA_CHECKUP_PORT`)
+- `3601`: previously used by CI check-up (`QA_CHECKUP_PORT`), now unused as CLI check-ups run directly on the session
 - `3050`: the fixture test app (`pnpm fixture`; set `PORT` to change)

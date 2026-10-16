@@ -407,4 +407,19 @@ describe('A check-up on the runner', () => {
     expect(await exists(path.join(work, '.qa-data', 'sites', 'shop.example.com.history.json'))).toBe(true);
     expect(await exists(path.join(work, '.qa-data', '.qa-ai-models.json'))).toBe(true);
   });
+
+  it('two concurrent CLI check-ups run simultaneously without port collision', async () => {
+    const { runCheckup, parseArgs } = await import('../src/checkup.js');
+    const out1 = path.join(scratch, 'concurrent-cli-1');
+    const out2 = path.join(scratch, 'concurrent-cli-2');
+    const args1 = parseArgs([siteUrl, '--fail-on', 'none', '--max-pages', '3', '--output', out1], {} as NodeJS.ProcessEnv);
+    const args2 = parseArgs([siteUrl, '--fail-on', 'none', '--max-pages', '3', '--output', out2], {} as NodeJS.ProcessEnv);
+
+    const [code1, code2] = await Promise.all([runCheckup(args1), runCheckup(args2)]);
+    expect(code1).toBe(0);
+    expect(code2).toBe(0);
+
+    expect(await exists(path.join(out1, 'findings.json'))).toBe(true);
+    expect(await exists(path.join(out2, 'findings.json'))).toBe(true);
+  }, 240000);
 });

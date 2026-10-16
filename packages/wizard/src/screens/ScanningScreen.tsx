@@ -3,44 +3,13 @@ import { FocusHeading } from '../components/text';
 import { RunFailure } from '../components/RunStates';
 import { timeLeft } from '../lib/translate';
 import { stalledForSeconds, statusText } from '../lib/coverage-text';
+// The scan's progress payload lives with the plain-text helpers that read it, not with this screen: a
+// `lib/` module importing a screen is the one import cycle in the repo (T-202).
+import type { ScanProgress } from '../lib/scan-progress';
 
-/** How the scan is going, from the QA Tool's progress events. */
-export interface ScanProgress {
-  stage: 'crawling' | 'narrow-screens' | 'planning';
-  /** The page just explored (crawling). */
-  urlPath?: string;
-  pagesFound?: number;
-  layoutGroups?: number;
-  /** Plan Items already written while the site is still being explored. */
-  plannedSoFar?: number;
-  done?: number;
-  total?: number;
-  requestsUsed?: number;
-  requestsNeeded?: number;
-  requestsLeft?: number;
-  what?: string;
-  /** Seconds left, estimated from how long the AI requests so far took. */
-  secondsLeft?: number;
-  /** An AI request is on its way: `what` names it. */
-  asking?: boolean;
-  /** 1 for the first request, 2 when the AI is asked again to fix its answer. */
-  attempt?: number;
-  /** When the request on its way was sent (ms). */
-  askingSince?: number;
-  /** Role currently signed in as during crawl. */
-  signedInAs?: string;
-  /** Roles for which sign-in failed during crawl. */
-  signInFailedFor?: string[];
-  /** Pages skipped during crawl. */
-  skipped?: number;
-}
-
-/** Type guard narrowing unknown event payloads to ScanProgress without unsafe casting. */
-export function isScanProgress(value: unknown): value is ScanProgress {
-  if (!value || typeof value !== 'object') return false;
-  const stage = (value as { stage?: unknown }).stage;
-  return stage === 'crawling' || stage === 'narrow-screens' || stage === 'planning';
-}
+// Still exported from here, so App.tsx and the existing tests import them where they always have.
+export type { ScanProgress } from '../lib/scan-progress';
+export { isScanProgress } from '../lib/scan-progress';
 
 /** Seconds since a moment, ticking once a second while shown. */
 function useSecondsSince(since: number | undefined): number | null {
@@ -118,7 +87,7 @@ export function ScanningScreen({
         <RunFailure title="The scan stopped" message={failure} />
       ) : (
         <>
-          <ol className="mb-6 space-y-2" aria-label="Scan stages">
+          <ol className="mb-6 space-y-2.5" aria-label="Scan stages">
             {STAGES.map((stage, i) => {
               const state =
                 stageIndex < 0
@@ -138,17 +107,23 @@ export function ScanningScreen({
                 >
                   <span
                     aria-hidden="true"
-                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-sm font-bold ${
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold transition-all duration-200 ${
                       state === 'done'
-                        ? 'border-stamp bg-stamp text-surface'
+                        ? 'border-stamp bg-stamp text-surface shadow-level-1'
                         : state === 'current'
-                          ? 'border-stamp text-stamp'
-                          : 'border-edge text-ink-soft'
+                          ? 'border-stamp bg-surface text-stamp ring-2 ring-stamp/40 font-bold shadow-level-1'
+                          : 'border-edge/50 bg-panel text-ink-soft'
                     }`}
                   >
                     {state === 'done' ? '✓' : i + 1}
                   </span>
-                  <span className={state === 'todo' ? 'text-ink-soft' : 'font-bold text-ink'}>{stage.label}</span>
+                  <span className={state === 'todo' ? 'text-ink-soft font-medium' : 'font-bold text-ink'}>{stage.label}</span>
+                  {state === 'current' && (
+                    <span className="badge-tech-stamp text-[10px] py-0 px-1.5 ml-auto">RUNNING</span>
+                  )}
+                  {state === 'done' && (
+                    <span className="badge-tech-pass text-[10px] py-0 px-1.5 ml-auto">DONE</span>
+                  )}
                   <span className="sr-only">
                     {state === 'done' ? '(done)' : state === 'current' ? '(now)' : '(to come)'}
                   </span>
@@ -157,14 +132,18 @@ export function ScanningScreen({
             })}
           </ol>
 
-          <section aria-label="Scan progress" className="rounded-lg border-2 border-edge bg-surface p-5">
+          <section aria-label="Scan progress" className="blueprint-card p-6 bg-surface/90 border border-rule/80 relative overflow-hidden shadow-level-3">
+            <div className="absolute top-0 inset-x-0 h-1 bg-panel overflow-hidden">
+              <div className="h-full bg-stamp progress-indeterminate shadow-[0_0_8px_rgba(108,155,242,0.5)]" />
+            </div>
+
             {/* Polite screen reader live region announcing stage transitions only */}
             <div role="status" aria-live="polite" className="sr-only">
               {statusText(progress)}
             </div>
 
             {/* Non-live visible progress indicator */}
-            <p className="font-bold text-ink">
+            <p className="font-bold text-ink text-base">
               {!progress
                 ? 'Opening the site…'
                 : progress.stage === 'crawling'
@@ -189,6 +168,27 @@ export function ScanningScreen({
             {progress?.signInFailedFor && progress.signInFailedFor.length > 0 && (
               <div role="alert" className="mt-2 rounded-md border border-fail bg-fail-tint p-2 text-sm text-fail">
                 {progress.signInFailedFor.map((r) => `Sign-in failed for ${r}`).join('. ')}
+              </div>
+            )}
+
+            {progress?.pagesFound !== undefined && (
+              <div className="mt-4 flex flex-wrap items-center gap-2 pt-3 border-t border-rule/50">
+                <span className="badge-tech">
+                  <span>EXPLORED:</span>
+                  <strong className="text-ink">{progress.pagesFound} pages</strong>
+                </span>
+                {progress.layoutGroups !== undefined && (
+                  <span className="badge-tech">
+                    <span>LAYOUTS:</span>
+                    <strong className="text-ink">{progress.layoutGroups}</strong>
+                  </span>
+                )}
+                {left && (
+                  <span className="badge-tech">
+                    <span>EST. TIME LEFT:</span>
+                    <strong className="text-ink">{left}</strong>
+                  </span>
+                )}
               </div>
             )}
 
