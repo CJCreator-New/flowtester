@@ -8,7 +8,18 @@ import {
 } from '../api';
 import { ErrorMessage, FocusHeading, Notice, Spinner } from '../components/text';
 import { formatWhen } from '../lib/format';
+import { Link, PATHS } from '../lib/router';
 import { useDocumentTitle } from '../lib/title';
+
+/** A test case's id as a name a person can read: "tc-home-hero" becomes "Home hero". */
+export function baselineName(testCaseId: string): string {
+  const words = testCaseId
+    .replace(/^(tc|test|case)[-_:]+/i, '')
+    .replace(/[-_:./]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : testCaseId;
+}
 
 type BreakpointFilter = 'all' | '375px' | '768px' | '1440px';
 type ViewMode = 'split' | 'overlay' | 'diff-only';
@@ -73,7 +84,10 @@ export function VisualBaselinesScreen() {
     setProcessingId(item.id);
     try {
       await acceptVisualBaseline(item.id, item.currentUrl);
-      setActionMessage({ tone: 'pass', text: `Baseline updated for ${item.testCaseId} (${item.breakpoint}).` });
+      setActionMessage({
+        tone: 'pass',
+        text: `Baseline updated for ${baselineName(item.testCaseId)} (${item.breakpoint}).`,
+      });
       await loadBaselines();
     } catch (err) {
       setActionMessage({ tone: 'fail', text: err instanceof RunnerError ? err.message : 'Failed to update baseline.' });
@@ -83,11 +97,14 @@ export function VisualBaselinesScreen() {
   };
 
   const handleDelete = async (item: VisualBaselineItem) => {
-    if (!window.confirm(`Delete baseline snapshot for ${item.testCaseId} (${item.breakpoint})?`)) return;
+    if (!window.confirm(`Delete baseline snapshot for ${baselineName(item.testCaseId)} (${item.breakpoint})?`)) return;
     setProcessingId(item.id);
     try {
       await deleteVisualBaseline(item.id);
-      setActionMessage({ tone: 'pass', text: `Baseline ${item.testCaseId} (${item.breakpoint}) deleted.` });
+      setActionMessage({
+        tone: 'pass',
+        text: `Baseline ${baselineName(item.testCaseId)} (${item.breakpoint}) deleted.`,
+      });
       if (activeItem?.id === item.id) setActiveItem(null);
       await loadBaselines();
     } catch (err) {
@@ -134,7 +151,14 @@ export function VisualBaselinesScreen() {
         />
       )}
 
-      {error && <ErrorMessage>{error}</ErrorMessage>}
+      {error && (
+        <div className="flex flex-wrap items-center gap-3">
+          <ErrorMessage>{error}</ErrorMessage>
+          <button type="button" className="btn-quiet" onClick={() => void loadBaselines()} disabled={loading}>
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-panel border border-rule bg-surface p-3 shadow-level-1">
@@ -178,8 +202,13 @@ export function VisualBaselinesScreen() {
           <p className="mx-auto mt-1 max-w-md text-sm text-ink-soft">
             {baselines && baselines.length > 0
               ? 'No baselines match the current breakpoint or search filter.'
-              : 'Baselines are automatically captured during check-up runs. When visual differences appear, review them here.'}
+              : 'Baselines are saved by a check-up that includes visual checks. Run a check-up, and its screenshots are kept here to compare with the next one.'}
           </p>
+          {!(baselines && baselines.length > 0) && (
+            <Link to={PATHS.new} className="btn-primary mt-4 inline-flex">
+              Start a check-up
+            </Link>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -207,7 +236,7 @@ export function VisualBaselinesScreen() {
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-xs font-bold text-stamp">{item.breakpoint}</span>
                           <span className="truncate font-bold text-ink text-sm" title={item.testCaseId}>
-                            {item.testCaseId}
+                            {baselineName(item.testCaseId)}
                           </span>
                         </div>
                         <p className="truncate text-xs text-ink-soft mt-0.5" title={item.fileName}>
@@ -246,7 +275,7 @@ export function VisualBaselinesScreen() {
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule pb-3">
                   <div>
                     <h3 className="text-lg font-bold text-ink flex items-center gap-2">
-                      <span>{activeItem.testCaseId}</span>
+                      <span title={activeItem.testCaseId}>{baselineName(activeItem.testCaseId)}</span>
                       <span className="rounded bg-panel px-2 py-0.5 font-mono text-xs text-stamp border border-edge">
                         {activeItem.breakpoint}
                       </span>
@@ -333,7 +362,7 @@ export function VisualBaselinesScreen() {
                         <div className="overflow-auto max-h-[30rem] rounded border border-rule bg-panel flex items-center justify-center p-2">
                           <img
                             src={activeItem.previewUrl}
-                            alt={`Baseline for ${activeItem.testCaseId}`}
+                            alt={`Baseline for ${baselineName(activeItem.testCaseId)}`}
                             className="max-h-[28rem] object-contain rounded"
                           />
                         </div>
@@ -347,7 +376,7 @@ export function VisualBaselinesScreen() {
                           {activeItem.currentUrl ? (
                             <img
                               src={activeItem.currentUrl}
-                              alt={`Current run for ${activeItem.testCaseId}`}
+                              alt={`Current run for ${baselineName(activeItem.testCaseId)}`}
                               className="max-h-[28rem] object-contain rounded"
                             />
                           ) : (
@@ -411,7 +440,7 @@ export function VisualBaselinesScreen() {
                       <div className="overflow-auto max-h-[32rem] rounded border border-rule bg-panel flex items-center justify-center p-2">
                         <img
                           src={activeItem.diffUrl}
-                          alt={`Diff mask for ${activeItem.testCaseId}`}
+                          alt={`Diff mask for ${baselineName(activeItem.testCaseId)}`}
                           className="max-h-[30rem] object-contain rounded"
                         />
                       </div>

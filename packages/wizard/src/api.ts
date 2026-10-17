@@ -854,12 +854,10 @@ export interface VisualBaselineItem {
 }
 
 export async function listVisualBaselines(): Promise<VisualBaselineItem[]> {
-  try {
-    const res = await call('/api/runner/baselines');
-    return res.ok ? json<VisualBaselineItem[]>(res) : [];
-  } catch {
-    return [];
-  }
+  // A failed read is an error to show with Retry, never an empty list.
+  const res = await call('/api/runner/baselines');
+  if (!res.ok) throw new RunnerError('The visual baselines couldn’t be loaded. Try again.');
+  return json<VisualBaselineItem[]>(res);
 }
 
 export async function acceptVisualBaseline(id: string, currentEvidencePath?: string): Promise<void> {

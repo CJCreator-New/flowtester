@@ -39,7 +39,7 @@ T-31 (gate copy in the same screens); coordinates with T-37 on labels.
 `pnpm exec vitest run packages/wizard`
 
 ## Status
-todo
+built
 
 ## Carried over from T-35
 - The wizard does not show `ERR_NO_TESTS` yet. Show the refusal on the plan review screen with the reason.

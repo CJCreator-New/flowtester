@@ -378,7 +378,14 @@ export function NewCheckupScreen({
             <button
               type="button"
               className="btn-link text-sm"
-              onClick={() => onFormChange((f) => withAddress(f, BUILT_IN_TEST_APP, (a) => hostOf(`http://${a}`)))}
+              onClick={() =>
+                onFormChange((f) =>
+                  withAddress(f, BUILT_IN_TEST_APP, (a) => {
+                    const n = normalizeUrl(a);
+                    return n.ok ? hostOf(n.url) : null;
+                  })
+                )
+              }
             >
               Try the built-in test app
             </button>{' '}

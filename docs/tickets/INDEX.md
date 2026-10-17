@@ -21,7 +21,7 @@ Build only; tests run once, in `/verify-all`, after every row here is `built`.
 | [T-33](T-33-checker-false-signals.md) | Checkers report only what they verified | review Core 3,5,6,9,13,14; Docs 6 | P0 | M | 1 | built | - |
 | [T-34](T-34-runner-access-and-isolation.md) | Runner access, isolation and token gate | review Runner 1,4-9 | P0 | L | 1 | built | - |
 | [T-35](T-35-runner-races-approval-stop.md) | Runner start races, approval and stop | review Runner 2,3,10,11,15; Core 10,11 | P0 | M | 2 | built | T-34 |
-| [T-36](T-36-wizard-flows-and-recovery.md) | Wizard flows and recovery | review Demo 1,2,8; Wizard 1-3,8-14,17 | P0 | L | 2 | todo | T-31 |
+| [T-36](T-36-wizard-flows-and-recovery.md) | Wizard flows and recovery | review Demo 1,2,8; Wizard 1-3,8-14,17 | P0 | L | 2 | built | T-31 |
 | [T-37a](T-37a-wizard-copy-group-a.md) | Wizard copy and glossary, group A | review Wizard 4,5,7,15,19,22,23 | P1 | M | 4 | todo | T-36 |
 | [T-37b](T-37b-wizard-copy-group-b.md) | Wizard copy and glossary, group B | review Wizard 5-7,16,18-22; Demo 3 | P1 | M | 4 | todo | T-36, T-31 |
 | [T-38](T-38-docs-env-config-drift.md) | Docs, environment and config drift | review Docs 1,2,3,9,15-19 | P1 | M | 1 | built | T-30 |

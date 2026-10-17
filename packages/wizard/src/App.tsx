@@ -172,15 +172,20 @@ export default function App() {
     if (target && target !== window.location.pathname) navigate(target, { replace: true });
   }, []);
 
+  const loadAi = useCallback(() => {
+    setStartError(null);
+    getAiSetup()
+      .then(setAi)
+      .catch(() => setStartError('Release check-up didn’t answer about its AI setup. Try again.'));
+  }, []);
+
   // Once the runner answers: the AI setup, where any check-up is, and the recent check-ups.
   useEffect(() => {
     if (!reachable) return;
-    getAiSetup()
-      .then(setAi)
-      .catch(() => setStartError('Release check-up didn’t answer. Reload the page to try again.'));
+    loadAi();
     void reconcile();
     refreshRecent();
-  }, [reachable, reconcile, refreshRecent]);
+  }, [reachable, loadAi, reconcile, refreshRecent]);
 
   const inProgress = !!status?.phase && IN_PROGRESS.has(status.phase);
 
@@ -748,6 +753,7 @@ export default function App() {
             onStart={startFromForm}
             starting={starting}
             startError={startError}
+            onRetryAi={loadAi}
             inProgress={inProgress ? status : null}
             recent={recent}
             waitingPlans={waitingPlans}

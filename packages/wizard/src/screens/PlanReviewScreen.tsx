@@ -310,7 +310,10 @@ export function PlanReviewScreen({
   useDocumentTitle(`Plan for ${host}`);
 
   const approveButton = (
-    <button type="button" className="btn-primary shrink-0" disabled={busy || approving || !!plan.noTests}
+    <button
+      type="button"
+      className="btn-primary shrink-0"
+      disabled={busy || approving || !!plan.noTests}
       onClick={() => onApprove()}
     >
       {approving ? <Spinner label="Starting the tests…" /> : 'Approve the plan and start testing'}

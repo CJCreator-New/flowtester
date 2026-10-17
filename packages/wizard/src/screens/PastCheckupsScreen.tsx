@@ -84,6 +84,11 @@ export function PastCheckupsScreen({
       </p>
 
       {error && <ErrorMessage>{error}</ErrorMessage>}
+      {error && !runs && (
+        <button type="button" className="btn-quiet mt-3" onClick={load}>
+          Retry
+        </button>
+      )}
       {actionError && <ErrorMessage>{actionError}</ErrorMessage>}
 
       {!runs && !error && <Spinner label="Loading your check-ups…" />}

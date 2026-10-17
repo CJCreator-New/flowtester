@@ -37,6 +37,9 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
   const [error, setError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const timer = useRef<number | undefined>(undefined);
+  // The poll failed: the comparison keeps running on the runner; Retry asks again.
+  const [pollFailed, setPollFailed] = useState(false);
+  const [pollTry, setPollTry] = useState(0);
 
   const running = starting || job?.status === 'running';
   const result = job?.status === 'done' ? (job.result ?? null) : null;
@@ -70,9 +73,11 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
       } catch (err) {
         if (cancelled) return;
         setError(
-          err instanceof RunnerError ? err.message : 'Lost track of the comparison. Open it again from the list below.'
+          err instanceof RunnerError
+            ? err.message
+            : 'Lost track of the comparison. Retry, or open it from the list below.'
         );
-        setJob(null);
+        setPollFailed(true);
         return;
       }
       timer.current = window.setTimeout(() => void tick(), POLL_MS);
@@ -82,7 +87,7 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
       cancelled = true;
       window.clearTimeout(timer.current);
     };
-  }, [runningId, refreshHistory]);
+  }, [runningId, refreshHistory, pollTry]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -217,6 +222,19 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
         </div>
 
         {error && <ErrorMessage>{error}</ErrorMessage>}
+        {pollFailed && runningId && (
+          <button
+            type="button"
+            className="btn-quiet mt-3"
+            onClick={() => {
+              setError(null);
+              setPollFailed(false);
+              setPollTry((n) => n + 1);
+            }}
+          >
+            Retry
+          </button>
+        )}
 
         <div className="pt-2">
           <button

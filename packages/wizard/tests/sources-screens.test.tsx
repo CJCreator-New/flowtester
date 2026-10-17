@@ -198,3 +198,79 @@ describe('Report: Sources', () => {
     expect(html).toContain('The username or password was not accepted.');
   });
 });
+
+describe('new check-up screen: recovery and choices', () => {
+  const props = {
+    onKeySaved: () => undefined,
+    form: EMPTY_FORM,
+    onFormChange: () => undefined,
+    onStart: () => undefined,
+    starting: false,
+    startError: null,
+    inProgress: null,
+    recent: null,
+  };
+
+  it('offers the built-in test app, with the command that starts it, while the address is empty', async () => {
+    const { NewCheckupScreen } = await import('../src/screens/NewCheckupScreen');
+    const html = renderToStaticMarkup(
+      createElement(NewCheckupScreen, { ...props, ai: { configured: true, model: 'm' } })
+    );
+    expect(html).toContain('Try the built-in test app');
+    expect(html).toContain('pnpm fixture');
+  });
+
+  it('says why Start is off, and shows Retry beside the AI setup error', async () => {
+    const { NewCheckupScreen } = await import('../src/screens/NewCheckupScreen');
+    const html = renderToStaticMarkup(
+      createElement(NewCheckupScreen, {
+        ...props,
+        ai: null,
+        startError: 'Release check-up didn’t answer about its AI setup. Try again.',
+        onRetryAi: () => undefined,
+      })
+    );
+    expect(html).toContain('Waiting for Release check-up to answer');
+    expect(html).toContain('AI setup. Try again.');
+    expect(html).toContain('Retry');
+  });
+
+  it('says that looking sends and changes nothing', async () => {
+    const { NewCheckupScreen } = await import('../src/screens/NewCheckupScreen');
+    const html = renderToStaticMarkup(
+      createElement(NewCheckupScreen, { ...props, ai: { configured: true, model: 'm' } })
+    );
+    expect(html).not.toContain('Only look at it instead</');
+    const source = readFileSync(fileURLToPath(new URL('../src/screens/NewCheckupScreen.tsx', import.meta.url)), 'utf8');
+    expect(source).toContain('Only look at it: nothing is sent or changed');
+    // "Only look at it instead" must not record ownership.
+    expect(source).toMatch(/setChoice\(\{ owner: false, markedTestCopy: false \}\)/);
+  });
+});
+
+describe('recovery wiring', () => {
+  const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
+
+  it('App shows a retry for the plan, the lost-contact message and a stop notice', () => {
+    const app = read('../src/App.tsx');
+    expect(app).toContain('The plan couldn’t be opened');
+    expect(app).toContain('Lost contact with Release check-up. Retrying…');
+    expect(app).toContain('The check-up wasn’t stopped');
+    expect(app).toContain('readsAddressParam');
+  });
+
+  it('Plan Review shows Nothing to test and clears a stuck wait', () => {
+    const screen = read('../src/screens/PlanReviewScreen.tsx');
+    expect(screen).toContain('Nothing to test');
+    expect(screen).toContain('PENDING_TIMEOUT_MS');
+    expect(screen).toContain('update.seq');
+  });
+
+  it('Visual Baselines shows names, not ids, and a Retry', async () => {
+    const { baselineName } = await import('../src/screens/VisualBaselinesScreen');
+    expect(baselineName('tc-home-hero')).toBe('Home hero');
+    expect(baselineName('checkout_form')).toBe('Checkout form');
+    expect(baselineName('---')).toBe('---');
+    expect(read('../src/screens/VisualBaselinesScreen.tsx')).toContain('Retry');
+  });
+});
