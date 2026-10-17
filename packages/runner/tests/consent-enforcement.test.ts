@@ -20,6 +20,7 @@ const outputDir = path.join(process.cwd(), '.tmp-consent-enforcement');
 const dataDir = `${outputDir}-data`;
 const ciOut = `${outputDir}-ci`;
 const PASSWORD = 'Enf0rce-Pw-Qx47-unique';
+// A live-looking shop: consent rules apply to it, and it is aliased to this machine (see hostAliases below).
 const siteUrl = `http://shop.example.com:${SITE_PORT}`;
 const roles = [{ role: 'manager', username: 'owner@shop.test', password: PASSWORD, loginPath: '/signin' }];
 

@@ -10,10 +10,12 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
-      playwright:
-        patterns:
-          - 'playwright*'
-          - '@axe-core/playwright'
+    # Playwright is bumped by hand, in the npm lockfile, the runner Dockerfile and the image tag together.
+    # Dependabot would open one of them alone, and the Playwright version check then fails
+    # (docs/DEPLOYMENT.md#docker).
+    ignore:
+      - dependency-name: 'playwright'
+      - dependency-name: 'playwright-core'
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -26,3 +28,5 @@ updates:
       interval: weekly
     commit-message:
       prefix: 'chore(docker)'
+    ignore:
+      - dependency-name: 'mcr.microsoft.com/playwright'

@@ -658,6 +658,12 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
           guard: makeRequestGuard(deps.hostChecks),
           pinned: checked.ok && !isIpLiteral(typed.hostname) ? { [typed.hostname]: checked.address } : undefined,
         });
+      } else {
+        // Same alias the runner's own requests use, so the browser reaches a live-looking host on this machine too.
+        const alias = deps.hostAliases?.[typed.hostname.toLowerCase()];
+        setBrowserPolicy(
+          alias ? { pinned: { [typed.hostname]: LOOPBACK_HOSTS.includes(alias) ? '127.0.0.1' : alias } } : null
+        );
       }
 
       const searchChecks = body.searchChecks ?? memory?.searchChecks ?? (urlFirst ? !testHost : true);
@@ -725,7 +731,8 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
           };
         });
 
-      const ai = await prepareAIFn(body.planWithoutAI ? { ...body, useAI: true } : body);
+      // A no-AI run must not need a key: forcing useAI here made it fail with ERR_NO_AI_KEY when none is saved.
+      const ai = await prepareAIFn(body);
       context.aiModels = ai.models;
       context.ai = ai.settings;
       if (body.planWithoutAI) ai.provider = undefined;
