@@ -92,6 +92,8 @@ export interface Finding {
    * someone confirms or rejects the rule behind it.
    */
   needsConfirmation?: boolean;
+  /** An AI-written opinion. Shown in the report, but never changes the verdict or the grades (ADR 0009). */
+  advisory?: boolean;
   /** Sub-category tag for fine-grained categorization, such as 'SEO', 'AEO', or 'GEO' under Findable. */
   categoryTag?: 'SEO' | 'AEO' | 'GEO' | 'MKT';
   /** The area it counts toward, when not its checker's: a missing viewport tag is about phones. */

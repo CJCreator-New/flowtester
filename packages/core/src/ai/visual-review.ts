@@ -83,7 +83,9 @@ export class VisualReviewer {
           findings.push({
             id: `F-AI-VISUAL-${screen.layoutGroup}-${i + 1}`,
             testCaseId: `TC-VISUAL-${screen.layoutGroup}`,
-            severity: issue.severity,
+            // An AI opinion is never a defect: clamp to Minor or Suggestion and keep it advisory.
+            severity: issue.severity === 'Suggestion' ? 'Suggestion' : 'Minor',
+            advisory: true,
             checker: 'ai-review',
             title: `[AI Review] ${issue.what}`,
             where: {

@@ -134,6 +134,77 @@ describe('Plan building in @qa/core (T-208)', () => {
     expect(resWithoutPlan.specTestCases.length).toBeGreaterThan(0);
   });
 
+  it('testsFor yields no tests and sets noTests when nothing expands, never a substituted default', () => {
+    const emptyDraft = (withPlan: boolean): DiscoveryDraft => ({
+      version: '1',
+      productId: 'p1',
+      targetUrl: 'http://example.com',
+      timestamp: new Date().toISOString(),
+      pages: [],
+      flows: [],
+      sensitiveActions: [],
+      ambiguityQuestions: [],
+      ...(withPlan ? { plan: { pages: [], navigation: [] } } : {}),
+    });
+    for (const withPlan of [true, false]) {
+      const context: PlanBuildContext = {
+        runId: 'run-empty',
+        targetUrl: 'http://example.com',
+        productId: 'p1',
+        draft: emptyDraft(withPlan),
+      };
+      const res = testsFor(context);
+      expect(res.specTestCases).toEqual([]);
+      expect(res.noTests).toBeTruthy();
+      const plan = buildPlan({ context, aiAvailable: false, reason: '' });
+      expect(plan.testCases).toEqual([]);
+      expect(plan.noTests).toContain('Nothing to test');
+      expect(plan.testCases?.some((t) => t.id === 'TC-DEFAULT-001')).toBe(false);
+    }
+  });
+
+  it('testsFor leaves noTests unset when tests exist', () => {
+    const context: PlanBuildContext = {
+      runId: 'run-1',
+      targetUrl: 'http://example.com',
+      productId: 'p1',
+      draft: {
+        version: '1',
+        productId: 'p1',
+        targetUrl: 'http://example.com',
+        timestamp: new Date().toISOString(),
+        pages: [],
+        flows: [],
+        sensitiveActions: [],
+        ambiguityQuestions: [],
+        plan: {
+          pages: [
+            {
+              id: 'page-1',
+              urlPath: '/',
+              title: 'Home',
+              coverage: 'tested',
+              reachedBy: ['visitor'],
+              source: 'fallback',
+              tests: [
+                {
+                  id: 't-1',
+                  name: 'Home test',
+                  role: 'visitor',
+                  startPage: '/',
+                  source: 'fallback',
+                  steps: [{ action: 'wait', name: 'Wait' }],
+                },
+              ],
+            },
+          ],
+          navigation: [],
+        },
+      },
+    };
+    expect(testsFor(context).noTests).toBeUndefined();
+  });
+
   it('testsFor populates notRun for readOnly context when flows need test copy', () => {
     const draft: DiscoveryDraft = {
       version: '1',

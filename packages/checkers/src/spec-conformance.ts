@@ -225,7 +225,21 @@ export class SpecConformanceChecker {
       if (testCase.expectations.url.negate) {
         // A Denial Plan Item for a route: it passes when the role did NOT end on the route (a redirect
         // or a refusal), and fails when the page opened.
-        if (matches) {
+        // A 401, 403 or 404 answer is a refusal: the page stayed on the URL but did not open.
+        const navStatus = matches
+          ? await page
+              .evaluate(
+                () =>
+                  (
+                    performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming & {
+                      responseStatus?: number;
+                    }
+                  )?.responseStatus ?? 0
+              )
+              .catch(() => 0)
+          : 0;
+        const refused = navStatus === 401 || navStatus === 403 || navStatus === 404;
+        if (matches && !refused) {
           findings.push(
             asGuess(
               {

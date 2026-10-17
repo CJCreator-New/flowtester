@@ -210,6 +210,11 @@ function isSavedSession(dir: string, file: string): boolean {
     .some((part) => part.toLowerCase() === 'auth');
 }
 
+/** True when a decoded path has a ".." part, split on either kind of slash. */
+function hasDotDotSegment(rel: string): boolean {
+  return rel.split(/[\\/]/).some((part) => part === '..');
+}
+
 /** Run ids are made here ("run-<time>"); anything else in an address is refused, so it can't leave the runs folder. */
 function isRunId(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(value) && !value.includes('..');
@@ -223,14 +228,6 @@ async function exists(file: string): Promise<boolean> {
 }
 
 export { redactedMessage };
-
-function isLoopbackOrigin(origin: string): boolean {
-  try {
-    return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(origin).hostname);
-  } catch {
-    return false;
-  }
-}
 
 /** The Host header names this computer. A page that points a name it controls at this port (DNS rebinding) doesn't. */
 function isLoopbackHost(host: string | undefined): boolean {
@@ -865,7 +862,11 @@ export class RunnerServer {
           // would let any website trigger runs. Extra origins are set via RUNNER_ALLOWED_ORIGINS.
           const origin = req.headers.origin;
           const originNorm = origin ? origin.replace(/\/+$/, '') : undefined;
-          if (origin && (isLoopbackOrigin(origin) || (originNorm && this.allowedOrigins.has(originNorm)))) {
+          // Only exact origins: this server's own, or one listed. Not any other localhost port.
+          const ownHost = (req.headers.host ?? '').toLowerCase();
+          const isOwnOrigin =
+            !!originNorm && !!ownHost && [`http://${ownHost}`, `https://${ownHost}`].includes(originNorm.toLowerCase());
+          if (origin && (isOwnOrigin || (originNorm && this.allowedOrigins.has(originNorm)))) {
             res.setHeader('Access-Control-Allow-Origin', origin);
             res.setHeader('Access-Control-Allow-Credentials', 'true');
             res.setHeader('Vary', 'Origin');
@@ -1127,6 +1128,11 @@ export class RunnerServer {
           // dir. A run's files are under runs/<runId>/ (evidence, page thumbnails, its reports).
           if (pathname.startsWith('/api/evidence/') && req.method === 'GET') {
             const relPath = decodeURIComponent(pathname.replace('/api/evidence/', ''));
+            if (hasDotDotSegment(relPath)) {
+              res.writeHead(403, { 'Content-Type': 'text/plain' });
+              res.end('Forbidden');
+              return;
+            }
             const targetFile = path.resolve(this.outputDir, relPath);
             // Checked again on the path the file system really opens, so neither a link nor another
             // spelling of the same folder can reach a saved session.
@@ -1254,6 +1260,8 @@ export class RunnerServer {
       } catch {
         // not a path
       }
+      // Ownership is read from the decoded path; one that climbs out of its run folder is nobody's.
+      if (hasDotDotSegment(rel)) return this.refuseNotMine(res, undefined);
       return this.refuseNotMine(res, rel.match(/^runs\/(run-\d+)\//)?.[1]);
     }
     // Visual baselines are kept per site for the whole copy: not offered here.
@@ -1274,6 +1282,10 @@ export class RunnerServer {
   /** Routes that change what every tester sees; shut on a beta copy. */
   private closedInBeta(method: string | undefined, pathname: string): boolean {
     if (pathname.startsWith('/api/runner/schedules') && method !== 'GET') return true;
+    if (method === 'POST' && pathname === '/api/runner/spec-override') return true;
+    if (method === 'POST' && pathname === '/api/settings/defaults') return true;
+    // Triage is remembered for the whole copy's next check-ups; judgement edits a stored report.
+    if (method === 'POST' && /^\/api\/runs\/[^/]+\/(triage|accept-judgement)$/.test(pathname)) return true;
     return method === 'DELETE' && (pathname.startsWith('/api/runs/') || pathname.startsWith('/api/runner/baselines/'));
   }
 
@@ -2533,15 +2545,20 @@ export class RunnerServer {
       const current = await this.readAiModels();
       const sameProvider = (current.provider ?? 'openrouter') === provider;
       const chosen = body.model !== undefined || body.visionModel !== undefined;
-      await this.writeAiModels({
-        provider,
-        text: body.model !== undefined ? body.model : sameProvider ? current.text : null,
-        vision: body.visionModel !== undefined ? body.visionModel : sameProvider ? current.vision : null,
-        chosenBy: chosen ? 'person' : sameProvider ? current.chosenBy : undefined,
-      });
+      // Beta: the model choice file is shared by every tester, so only the tester's own key is kept.
+      if (!this.beta) {
+        await this.writeAiModels({
+          provider,
+          text: body.model !== undefined ? body.model : sameProvider ? current.text : null,
+          vision: body.visionModel !== undefined ? body.visionModel : sameProvider ? current.vision : null,
+          chosenBy: chosen ? 'person' : sameProvider ? current.chosenBy : undefined,
+        });
+      }
       // Without a chosen model, OpenRouter's free models are picked automatically.
       const key = await this.storedKey(provider);
-      if (provider === 'openrouter' && key && !chosen) await this.refreshAiModels(key).catch(() => null);
+      if (!this.beta && provider === 'openrouter' && key && !chosen) {
+        await this.refreshAiModels(key).catch(() => null);
+      }
       const setup = await this.aiSetup();
       this.sendJson(res, 200, {
         saved: true,
@@ -3136,16 +3153,24 @@ export class RunnerServer {
 
   private async handleAcceptBaseline(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await this.readJsonBody<{ id: string; currentEvidencePath?: string }>(req).catch(() => null);
-    if (!body || !body.id) {
+    if (!body || typeof body.id !== 'string' || !body.id) {
       this.sendJson(res, 400, { error: 'Missing baseline id' });
+      return;
+    }
+    if (!/^[\w-]+$/.test(body.id)) {
+      this.sendJson(res, 400, { error: 'That baseline id is not allowed.' });
       return;
     }
     try {
       await fs.mkdir(this.baselineDir, { recursive: true });
       const dest = path.join(this.baselineDir, `${body.id}.png`);
+      if (!isInside(this.baselineDir, dest)) {
+        this.sendJson(res, 403, { error: 'Forbidden' });
+        return;
+      }
       if (body.currentEvidencePath) {
-        const src = path.resolve(this.outputDir, body.currentEvidencePath);
-        if (isInside(this.outputDir, src)) {
+        const src = path.resolve(this.outputDir, String(body.currentEvidencePath));
+        if (isInside(this.outputDir, src) && !isSavedSession(this.outputDir, src)) {
           await fs.copyFile(src, dest);
         }
       }

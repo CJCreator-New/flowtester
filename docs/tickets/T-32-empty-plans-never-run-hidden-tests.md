@@ -26,4 +26,4 @@ None.
 `pnpm exec vitest run packages/core/tests/plan-pipeline.test.ts packages/core/tests`
 
 ## Status
-todo
+built

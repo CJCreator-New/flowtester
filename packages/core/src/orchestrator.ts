@@ -644,6 +644,8 @@ export class FlowTestOrchestrator {
         let blockedChanges: string[] = [];
         // Content-Security-Policy of the page's main response; read only by the weak-policy check.
         let cspHeader: string | undefined;
+        // All headers of the page's main response, read by the HSTS and nosniff checks.
+        let mainResponseHeaders: Record<string, string> | undefined;
         /** Lists where the planned option wasn't there, and what was picked instead. */
         const substitutes: Array<{ step: string; planned: string; chosen: string }> = [];
         // Test Copy only: one token per Test point, shared by both attempts, and a memory of any form sent.
@@ -693,6 +695,7 @@ export class FlowTestOrchestrator {
             page.on('response', (r) => {
               if (r.request().isNavigationRequest() && r.frame() === attachedPage.mainFrame()) {
                 cspHeader = r.headers()['content-security-policy'];
+                mainResponseHeaders = r.headers();
               }
             });
 
@@ -1078,6 +1081,7 @@ export class FlowTestOrchestrator {
                     breakpoint: bp,
                     urlPath: new URL(page.url(), options.targetUrl).pathname,
                     baseUrl: options.targetUrl,
+                    responseHeaders: mainResponseHeaders,
                   })),
                   ...(await this.securityDepth.checkPage(page, {
                     testCaseId: testCase.id,
@@ -1319,7 +1323,11 @@ export class FlowTestOrchestrator {
             skipReason: sentData ? NEEDS_TEST_COPY : undefined,
             breakpoint: bp,
             retry: flakyRetry,
-            checks: checksRun(keptFindings, {
+            // A skipped point checked nothing, so it carries no checks.
+            checks:
+              status === 'Skipped'
+                ? undefined
+                : checksRun(keptFindings, {
               ux: !lightChecks,
               pageLevel: pageLevelChecks,
               search: searchHere && options.searchChecks !== false,

@@ -61,8 +61,8 @@ export interface ReleaseVerdict {
   breaches?: string[];
 }
 
-export function countsTowardVerdict(f: Pick<Finding, 'triageStatus' | 'needsConfirmation'>): boolean {
-  return !isDismissed(f) && !f.needsConfirmation;
+export function countsTowardVerdict(f: Pick<Finding, 'triageStatus' | 'needsConfirmation'> & Partial<Finding>): boolean {
+  return !isDismissed(f) && !f.needsConfirmation && !f.advisory && f.checker !== 'ai-review';
 }
 
 export function releaseVerdict(
@@ -72,7 +72,8 @@ export function releaseVerdict(
   gate?: ReleaseGateCriteria,
   grades?: SiteAspectGrades
 ): ReleaseVerdict {
-  const safeFindings = findings ?? [];
+  // AI-written findings are advisory: they never change the verdict (ADR 0009).
+  const safeFindings = (findings ?? []).filter((f) => !f.advisory && f.checker !== 'ai-review');
   const problems = groupIntoProblems(
     safeFindings.map(
       (f) =>

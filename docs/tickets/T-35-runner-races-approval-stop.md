@@ -23,6 +23,11 @@ Runner 2 (double start, double approve: `server.ts:2703`, `checkup-run.ts:912`, 
 - [ ] A due schedule runs once.
 - [ ] Stop during start reports `aborted: true`.
 
+## Carried over from T-32
+- `packages/runner/src/routes/plan.ts` (~1098): approval with no draft still calls `defaultTestCase`. Remove that fallback: an approval with no reviewed tests is refused with `noTests`.
+- `packages/runner/src/session/checkup-run.ts` (~706): the direct no-AI run still uses a sanity test. Decide: keep it only if the run report says "Nothing to test" rather than passing it as a check. Record the decision in the ticket.
+- Wizard does not show `noTests` yet. T-36 owns that: show it on the plan review screen.
+
 ## Tests to update or add (written, not run)
 - `packages/runner/tests/runner-server.test.ts`, `checkups.test.ts`: concurrent start and approve.
 - `packages/runner/tests/` scheduler test: start wiring and firing.

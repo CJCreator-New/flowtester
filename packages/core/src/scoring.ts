@@ -131,11 +131,13 @@ export function calculateSiteAspectGrades(findings: Finding[], options: ScoringO
       findingIds.push(f.id);
       const key = problemKey(f);
       if (!grouped.has(key)) {
-        grouped.set(key, { severity: f.severity, pages: new Set(), ids: [], opinion: f.checker === 'ai-review' });
+        grouped.set(key, { severity: f.severity, pages: new Set(), ids: [], opinion: f.checker === 'ai-review' || !!f.advisory });
       }
       const entry = grouped.get(key)!;
       entry.pages.add(f.where.urlPath);
       entry.ids.push(f.id);
+      // AI-advisory findings never feed the grade caps.
+      if (f.advisory || f.checker === 'ai-review') continue;
       if (f.severity === 'Blocker') {
         blockerCount++;
       } else if (f.severity === 'Major') {
