@@ -39,7 +39,12 @@ describe('RunnerServer', () => {
       // Stopping a run that is testing keeps the approved plan for re-approval and leaves the
       // runner "running" in awaiting-review; a second stop discards it. So stop until idle.
       for (let attempt = 0; attempt < 3 && status.isRunning; attempt++) {
-        await fetch(`${runnerBaseUrl}/api/runner/stop`, { method: 'POST' });
+        // discard: a plan waiting for review is otherwise kept by a stop.
+        await fetch(`${runnerBaseUrl}/api/runner/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ discard: true }),
+        });
         status = await (await fetch(`${runnerBaseUrl}/api/runner/status`)).json();
       }
     } catch {
@@ -59,6 +64,34 @@ describe('RunnerServer', () => {
   it('returns 404 from /api/report before any run has completed', async () => {
     const res = await fetch(`${runnerBaseUrl}/api/report`);
     expect(res.status).toBe(404);
+  });
+
+  it('starts one run when two starts arrive together, and answers the second with 409', async () => {
+    const start = () =>
+      fetch(`${runnerBaseUrl}/api/runner/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUrl: fixtureBaseUrl, skipReview: true }),
+      });
+    const [a, b] = await Promise.all([start(), start()]);
+    expect([a.status, b.status].sort()).toEqual([202, 409]);
+    const refused = a.status === 409 ? a : b;
+    expect((await refused.json()).code).toBe('ERR_RUN_IN_PROGRESS');
+
+    // Stop reports that the run was stopped.
+    const stopped = await (await fetch(`${runnerBaseUrl}/api/runner/stop`, { method: 'POST' })).json();
+    expect(stopped.aborted).toBe(true);
+  }, 60000);
+
+  it('refuses an address that is not http or https', async () => {
+    for (const targetUrl of ['file:///etc/passwd', 'javascript:alert(1)']) {
+      const res = await fetch(`${runnerBaseUrl}/api/runner/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUrl }),
+      });
+      expect(res.status, targetUrl).toBe(400);
+    }
   });
 
   it('accepts a POST /api/runner/run, streams events over SSE, and exposes the finished report', async () => {

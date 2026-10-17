@@ -80,6 +80,14 @@ export function isCheckRoute(route: Route): boolean {
   return route.name === 'scan' || route.name === 'plan' || route.name === 'testing';
 }
 
+/**
+ * True where a `?url=` address from the landing page is read: the new check-up screen and the
+ * check-up's own screens. (isCheckRoute stays narrower: only those screens follow the runner's phase.)
+ */
+export function readsAddressParam(route: Route): boolean {
+  return route.name === 'new' || isCheckRoute(route);
+}
+
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach((listener) => listener());
 if (typeof window !== 'undefined') window.addEventListener('popstate', notify);

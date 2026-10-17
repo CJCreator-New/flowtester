@@ -217,6 +217,49 @@ describe('On the shared copy, a visitor sees only their own check-up', () => {
     expect(JSON.parse((await call('GET', '/api/runner/waiting-plans', bob.cookie)).body).plans).toEqual([]);
   });
 
+  it('never parks another visitor’s waiting plan when a plan is unparked', async () => {
+    const plans = (server as unknown as { session: { plan: any } }).session.plan;
+    const record = (runId: string, host: string) => ({
+      status: 'awaiting-review',
+      plan: {
+        runId,
+        targetUrl: `https://${host}/`,
+        discoveredAt: new Date().toISOString(),
+        pages: [],
+        flows: [],
+        questions: [],
+      },
+      context: {
+        runId,
+        targetUrl: `https://${host}/`,
+        siteHost: host,
+        productId: 'p',
+        draft: { pages: [], flows: [] },
+      },
+    });
+    inside.runOwners.set('run-2001', alice.id);
+    inside.runOwners.set('run-2002', bob.id);
+    const before = { phase: inside.phase, isRunning: inside.isRunning, runId: inside.currentRunId };
+    plans.set(record('run-2001', 'alices-secret-site.example'));
+    await plans.park(record('run-2002', 'bobs-site.example'));
+    inside.phase = 'awaiting-review';
+    inside.currentRunId = 'run-2001';
+    try {
+      const answer = await call('POST', '/api/runner/waiting-plans', bob.cookie, { host: 'bobs-site.example' });
+      expect(answer.status).not.toBe(200);
+      // Alice's plan is still the current one, and Bob's is still kept aside, untouched.
+      expect(plans.currentRecord.plan.runId).toBe('run-2001');
+      expect(plans.parked.has('bobs-site.example')).toBe(true);
+      expect(plans.parked.has('alices-secret-site.example')).toBe(false);
+    } finally {
+      inside.phase = before.phase;
+      inside.isRunning = before.isRunning;
+      inside.currentRunId = before.runId;
+      plans.set(null);
+      await plans.unpark('bobs-site.example');
+    }
+  });
+
   it('offers no shared visual baselines', async () => {
     expect(JSON.parse((await call('GET', '/api/runner/baselines', bob.cookie)).body)).toEqual([]);
     expect((await call('POST', '/api/runner/baselines/accept', bob.cookie, {})).status).toBe(403);

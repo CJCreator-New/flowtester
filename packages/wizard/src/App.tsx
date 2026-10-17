@@ -24,7 +24,7 @@ import { useConfirm } from './components/ConfirmDialog';
 import { NothingInProgress } from './components/RunStates';
 import { addressForPhase } from './lib/phase-address';
 import { StepBar, type Step } from './components/StepBar';
-import { Spinner } from './components/text';
+import { Notice, Spinner } from './components/text';
 import { TopBar } from './components/TopBar';
 import { hasFinishedCheckup } from './lib/onboarding';
 import { CommandPalette } from './components/CommandPalette';
@@ -47,7 +47,7 @@ import {
   parseCustomHeaders,
   type CheckupForm,
 } from './lib/form';
-import { isCheckRoute, matchRoute, navigate, PATHS, usePathname, type Route } from './lib/router';
+import { isCheckRoute, matchRoute, navigate, PATHS, readsAddressParam, usePathname, type Route } from './lib/router';
 import { COUNTER_EVENTS, sendCounterEvent } from './lib/counter';
 import { useDocumentTitle } from './lib/title';
 import { initialFeed, plainFailure, reduceFeed, type FeedState, type RunnerEvent } from './lib/translate';
@@ -120,7 +120,7 @@ export default function App() {
   // The new check-up form lives here, so changing screens or adding the key never loses it.
   const [form, setForm] = useState<CheckupForm>(() => ({
     ...EMPTY_FORM,
-    address: isCheckRoute(matchRoute(window.location.pathname)) ? addressFromSearch(window.location.search) : '',
+    address: readsAddressParam(matchRoute(window.location.pathname)) ? addressFromSearch(window.location.search) : '',
   }));
   const [plan, setPlan] = useState<ReviewPlan | null>(null);
   const [planNotice, setPlanNotice] = useState<PlanNotice | null>(null);
@@ -135,6 +135,13 @@ export default function App() {
   const [startError, setStartError] = useState<string | null>(null);
   const [recent, setRecent] = useState<RunSummary[] | null>(null);
   const [waitingPlans, setWaitingPlans] = useState<WaitingPlan[]>([]);
+  // The plan couldn't be fetched (Retry asks again), the runner missed a poll, a stop didn't work.
+  const [planError, setPlanError] = useState(false);
+  const [planTry, setPlanTry] = useState(0);
+  const [missedPoll, setMissedPoll] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
+  /** Set by Back and Forward: the next status read must not snap the person forward. */
+  const popped = useRef(false);
 
   /** Goes up with every start, stop and approval: a status read begun before one is out of date. */
   const epoch = useRef(0);
@@ -155,9 +162,13 @@ export default function App() {
   const reconcile = useCallback(async () => {
     const asked = epoch.current;
     const next = await getStatus();
-    if (!next || asked !== epoch.current) return;
+    if (asked !== epoch.current) return;
+    setMissedPoll(!next);
+    if (!next) return;
     setStatus(next);
-    const target = addressForPhase(next.phase, window.location.pathname);
+    const wasPopped = popped.current;
+    popped.current = false;
+    const target = addressForPhase(next.phase, window.location.pathname, wasPopped);
     if (target && target !== window.location.pathname) navigate(target, { replace: true });
   }, []);
 
@@ -172,6 +183,14 @@ export default function App() {
   }, [reachable, reconcile, refreshRecent]);
 
   const inProgress = !!status?.phase && IN_PROGRESS.has(status.phase);
+
+  useEffect(() => {
+    const onPop = () => {
+      popped.current = true;
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   // Back onto a finished check-up's address would only bounce to the report: go to the new check-up instead.
   const phase = status?.phase;
@@ -202,12 +221,16 @@ export default function App() {
     if (plan && plan.runId === status.runId) return;
     let cancelled = false;
     getPlan()
-      .then((p) => !cancelled && setPlan(p))
-      .catch(() => {});
+      .then((p) => {
+        if (cancelled) return;
+        setPlanError(false);
+        setPlan(p);
+      })
+      .catch(() => !cancelled && setPlanError(true));
     return () => {
       cancelled = true;
     };
-  }, [status?.phase, status?.runId, plan]);
+  }, [status?.phase, status?.runId, plan, planTry]);
 
   // A message from starting belongs to the screen it was started from.
   useEffect(() => setStartError(null), [pathname]);
@@ -257,28 +280,38 @@ export default function App() {
         }
 
         case 'PLAN_UPDATE_STARTED':
-          setPlanUpdate({ running: true, what: String(event.what ?? '') });
+          setPlanUpdate((u) => ({ running: true, what: String(event.what ?? ''), seq: (u.seq ?? 0) + 1 }));
           return;
         case 'PLAN_UPDATE_PROGRESS':
-          setPlanUpdate((u) => ({ ...u, running: true, step: String(event.what ?? '') }));
+          setPlanUpdate((u) => ({ ...u, running: true, step: String(event.what ?? ''), seq: (u.seq ?? 0) + 1 }));
           return;
         case 'PLAN_UPDATED':
           getPlan()
             .then(setPlan)
-            .catch(() => {})
-            .finally(() => setPlanUpdate({ running: false }));
+            .catch(() =>
+              setPlanNotice({
+                tone: 'warn',
+                title: 'The updated plan couldn’t be loaded',
+                body: 'The plan on screen may be out of date. Reload the page to see the latest.',
+              })
+            )
+            .finally(() => setPlanUpdate((u) => ({ running: false, seq: (u.seq ?? 0) + 1 })));
           return;
         case 'PLAN_UPDATE_FAILED':
-          setPlanUpdate({
+          setPlanUpdate((u) => ({
             running: false,
+            seq: (u.seq ?? 0) + 1,
             error: 'The plan couldn’t be updated. Try again. If it keeps failing, check your AI key in Settings.',
-          });
+          }));
           return;
 
         case 'PLAN_READY':
           getPlan()
-            .then(setPlan)
-            .catch(() => {});
+            .then((p) => {
+              setPlanError(false);
+              setPlan(p);
+            })
+            .catch(() => setPlanError(true));
           if (event.changedSinceApproval) {
             setPlanNotice({
               tone: 'warn',
@@ -344,7 +377,8 @@ export default function App() {
     [reconcile, refreshRecent]
   );
 
-  useRunnerStream(STREAM_URL, reachable, onEvent, () => void reconcile());
+  const connection = useRunnerStream(STREAM_URL, reachable, onEvent, () => void reconcile());
+  const lostContact = reachable && route.name !== 'landing' && (missedPoll || connection === 'reconnecting');
 
   /** Clears everything of the check-up before, for a new one. */
   const resetRun = () => {
@@ -352,9 +386,22 @@ export default function App() {
     setPlanNotice(null);
     setPlanUpdate({ running: false });
     setApproveError(null);
+    setPlanError(false);
+    setStopError(null);
     setScan(null);
     planningStartedAt.current = null;
     setFeed(initialFeed('product'));
+  };
+
+  /** A stop that did not stop anything says so, beside the thing that was stopped. */
+  const stopFailed = (result: { aborted: boolean; error?: string }): boolean => {
+    if (result.aborted) {
+      setStopError(null);
+      return false;
+    }
+    setStopError(result.error ?? 'Nothing was stopped. The check-up may have already finished.');
+    void reconcile();
+    return true;
   };
 
   /**
@@ -568,15 +615,12 @@ export default function App() {
     if (choice === 'cancel') return;
     if (choice === 'confirm') {
       // The scan ends early and plans what it has: the plan arrives as usual.
-      await abortRun(true);
+      stopFailed(await abortRun(true));
       return;
     }
     epoch.current++;
     const result = await abortRun();
-    if (!result.aborted) {
-      void reconcile();
-      return;
-    }
+    if (stopFailed(result)) return;
     resetRun();
     setStatus((s) => (s ? { ...s, phase: 'idle', isRunning: false, runId: null, targetUrl: null } : s));
     // Back to the new check-up, with everything still filled in.
@@ -600,15 +644,12 @@ export default function App() {
     if (choice === 'cancel') return;
     if (choice === 'confirm') {
       // No more tests start; the report arrives as usual.
-      await abortRun(true);
+      stopFailed(await abortRun(true));
       return;
     }
     epoch.current++;
     const result = await abortRun();
-    if (!result.aborted) {
-      void reconcile();
-      return;
-    }
+    if (stopFailed(result)) return;
     setFeed(initialFeed('product'));
     if (result.planKept) {
       setStatus((s) => (s ? { ...s, phase: 'awaiting-review' } : s));
@@ -745,6 +786,26 @@ export default function App() {
               notice={planNotice}
               confirm={confirm}
             />
+          ) : status?.phase === 'awaiting-review' && planError ? (
+            <div className="mx-auto max-w-prose px-4 py-16 sm:px-6">
+              <Notice
+                title="The plan couldn’t be opened"
+                actions={
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => {
+                      setPlanError(false);
+                      setPlanTry((n) => n + 1);
+                    }}
+                  >
+                    Retry
+                  </button>
+                }
+              >
+                Release check-up has the plan but couldn’t send it to this page. Try again.
+              </Notice>
+            </div>
           ) : !status || status.phase === 'awaiting-review' ? (
             <Loading label="Opening the plan…" />
           ) : (
@@ -822,7 +883,30 @@ export default function App() {
         <TopBar route={route} checkupInProgress={inProgress} showDeveloperShortcuts={hasFinishedCheckup(recent)} />
       )}
       {step && <StepBar current={step} links={{ address: PATHS.new }} />}
-      <main id="main">{body}</main>
+      <main id="main">
+        {lostContact && (
+          <div className="mx-auto max-w-prose px-4 pt-4 sm:px-6">
+            <Notice tone="warn" title="Lost contact with Release check-up. Retrying…">
+              Check that it’s still running in its terminal (start it with pnpm start). This page keeps trying.
+            </Notice>
+          </div>
+        )}
+        {stopError && (
+          <div className="mx-auto max-w-prose px-4 pt-4 sm:px-6">
+            <Notice
+              title="The check-up wasn’t stopped"
+              actions={
+                <button type="button" className="btn-quiet" onClick={() => setStopError(null)}>
+                  Dismiss
+                </button>
+              }
+            >
+              {stopError}
+            </Notice>
+          </div>
+        )}
+        {body}
+      </main>
       {!landing && <CommandPalette route={route} />}
       {dialog}
     </div>

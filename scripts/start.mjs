@@ -5,7 +5,8 @@
 //   pnpm start              start and open http://localhost:3001/
 //   pnpm start --no-open    start without opening a browser
 //
-// RUNNER_PORT, RUNNER_HOST, HUB_API_URL and the other RUNNER_* settings work as for the runner itself.
+// RUNNER_PORT, RUNNER_HOST and the other RUNNER_* settings work as for the runner itself.
+// Values in .env load through the start script's node flag (--env-file-if-exists), so a value set only there is read.
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';

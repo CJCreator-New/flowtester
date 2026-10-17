@@ -29,7 +29,12 @@ export interface PlanUpdateState {
   what?: string;
   step?: string;
   error?: string | null;
+  /** Goes up with every PLAN_UPDATE_* event, so a waiting screen can tell that something was heard. */
+  seq?: number;
 }
+
+/** How long a background change may be waited for before the plan can be approved again. */
+export const PENDING_TIMEOUT_MS = 60_000;
 
 /** A banner over the plan: testing stopped or failed, or the site changed since the plan was approved. */
 export interface PlanNotice {
@@ -128,9 +133,18 @@ export function PlanReviewScreen({
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // A background change started here waits until the QA Tool says it has finished or failed.
+  // Any PLAN_UPDATE_* event also ends the wait, and so does a timeout: Approve is never stuck disabled.
   useEffect(() => {
     if (!update.running) setPending(false);
-  }, [update.running]);
+  }, [update.running, update.seq]);
+  useEffect(() => {
+    if (!pending) return;
+    const timer = window.setTimeout(() => {
+      setPending(false);
+      setError('The plan update is taking too long. Check the plan, then try again.');
+    }, PENDING_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [pending]);
   const busy = pending || update.running;
 
   const edit = async (change: () => Promise<ReviewPlan | PlanDelta>): Promise<boolean> => {
@@ -296,7 +310,9 @@ export function PlanReviewScreen({
   useDocumentTitle(`Plan for ${host}`);
 
   const approveButton = (
-    <button type="button" className="btn-primary shrink-0" disabled={busy || approving} onClick={() => onApprove()}>
+    <button type="button" className="btn-primary shrink-0" disabled={busy || approving || !!plan.noTests}
+      onClick={() => onApprove()}
+    >
       {approving ? <Spinner label="Starting the tests…" /> : 'Approve the plan and start testing'}
     </button>
   );
@@ -398,6 +414,13 @@ export function PlanReviewScreen({
             </Notice>
           </div>
         )}
+        {plan.noTests && (
+          <div className="mx-auto mt-4 max-w-6xl">
+            <Notice tone="warn" title="Nothing to test">
+              {plan.noTests}
+            </Notice>
+          </div>
+        )}
         {busy && (
           <p role="status" className="mx-auto mt-3 flex max-w-6xl items-center gap-2 text-sm text-stamp">
             <Spinner label={`Updating the plan: ${update.step || update.what || 'starting'}…`} />
@@ -426,7 +449,7 @@ export function PlanReviewScreen({
             <button
               type="button"
               className="btn-primary min-h-[44px] shrink-0 px-4"
-              disabled={busy || approving}
+              disabled={busy || approving || !!plan.noTests}
               onClick={() => onApprove()}
             >
               {approving ? <Spinner label="Starting…" /> : 'Approve and test'}

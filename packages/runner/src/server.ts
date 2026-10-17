@@ -828,6 +828,9 @@ export class RunnerServer {
     await this.moveLegacyData();
     await this.ensurePlanLoaded();
     await this.loadLatestReport();
+    // A schedule does what its screen says: it is checked every minute from the moment the server is up.
+    // Schedules are closed in beta, so the shared copy never starts runs on its own.
+    if (!this.beta) this.scheduler.start((schedule) => this.runSchedule(schedule));
     return new Promise((resolve, reject) => {
       this.server = http.createServer(async (req, res) => {
         try {
@@ -1209,7 +1212,42 @@ export class RunnerServer {
     });
   }
 
+  /**
+   * A due schedule starts a read-only check-up of its address (nothing is sent or changed, no AI request
+   * is spent). False when it could not start, for instance because a check-up is already running.
+   */
+  private async runSchedule(schedule: CheckupSchedule): Promise<boolean> {
+    if (this.phase === 'scanning' || this.phase === 'testing' || this.benchmarkBusy || this.runStartDone) return false;
+    let finishStart!: () => void;
+    this.runStartDone = new Promise<void>((resolve) => (finishStart = resolve));
+    try {
+      const body: RunStartBody = {
+        targetUrl: schedule.targetUrl,
+        owner: false,
+        useAI: false,
+        planWithoutAI: true,
+        skipReview: true,
+        maxPages: schedule.preset === 'quick' ? 20 : undefined,
+      };
+      const authorization = await resolveAuthorization({
+        targetUrl: body.targetUrl,
+        owner: false,
+        ownerExplicit: false,
+        beta: false,
+        hostChecks: this.hostChecks,
+      });
+      await this.checkupRun.start({ body, authorization });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      this.runStartDone = null;
+      finishStart();
+    }
+  }
+
   public async stop(): Promise<void> {
+    this.scheduler.stop();
     if (this.beta) setBrowserPolicy(null);
     // Open event streams would otherwise keep the server from ever finishing its close.
     for (const client of this.streamClients) client.end();
@@ -2803,7 +2841,10 @@ export class RunnerServer {
 
     if (await this.refuseTarget(res, body.targetUrl)) return;
     // Outside beta refuseTarget lets everything through, so the scheme is checked here for every copy.
-    if (/^[a-z][a-z0-9+.-]*:(?!\d+(\/|$))/i.test(body.targetUrl.trim()) && !/^https?:\/\//i.test(body.targetUrl.trim())) {
+    if (
+      /^[a-z][a-z0-9+.-]*:(?!\d+(\/|$))/i.test(body.targetUrl.trim()) &&
+      !/^https?:\/\//i.test(body.targetUrl.trim())
+    ) {
       this.sendJson(res, 400, {
         error: 'Only http and https addresses can be checked.',
         code: 'ERR_INVALID_REQUEST',
