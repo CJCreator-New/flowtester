@@ -22,10 +22,10 @@ Wizard 5 (Jump to Specs; Spec Drift Override), 6 ("Test again" misuses Test), 7 
 Gate wording (T-31). The check-up flow screens (T-37a).
 
 ## Acceptance criteria
-- [ ] No "Spec", "Test again" for a whole check-up, "run #", "account" for a Role, or "competitor" in visible text.
-- [ ] The landing hero has no raw URI.
-- [ ] Copy actions announce failure.
-- [ ] Each label in ticket T-37b is one of the agreed names.
+- [x] No "Spec", "Test again" for a whole check-up, "run #", "account" for a Role, or "competitor" in visible text.
+- [x] The landing hero has no raw URI.
+- [x] Copy actions announce failure.
+- [x] Each label in ticket T-37b is one of the agreed names.
 
 ## Tests to update or add (written, not run)
 - `packages/wizard/tests/` label and text assertions for the changed screens.
@@ -38,7 +38,7 @@ T-36 and T-31 (same screens). Run after them, in parallel with T-37a.
 `pnpm exec vitest run packages/wizard`
 
 ## Status
-todo
+built
 
 ## Carried over from T-31
 - Settings, Standard preset: the "Max Major Defects" input still shows 0, but Standard sets no major limit. Hide that input under Standard, or show "No limit (Standard)". Also say on the settings screen that the stamp always uses Standard.

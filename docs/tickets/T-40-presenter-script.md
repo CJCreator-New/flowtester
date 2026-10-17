@@ -29,3 +29,6 @@ T-36 and T-37 (labels must be final).
 
 ## Status
 todo
+
+## Carried over from T-37b
+- The command palette item reads "Jump to Requirements and design notes", but its section is now "Product context and design notes". Make the palette item match the section name, and use the section name in the script.
