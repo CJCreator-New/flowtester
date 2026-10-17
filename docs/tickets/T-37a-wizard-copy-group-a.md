@@ -33,4 +33,4 @@ T-36 (same screens). Run after T-36 and T-31.
 `pnpm exec vitest run packages/wizard`
 
 ## Status
-todo
+built

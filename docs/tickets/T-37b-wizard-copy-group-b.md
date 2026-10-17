@@ -42,3 +42,6 @@ todo
 
 ## Carried over from T-31
 - Settings, Standard preset: the "Max Major Defects" input still shows 0, but Standard sets no major limit. Hide that input under Standard, or show "No limit (Standard)". Also say on the settings screen that the stamp always uses Standard.
+
+## Carried over from T-37a
+- `components/plan/PlanDocument.tsx` still shows "Specs and design notes". Change it to "Product context and design notes" (CONTEXT.md term).
