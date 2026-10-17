@@ -40,3 +40,7 @@ T-31 (gate copy in the same screens); coordinates with T-37 on labels.
 
 ## Status
 todo
+
+## Carried over from T-35
+- The wizard does not show `ERR_NO_TESTS` yet. Show the refusal on the plan review screen with the reason.
+- A repeat approve with the same key now returns 200 with the first result, not 409. The wizard must treat 200 as success and not show an error.
