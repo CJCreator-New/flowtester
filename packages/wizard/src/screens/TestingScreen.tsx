@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { DiscoveredFlow } from '@qa/types';
+import type { DiscoveredFlow, FindingSeverity } from '@qa/types';
+import { SEVERITY_ORDER } from '@qa/types/src/browser.js';
 import { SiteMap, type MapPage, type PageStatus } from '../components/SiteMap';
 import { RunFailure } from '../components/RunStates';
 import { FocusHeading } from '../components/text';
@@ -8,6 +9,12 @@ import { plainTitleText } from '../lib/summary';
 import { secondsLeft, timeLeft, type FeedState } from '../lib/translate';
 
 const SERIOUS = new Set(['Blocker', 'Major']);
+
+/** The more serious of two severity words, by the shared SEVERITY_ORDER. */
+function worse(a: string, b: string): string {
+  const rank = (s: string) => SEVERITY_ORDER.indexOf(s as FindingSeverity);
+  return rank(b) !== -1 && (rank(a) === -1 || rank(b) < rank(a)) ? b : a;
+}
 
 /**
  * Testing, as it happens: the test count and time left, the page under test, the latest screen and
@@ -66,15 +73,32 @@ export function TestingScreen({
   const problems = useMemo(() => {
     const byTitle = new Map<
       string,
-      { key: string; title: string; serious: boolean; pages: string[]; sizes: string[]; count: number }
+      {
+        key: string;
+        title: string;
+        serious: boolean;
+        severity: string;
+        pages: string[];
+        sizes: string[];
+        count: number;
+      }
     >();
     for (const f of found) {
       const title = plainTitleText(f.title) || 'A problem';
       const key = title.toLowerCase();
-      const entry = byTitle.get(key) ?? { key, title, serious: false, pages: [], sizes: [], count: 0 };
+      const entry = byTitle.get(key) ?? {
+        key,
+        title,
+        serious: false,
+        severity: f.severity,
+        pages: [],
+        sizes: [],
+        count: 0,
+      };
       byTitle.set(key, entry);
       entry.count++;
       entry.serious ||= SERIOUS.has(f.severity);
+      entry.severity = worse(entry.severity, f.severity);
       if (f.urlPath && !entry.pages.includes(f.urlPath)) entry.pages.push(f.urlPath);
       if (f.breakpoint && !entry.sizes.includes(f.breakpoint)) entry.sizes.push(f.breakpoint);
     }
@@ -98,7 +122,7 @@ export function TestingScreen({
               {left && total > 0 && (
                 <span className="badge-tech font-mono text-[11px]">
                   <span className="h-1.5 w-1.5 rounded-full bg-stamp animate-pulse" />
-                  {left} LEFT
+                  {left}
                 </span>
               )}
             </div>
@@ -243,7 +267,7 @@ export function TestingScreen({
                             : 'badge-tech-warn shrink-0 text-[10px] py-0'
                         }
                       >
-                        {problem.serious ? 'HIGH' : 'WARN'}
+                        {problem.severity}
                       </span>
                     </div>
                     <span className="mt-1 block break-all text-xs text-ink-soft">

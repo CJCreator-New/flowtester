@@ -4,6 +4,7 @@ import { withIntentSwitched } from '../lib/intent-view';
 import { SiteMap } from '../components/SiteMap';
 import { FocusHeading, Notice, Spinner } from '../components/text';
 import { count } from '../lib/format';
+import { siteTypeName } from '../lib/translate';
 import { approveRolesOf, SIGN_IN_AGAIN_TEXT } from '../lib/form';
 import { useDocumentTitle } from '../lib/title';
 import { PlanDocument, type PlanActions } from '../components/plan/PlanDocument';
@@ -176,7 +177,7 @@ export function PlanReviewScreen({
     const affectedIds = items.map((i) => i.id);
     const ok = await edit(() => patchPlan({ items }));
     if (!ok) {
-      setError('Failed to update selection on the server. Your changes have been rolled back.');
+      setError('Could not save that change on the server. Your changes have been rolled back.');
     }
     setSwitched((s) => Object.fromEntries(Object.entries(s).filter(([id]) => !affectedIds.includes(id))));
   };
@@ -354,7 +355,7 @@ export function PlanReviewScreen({
               Review the plan for {host}
             </FocusHeading>
             <p className="text-sm text-ink-soft">
-              {plan.siteType ? `${plan.siteType} · ` : ''}
+              {plan.siteType ? `${siteTypeName(plan.siteType)} · ` : ''}
               {count(plan.planPages?.length ?? plan.pages.length, 'page', 'pages')} ·{' '}
               {count(plan.navigation?.length ?? 0, 'link', 'links')} · {count(plan.flows.length, 'journey', 'journeys')}
             </p>
@@ -455,7 +456,7 @@ export function PlanReviewScreen({
               disabled={busy || approving || !!plan.noTests}
               onClick={() => onApprove()}
             >
-              {approving ? <Spinner label="Starting…" /> : 'Approve and test'}
+              {approving ? <Spinner label="Starting…" /> : 'Approve the plan and start testing'}
             </button>
           </div>
           <button

@@ -609,18 +609,27 @@ function ReleaseGates() {
           </div>
 
           <div>
-            <label htmlFor="gate-max-majors" className="label">
-              Max Major Defects Permitted
-            </label>
-            <input
-              id="gate-max-majors"
-              type="number"
-              min="0"
-              max="50"
-              value={gate.maxMajors ?? 0}
-              onChange={(e) => updateGate('maxMajors', Math.max(0, parseInt(e.target.value, 10) || 0))}
-              className="field"
-            />
+            {preset === 'standard' ? (
+              <>
+                <span className="label">Max Major Defects Permitted</span>
+                <p className="py-2 text-sm font-bold text-ink">No limit (Standard)</p>
+              </>
+            ) : (
+              <>
+                <label htmlFor="gate-max-majors" className="label">
+                  Max Major Defects Permitted
+                </label>
+                <input
+                  id="gate-max-majors"
+                  type="number"
+                  min="0"
+                  max="50"
+                  value={gate.maxMajors ?? 0}
+                  onChange={(e) => updateGate('maxMajors', Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  className="field"
+                />
+              </>
+            )}
             <p className="mt-1 text-xs text-ink-soft">High-impact issues with functional workarounds.</p>
           </div>
 
@@ -714,7 +723,7 @@ function CheckupSchedules() {
       setNotice('New automated check-up schedule activated.');
       await loadSchedules();
     } catch (err) {
-      setError(err instanceof RunnerError ? err.message : 'Failed to create schedule.');
+      setError(err instanceof RunnerError ? err.message : 'The schedule couldn’t be created. Try again.');
     } finally {
       setSaving(false);
     }
@@ -725,7 +734,7 @@ function CheckupSchedules() {
       await toggleSchedule(schedule.id, !schedule.enabled);
       await loadSchedules();
     } catch (err) {
-      setError(err instanceof RunnerError ? err.message : 'Failed to update schedule status.');
+      setError(err instanceof RunnerError ? err.message : 'The schedule couldn’t be updated. Try again.');
     }
   };
 
@@ -735,7 +744,7 @@ function CheckupSchedules() {
       await deleteSchedule(id);
       await loadSchedules();
     } catch (err) {
-      setError(err instanceof RunnerError ? err.message : 'Failed to delete schedule.');
+      setError(err instanceof RunnerError ? err.message : 'The schedule couldn’t be deleted. Try again.');
     }
   };
 
@@ -773,7 +782,7 @@ function CheckupSchedules() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="sm:col-span-2">
               <label htmlFor="sched-url" className="label">
-                Target Website URL
+                Site address
               </label>
               <input
                 id="sched-url"
@@ -855,7 +864,7 @@ function CheckupSchedules() {
                 className="field"
               >
                 <option value="full">Full check-up (standard breadth)</option>
-                <option value="quick">Quick smoke scan (faster)</option>
+                <option value="quick">Quick check (faster)</option>
               </select>
             </div>
           </div>
@@ -991,7 +1000,7 @@ function AddSignIn({ host, onSaved }: { host: string; onSaved: () => void }) {
       aria-label={'Add a sign-in for ' + host}
     >
       <p className="text-sm text-ink-soft sm:col-span-2">
-        Use a test account, not a real person’s. It signs in once to check the details work, then keeps the password in
+        Use a test sign-in, not a real person’s. It signs in once to check the details work, then keeps the password in
         this computer’s keychain.
       </p>
       <label className="text-sm">

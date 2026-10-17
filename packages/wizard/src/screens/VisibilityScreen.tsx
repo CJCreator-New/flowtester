@@ -20,7 +20,7 @@ const LENS_METADATA: Record<LensTab, { label: string; tag: string; description: 
     label: 'AI answers (AEO)',
     tag: 'AEO',
     description: 'How voice assistants and AI answer boxes select direct answers from your site.',
-    hint: 'Schema.org JSON-LD markup, FAQPage, HowTo, and BreadcrumbList structured data.',
+    hint: 'Structured data: FAQPage, HowTo and BreadcrumbList markup.',
   },
   aiSearch: {
     label: 'AI search (GEO)',

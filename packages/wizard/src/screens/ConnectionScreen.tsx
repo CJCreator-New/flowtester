@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lead, Question } from '../components/text';
+import { ErrorMessage, Lead, Question } from '../components/text';
 import { WakeNote } from '../components/WakeNote';
 import { useWakeOnline } from '../hooks/useWakeOnline';
 import { useDocumentTitle } from '../lib/title';
@@ -17,6 +17,7 @@ export function ConnectionScreen({ checks }: { checks: number }) {
   const [url, setUrl] = useState('');
   const [repo, setRepo] = useState('');
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const actionsPage = actionsPageFor(repo);
   const workflow = workflowFor(url || 'https://your-preview-url.example.com');
 
@@ -27,6 +28,7 @@ export function ConnectionScreen({ checks }: { checks: number }) {
       setTimeout(() => setCopied(false), 2500);
     } catch {
       // Clipboard blocked: the text is on the page to select by hand.
+      setCopyFailed(true);
     }
   };
 
@@ -91,6 +93,9 @@ export function ConnectionScreen({ checks }: { checks: number }) {
           <button type="button" className="btn-primary mt-2" onClick={copy}>
             {copied ? 'Copied' : 'Copy the file'}
           </button>
+          {copyFailed && (
+            <ErrorMessage>The copy didn’t work. Select the file above and copy it by hand.</ErrorMessage>
+          )}
         </li>
         <li>
           In your repo, open <strong>Settings, Secrets and variables, Actions</strong> and add a secret named{' '}
@@ -129,10 +134,7 @@ export function ConnectionScreen({ checks }: { checks: number }) {
       <ol className="mb-8 list-decimal space-y-4 pl-6">
         <li>Open a terminal in the Release check-up folder.</li>
         <li>
-          Run this command:
-          <pre className="mt-2 overflow-x-auto rounded-md border-2 border-edge bg-surface px-4 py-3 font-bold">
-            <code>pnpm start</code>
-          </pre>
+          Start the QA Tool (see the README).
         </li>
         <li>Leave the terminal open while you use this page.</li>
       </ol>

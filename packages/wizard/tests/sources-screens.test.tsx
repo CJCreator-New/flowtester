@@ -248,6 +248,45 @@ describe('new check-up screen: recovery and choices', () => {
   });
 });
 
+describe('T-37a copy, group A', () => {
+  const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
+
+  it('uses the glossary terms and drops the overclaims on the check-up screen', () => {
+    const newCheckup = read('../src/screens/NewCheckupScreen.tsx');
+    expect(newCheckup).toContain('label="Product Context"');
+    expect(newCheckup).toContain('Product Context files');
+    expect(newCheckup).toContain('Exploring speed');
+    expect(newCheckup).toContain('What you send may be kept and used to learn (Settings explains)');
+    expect(newCheckup).not.toContain('Documents (Sources)');
+    expect(newCheckup).not.toContain('costs nothing');
+    expect(newCheckup).not.toContain('label="Specs"');
+    expect(newCheckup).not.toContain('acceptance criteria');
+  });
+
+  it('gives Plan Review one label for approve-and-test and a readable site type', () => {
+    const planReview = read('../src/screens/PlanReviewScreen.tsx');
+    expect(planReview).not.toContain("'Approve and test'");
+    expect(planReview).toContain("'Approve the plan and start testing'");
+    expect(planReview).toContain('siteTypeName(plan.siteType)');
+    expect(planReview).not.toContain('Failed to');
+  });
+
+  it('shows the countdown once and the shared severity words while testing', () => {
+    const testing = read('../src/screens/TestingScreen.tsx');
+    expect(testing).not.toContain('{left} LEFT');
+    expect(testing).not.toContain("'HIGH' : 'WARN'");
+    expect(testing).toContain('{problem.severity}');
+  });
+
+  it('keeps the run stop copy and the sign-in labels plain', () => {
+    expect(read('../src/lib/translate.ts')).not.toContain('Run was stopped');
+    const signIn = read('../src/components/SignInRow.tsx');
+    expect(signIn).toContain('Username field (optional)');
+    expect(signIn).toContain('Sign-in button (optional)');
+    expect(signIn).not.toContain('selector (optional)');
+  });
+});
+
 describe('recovery wiring', () => {
   const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
 

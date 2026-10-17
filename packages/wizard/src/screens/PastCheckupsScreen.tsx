@@ -9,7 +9,7 @@ import { useDocumentTitle } from '../lib/title';
 
 const COUNT_WORDS: Array<[FindingSeverity, string, string]> = [
   ['Blocker', 'blocks release', 'block release'],
-  ['Major', 'serious', 'serious'],
+  ['Major', 'major', 'major'],
   ['Minor', 'minor', 'minor'],
   ['Suggestion', 'suggestion', 'suggestions'],
 ];
@@ -143,9 +143,9 @@ export function PastCheckupsScreen({
                           className="btn-quiet min-h-[44px] px-4 text-sm"
                           disabled={starting}
                           onClick={() => onTestAgain(run)}
-                          aria-label={`Test ${run.host} again`}
+                          aria-label={`New check-up of ${run.host}`}
                         >
-                          Test again
+                          New check-up of this site
                         </button>
                         <button
                           type="button"

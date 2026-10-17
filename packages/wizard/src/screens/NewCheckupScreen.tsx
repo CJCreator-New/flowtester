@@ -653,8 +653,8 @@ export function NewCheckupScreen({
                 </p>
                 <MaterialField
                   id="specs"
-                  label="Specs"
-                  hint="Requirements, user stories or acceptance criteria."
+                  label="Product Context"
+                  hint="Requirements or user stories the site must meet, as text."
                   placeholder={
                     'For example:\n- Only managers can see reports\n- A new invoice needs a client name and an amount above zero'
                   }
@@ -712,7 +712,7 @@ export function NewCheckupScreen({
                 </div>
 
                 <div>
-                  <span className="block font-semibold text-ink">Crawl pace</span>
+                  <span className="block font-semibold text-ink">Exploring speed</span>
                   <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
                     <div className="flex items-center gap-2">
                       <label htmlFor="crawl-concurrency">Pages at once</label>
@@ -830,8 +830,8 @@ export function NewCheckupScreen({
           <div className="border-t border-rule p-5">
             <p className="mb-4 text-sm text-ink-soft">
               Without it, fixed rules write the plan and you can start now. With it, the AI writes a plan that fits your
-              site. It runs on OpenRouter’s free models, so it costs nothing. You only do this once, and anything you
-              typed above is kept.
+              site. It runs on OpenRouter’s free models. What you send may be kept and used to learn (Settings
+              explains). You only do this once, and anything you typed above is kept.
             </p>
             <KeyField
               onSaved={(model) => {
@@ -989,7 +989,7 @@ function ReferenceDocuments({
   return (
     <div className="space-y-3 border-t border-rule pt-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="font-bold">Documents (Sources)</span>
+        <span className="font-bold">Product Context files</span>
         <label className="cursor-pointer text-sm font-bold text-stamp underline underline-offset-4 hover:text-stamp-dark focus-within:outline focus-within:outline-2 focus-within:outline-stamp">
           Add files
           <input

@@ -106,7 +106,7 @@ function SampleReportFrame() {
             <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-fail/60" />
             <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-warn/60" />
             <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-pass/60" />
-            <span className="ml-2 font-mono text-[11px] text-ink-soft">spec://sample-report</span>
+            <span className="ml-2 font-mono text-[11px] text-ink-soft">Sample report</span>
           </div>
           <span className="badge-tech text-[10px] py-0 px-2">
             <span className="h-1.5 w-1.5 rounded-full bg-pass" />
@@ -516,8 +516,8 @@ export function LandingScreen() {
             </span>
             <p className="mt-3 max-w-xs">Source-available under FSL-1.1-MIT. Read the code and run it yourself.</p>
           </div>
-          <nav aria-label="Product">
-            <p className="font-bold text-ink">Product</p>
+          <nav aria-label="Tool">
+            <p className="font-bold text-ink">Tool</p>
             <ul className="mt-2">
               {NAV.map((n) => (
                 <li key={n.href}>

@@ -67,7 +67,7 @@ export function SignInRow({
             />
           </label>
           <label className="text-sm">
-            <span className="mb-1 block font-bold">Username selector (optional)</span>
+            <span className="mb-1 block font-bold">Username field (optional)</span>
             <input
               className="field py-2 text-sm"
               value={value.usernameSelector || ''}
@@ -76,7 +76,7 @@ export function SignInRow({
             />
           </label>
           <label className="text-sm">
-            <span className="mb-1 block font-bold">Password selector (optional)</span>
+            <span className="mb-1 block font-bold">Password field (optional)</span>
             <input
               className="field py-2 text-sm"
               value={value.passwordSelector || ''}
@@ -85,7 +85,7 @@ export function SignInRow({
             />
           </label>
           <label className="text-sm">
-            <span className="mb-1 block font-bold">Submit selector (optional)</span>
+            <span className="mb-1 block font-bold">Sign-in button (optional)</span>
             <input
               className="field py-2 text-sm"
               value={value.submitSelector || ''}

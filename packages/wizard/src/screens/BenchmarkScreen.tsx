@@ -152,7 +152,7 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
       <header>
         <FocusHeading className="text-3xl font-bold tracking-tight">Compare with another site</FocusHeading>
         <p className="mt-1 max-w-prose text-ink-soft">
-          See how your journey stacks up against a competitor’s or a site you admire: how many steps and form fields a
+          See how your journey stacks up against another site, or one you admire: how many steps and form fields a
           visitor meets, which helpful patterns each has, and what you could try. It only looks: nothing is typed, sent
           or changed on either site, and the other site’s robots.txt is respected. It takes about a minute.
         </p>
@@ -203,7 +203,7 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
               name="competitor-url"
               type="url"
               required
-              placeholder="https://competitor.com/signup"
+              placeholder="https://example.com/signup"
               value={refUrl}
               onChange={(e) => setRefUrl(e.target.value)}
               className="field"
