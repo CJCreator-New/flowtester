@@ -2728,7 +2728,39 @@ export class RunnerServer {
     this.sendJson(res, 404, { error: 'Not found' });
   }
 
+  /** Set synchronously when a start begins and cleared when it has claimed the slot or failed. */
+  private runStartDone: Promise<void> | null = null;
+
   private async handleTriggerRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (
+      this.phase === 'scanning' ||
+      this.phase === 'testing' ||
+      this.benchmarkBusy ||
+      this.runStartDone // a second start while the first is still starting
+    ) {
+      this.sendJson(res, 409, {
+        error: this.beta
+          ? 'Someone else is running a check-up on this shared copy. Try again in a few minutes.'
+          : 'Another check-up is running. Wait for it to finish, or stop it first.',
+        code: 'ERR_RUN_IN_PROGRESS',
+        suggestion: this.beta
+          ? 'Only one check-up runs at a time here. Try again in a few minutes.'
+          : 'Wait for the check-up in progress to finish, or stop it, then start this one.',
+      });
+      return;
+    }
+    // No await between the check above and this line, so two requests never both pass it.
+    let finishStart!: () => void;
+    this.runStartDone = new Promise<void>((resolve) => (finishStart = resolve));
+    try {
+      await this.startRunFromRequest(req, res);
+    } finally {
+      this.runStartDone = null;
+      finishStart();
+    }
+  }
+
+  private async startRunFromRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (this.phase === 'scanning' || this.phase === 'testing' || this.benchmarkBusy) {
       this.sendJson(res, 409, {
         error: this.beta
@@ -2770,6 +2802,15 @@ export class RunnerServer {
     }
 
     if (await this.refuseTarget(res, body.targetUrl)) return;
+    // Outside beta refuseTarget lets everything through, so the scheme is checked here for every copy.
+    if (/^[a-z][a-z0-9+.-]*:(?!\d+(\/|$))/i.test(body.targetUrl.trim()) && !/^https?:\/\//i.test(body.targetUrl.trim())) {
+      this.sendJson(res, 400, {
+        error: 'Only http and https addresses can be checked.',
+        code: 'ERR_INVALID_REQUEST',
+        suggestion: 'Type an address that starts with http:// or https://.',
+      });
+      return;
+    }
 
     // The new Source inputs are checked before anything starts. Messages never repeat what was sent.
     let typedHostname = '';
@@ -2821,7 +2862,16 @@ export class RunnerServer {
     const waiting = this.phase === 'awaiting-review' ? this.session.plan.currentRecord : null;
     // Beta: a plan another visitor left waiting is kept aside for them, whatever the site, and is never named here.
     const othersPlan = this.beta && !!waiting && !this.isMine(waiting.plan.runId);
-    const parkWaiting = !!waiting && (othersPlan || this.hostOfPlan(waiting) !== hostOfAddress(body.targetUrl));
+    // Beta: another visitor's waiting plan is never moved aside by this start; the start waits instead.
+    if (othersPlan) {
+      this.sendJson(res, 409, {
+        error: 'Someone else is running a check-up on this shared copy. Try again in a few minutes.',
+        code: 'ERR_RUN_IN_PROGRESS',
+        suggestion: 'Only one check-up runs at a time here. Try again in a few minutes.',
+      });
+      return;
+    }
+    const parkWaiting = !!waiting && this.hostOfPlan(waiting) !== hostOfAddress(body.targetUrl);
     if (waiting && !parkWaiting && !body.replacePlan) {
       let waitingFor = waiting.plan.targetUrl;
       try {
@@ -2895,12 +2945,20 @@ export class RunnerServer {
         });
         return;
       }
+      if (err?.code === 'ERR_RUN_IN_PROGRESS') {
+        this.sendJson(res, 409, { error: err.message, code: err.code });
+        return;
+      }
       this.sendJson(res, 500, { error: this.redactedMessage(err) });
     }
   }
 
   private async handleAbortRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readJsonBody<{ finish?: boolean }>(req).catch(() => ({}) as { finish?: boolean });
+    const body = await this.readJsonBody<{ finish?: boolean; discard?: boolean }>(req).catch(
+      () => ({}) as { finish?: boolean; discard?: boolean }
+    );
+    // A stop that arrives while a start is still under way waits for the start, then stops that run.
+    if (this.runStartDone) await this.runStartDone;
     const result = await this.checkupRun.stop(body);
     if (result.finishing) {
       this.sendJson(res, 200, { aborted: false, finishing: true });
@@ -2957,10 +3015,15 @@ export class RunnerServer {
     let visionModel: string | null | undefined;
     let fallbacks: string[] | undefined;
     if (providerType === 'openrouter') {
-      const chosen = await this.refreshAiModels(apiKey!).catch(async () => ({
-        ...(await this.readAiModels()),
-        fallbacks: [] as string[],
-      }));
+      const chosen = await this.refreshAiModels(apiKey!).catch(async (err: unknown) => {
+        // A rejected key is not a reason to carry on with older model names: say so.
+        if (err instanceof OpenRouterAuthError) {
+          throw Object.assign(new Error('The key was not recognised. Check it in Settings, then start again.'), {
+            code: 'ERR_NO_AI_KEY',
+          });
+        }
+        return { ...(await this.readAiModels()), fallbacks: [] as string[] };
+      });
       model ??= chosen.text ?? undefined;
       visionModel = chosen.vision;
       fallbacks = chosen.fallbacks;

@@ -367,7 +367,7 @@ _Reference: Roadmap Gap Table Row 2, Cluster 03 ([03-accessibility-compliance.md
      - Update [`CONTEXT.md`](../CONTEXT.md) and [`docs/PRODUCT_GUIDE.md`](../docs/PRODUCT_GUIDE.md) to accurately state WCAG 2.2 AA.
 - **Files to Modify:**
   - [`packages/checkers/src/ux-quality.ts`](../packages/checkers/src/ux-quality.ts)
-  - [`packages/checkers/tests/ux-quality.test.ts`](../packages/checkers/tests/ux-quality.test.ts)
+  - `packages/checkers/tests/ux-quality.test.ts`
   - [`CONTEXT.md`](../CONTEXT.md)
 - **Acceptance Criteria:**
   - [x] Axe exceptions produce a visible diagnostic finding.
@@ -464,8 +464,8 @@ _Reference: Roadmap Gap Table Rows 18, 19, 20, Cluster 02 ([02-visual-crossbrows
   - [`packages/core/src/reporter.ts`](../packages/core/src/reporter.ts)
   - [`packages/core/src/html-report.ts`](../packages/core/src/html-report.ts)
   - `packages/cli/src/index.ts`
-  - [`findings.schema.json`](../findings.schema.json)
-  - [`.github/workflows/qa-preview.yml`](../.github/workflows/qa-preview.yml)
+  - [`findings.schema.json`](findings.schema.json)
+  - `.github/workflows/qa-preview.yml`
 - **Acceptance Criteria:**
   - [x] `findings.json` includes `schemaVersion` and `fingerprint`.
   - [x] `findings/F-XXX.md` and `fix-these.md` are generated on every run.
@@ -569,7 +569,7 @@ _Reference: Roadmap Gap Table Row 15, Cluster 02 ([02-visual-crossbrowser-report
 - **Files to Modify:**
   - [`packages/checkers/src/design-standards.ts`](../packages/checkers/src/design-standards.ts)
   - [`packages/core/src/html-report.ts`](../packages/core/src/html-report.ts)
-  - [`packages/dashboard/src/server.ts`](../packages/dashboard/src/server.ts)
+  - `packages/dashboard/src/server.ts`
 - **Acceptance Criteria:**
   - [ ] HTML report presents interactive Old / New / Diff comparison.
   - [ ] One-click baseline approval updates the stored reference image.

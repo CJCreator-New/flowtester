@@ -14,7 +14,6 @@ import { runCheckup, parseArgs } from '../src/checkup.js';
 
 const SITE_PORT = 3291;
 const RUNNER_PORT = 3292;
-const CHECKUP_PORT = 3293;
 const runnerUrl = `http://localhost:${RUNNER_PORT}`;
 const outputDir = path.join(process.cwd(), '.tmp-consent-enforcement');
 const dataDir = `${outputDir}-data`;
@@ -179,8 +178,6 @@ describe('sign-in consent is enforced beyond discovery', () => {
 describe('headless Check-up keeps sign-in sessions out of the report folder', () => {
   it('no session file under the report folder, and the working folder is deleted', async () => {
     const before = await qaTempDirs();
-    const prev = process.env.QA_CHECKUP_PORT;
-    process.env.QA_CHECKUP_PORT = String(CHECKUP_PORT);
     await new Promise<void>((resolve) => shop2.listen(CHECKUP_SITE_PORT, () => resolve()));
     try {
       const args = parseArgs(
@@ -200,8 +197,6 @@ describe('headless Check-up keeps sign-in sessions out of the report folder', ()
       }
       expect(await qaTempDirs()).toEqual(before);
     } finally {
-      if (prev === undefined) delete process.env.QA_CHECKUP_PORT;
-      else process.env.QA_CHECKUP_PORT = prev;
       await new Promise<void>((resolve) => shop2.close(() => resolve()));
     }
   }, 300000);

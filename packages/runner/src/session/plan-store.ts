@@ -87,6 +87,8 @@ export interface PlanStore {
   /** Approval idempotency (today's `recentApprovals`). */
   rememberApproval(key: string, runId: string): void;
   recentApproval(key: string): { timestamp: number; runId: string } | undefined;
+  /** Drops a key whose approval was refused, so the same key can be sent again. */
+  forgetApproval(key: string): void;
   /** The Plan as the wizard receives it (today's `planForClient`). */
   forClient(plan: ReviewPlan): ReviewPlan;
   /** The Plan as written to disk, credentials replaced (today's `planForDisk`). */
@@ -254,6 +256,10 @@ export class DefaultPlanStore implements PlanStore {
 
   recentApproval(key: string): { timestamp: number; runId: string } | undefined {
     return this.recentApprovals.get(key);
+  }
+
+  forgetApproval(key: string): void {
+    this.recentApprovals.delete(key);
   }
 
   forClient(plan: ReviewPlan): ReviewPlan {

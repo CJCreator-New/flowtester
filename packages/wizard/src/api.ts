@@ -12,6 +12,7 @@ import type {
 // The check-up API's shapes live in @qa/types (T-201): the runner and this client share one copy.
 import type { PlanPatchBody, RunnerStatusReply, RunStartBody } from '@qa/types';
 import { isSignInFailureReason, normalizePlanIntents, signInReasonText } from '@qa/types/src/browser.js';
+import { DEFAULT_RELEASE_GATES } from '@qa/types/src/verdict.js';
 
 /**
  * Every call to the runner lives here, and every failure becomes a RunnerError whose message is a
@@ -957,7 +958,7 @@ export function getStoredReleaseGates(): ReleaseGateCriteria {
     const saved = localStorage.getItem(GATES_STORAGE_KEY);
     if (saved) return JSON.parse(saved);
   } catch {}
-  return { maxBlockers: 0, maxMajors: 0, strictAccessibility: true };
+  return DEFAULT_RELEASE_GATES.standard;
 }
 
 export function saveStoredReleaseGates(gates: ReleaseGateCriteria): void {

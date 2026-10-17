@@ -117,7 +117,7 @@ export function CommandPalette({ route }: { route: Route }) {
       },
       {
         id: 'nav-gates',
-        title: 'Configure Release Readiness Gates',
+        title: 'Change the release rule',
         category: 'Navigation',
         keywords: ['criteria', 'thresholds', 'strict', 'standard', 'gates', 'blockers'],
         run: () => navigate(PATHS.settings),

@@ -146,7 +146,6 @@ function parseRoles(env: NodeJS.ProcessEnv): RoleSignIn[] {
 
 const PROVIDERS: AIProviderType[] = ['openrouter', 'gemini', 'openai', 'anthropic'];
 const RUN_TIMEOUT_MS = 40 * 60 * 1000;
-const DEFAULT_PORT = 3601;
 
 export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): CheckupArgs {
   const flag = (name: string) => {
@@ -419,8 +418,6 @@ export async function runCheckup(args: CheckupArgs): Promise<number> {
   await fs.mkdir(args.outputDir, { recursive: true });
   // Outside the report folder: what the runner keeps while it works must never be uploaded with the report.
   // That includes the sign-in sessions (cookies), so they live here too and are deleted when the run ends.
-  const _port = Number(process.env.QA_CHECKUP_PORT) || DEFAULT_PORT;
-  void _port;
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'qa-checkup-'));
   const session = createCheckupSession({
     outputDir: args.outputDir,

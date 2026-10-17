@@ -267,6 +267,13 @@ export function Report({
             {coverage.totalTestPoints > 0 &&
               ` · ${count(coverage.totalTestPoints, 'test', 'tests')} in ${formatDuration(report.durationMs)}`}
           </p>
+          {summary.ready && mustFix > 0 && (
+            <p className="mt-2 text-sm text-ink">
+              Ready to release does not mean nothing needs fixing. The Standard rule does not block release on{' '}
+              {count(mustFix, 'Major', 'Majors')} alone, but they lower an area grade, and they stay listed under Must
+              fix before release.
+            </p>
+          )}
           {summary.readOnly && (
             <p className="mt-2 text-sm text-ink">
               Only looked at: nothing was sent or changed, so forms weren’t tested.
@@ -291,6 +298,12 @@ export function Report({
                   <Link to={PATHS.settings} className="font-bold text-stamp hover:underline print:hidden">
                     Change the rule
                   </Link>
+                </p>
+              )}
+              {evaluatedGate.ready && !summary.ready && (
+                <p className="text-sm text-ink-soft">
+                  Your rule is met, but the stamp uses the Standard rule and says {summary.stamp}. The stamp does not
+                  change.
                 </p>
               )}
             </>

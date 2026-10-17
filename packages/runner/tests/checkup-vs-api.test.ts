@@ -13,7 +13,6 @@ import { RunnerServer } from '../src/server.js';
 
 const SITE_PORT = 3310;
 const RUNNER_PORT = 3311;
-const CHECKUP_PORT = 3312;
 const runnerUrl = `http://localhost:${RUNNER_PORT}`;
 const outputDir = path.join(process.cwd(), '.tmp-checkup-vs-api');
 const dataDir = `${outputDir}-data`;
@@ -72,19 +71,14 @@ async function waitDone(seconds = 240): Promise<string> {
 
 describe('headless Check-up and API run report the same Issues (AC5)', () => {
   let runner: RunnerServer;
-  const prevPort = process.env.QA_CHECKUP_PORT;
 
   beforeAll(async () => {
-    // checkup.ts reads its port when first loaded, so set it before the dynamic import below.
-    process.env.QA_CHECKUP_PORT = String(CHECKUP_PORT);
     await new Promise<void>((resolve) => shop.listen(SITE_PORT, () => resolve()));
     runner = new RunnerServer({ port: RUNNER_PORT, outputDir, dataDir });
     await runner.start();
   });
 
   afterAll(async () => {
-    if (prevPort === undefined) delete process.env.QA_CHECKUP_PORT;
-    else process.env.QA_CHECKUP_PORT = prevPort;
     await runner?.stop().catch(() => {});
     await new Promise<void>((resolve) => shop.close(() => resolve()));
     for (const d of [outputDir, dataDir, ciOut]) await fs.rm(d, { recursive: true, force: true }).catch(() => {});
