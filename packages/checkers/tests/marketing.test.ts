@@ -65,8 +65,16 @@ describe('MarketingChecker', () => {
     expect(await checker.checkPage(page(noCard), ctx('/about', siteWide))).toHaveLength(0);
   });
 
-  it('ignores a page read that has no marketing facts', async () => {
-    expect(await checker.checkPage(page({ title: 'x' }), ctx('/'))).toEqual([]);
-    expect(await checker.checkPage(page(null), ctx('/'))).toEqual([]);
+  it('turns a page read that has no marketing facts into a could-not-verify Suggestion', async () => {
+    const unread = await checker.checkPage(page(null), ctx('/'));
+    expect(unread).toHaveLength(1);
+    expect(unread[0]).toMatchObject({ severity: 'Suggestion', needsConfirmation: true });
+    expect(unread[0].title).toMatch(/^Could not verify/);
+  });
+
+  it('reports every basic as missing when the read carries none of the facts', async () => {
+    const found = await checker.checkPage(page({ title: 'x' }), ctx('/'));
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.every((f) => !f.title.startsWith('Could not verify'))).toBe(true);
   });
 });
