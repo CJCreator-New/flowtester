@@ -20,6 +20,8 @@ export interface NetworkEntry {
   postData?: string;
   durationMs?: number;
   timestamp: number;
+  /** Cancelled because the page went away (a form submit that navigates), not a failure of the site. */
+  aborted?: boolean;
 }
 
 export interface StepEvidence {

@@ -170,6 +170,8 @@ describe('RunnerServer', () => {
         useAI: true,
         aiProvider: 'mock',
         skipReview: false,
+        // Bounded: this test is about pausing and resuming, not how much of the site is crawled.
+        maxPages: 10,
         breakpoints: ['375px'],
       }),
     });
@@ -309,6 +311,8 @@ describe('RunnerServer', () => {
         useAI: true,
         aiProvider: 'mock',
         skipReview: false,
+        // Bounded: this test is about the saved plan's secrets, not how much of the site is crawled.
+        maxPages: 10,
         breakpoints: ['375px'],
         roles,
       }),
@@ -366,6 +370,8 @@ describe('RunnerServer', () => {
         useAI: true,
         aiProvider: 'mock',
         skipReview: true,
+        // Bounded: this test is about the run reaching done, not how much of the site is crawled.
+        maxPages: 10,
         breakpoints: ['375px'],
       }),
     });

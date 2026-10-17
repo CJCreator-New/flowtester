@@ -51,10 +51,14 @@ export class EvidenceCollector {
       const startTime = requestStartTimes.get(req);
       const durationMs = startTime ? Date.now() - startTime : undefined;
       requestStartTimes.delete(req);
+      // ERR_ABORTED: the page unloaded (a form submit that navigates away) before the response came back.
+      // That is the action finishing, not the site failing.
+      const aborted = req.failure()?.errorText === 'net::ERR_ABORTED';
       this.networkLogs.push({
         url: req.url(),
         method: req.method(),
         status: 0,
+        ...(aborted ? { aborted: true } : {}),
         postData: req.postData() || undefined,
         durationMs,
         timestamp: Date.now(),
@@ -112,7 +116,7 @@ export class EvidenceCollector {
     const consoleErrors = this.consoleLogs.slice(this.consoleReported).filter((l) => l.type === 'error');
     const failedRequests = this.networkLogs
       .slice(this.networkReported)
-      .filter((n) => n.status >= 400 || n.status === 0);
+      .filter((n) => n.status >= 400 || (n.status === 0 && !n.aborted));
     this.consoleReported = this.consoleLogs.length;
     this.networkReported = this.networkLogs.length;
 

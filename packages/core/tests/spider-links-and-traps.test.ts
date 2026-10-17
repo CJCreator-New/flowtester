@@ -59,6 +59,7 @@ describe('DeterministicSpider link discovery and trap protection (T-112)', () =>
       const result = await spider.crawl(context, `${fixtureUrl}/lab/trap/1`, {
         maxPerShape: 25,
         maxDepth: 50,
+        seedSitemap: false,
         pageDelayMs: 0,
       });
       const trapPages = result.pages.filter((p) => p.urlPath.startsWith('/lab/trap/'));
@@ -68,7 +69,7 @@ describe('DeterministicSpider link discovery and trap protection (T-112)', () =>
     } finally {
       await context.close();
     }
-  });
+  }, 90000); // 25 trap pages at about a second each on a shared runner
 
   it('with routeQueryParams: ["month"] the calendar is bounded by the shape cap; without it collapses to one page', async () => {
     const context = await browser.newContext();
@@ -78,6 +79,7 @@ describe('DeterministicSpider link discovery and trap protection (T-112)', () =>
       // Without routeQueryParams: collapses to 1 page because key is just /lab/calendar
       const resDefault = await spider.crawl(context, `${fixtureUrl}/lab/calendar`, {
         maxPerShape: 5,
+        seedSitemap: false,
         pageDelayMs: 0,
       });
       const calDefault = resDefault.pages.filter((p) => p.urlPath.startsWith('/lab/calendar'));
@@ -87,6 +89,7 @@ describe('DeterministicSpider link discovery and trap protection (T-112)', () =>
       const resWithQuery = await spider.crawl(context, `${fixtureUrl}/lab/calendar?month=2026-10`, {
         routeQueryParams: ['month'],
         maxPerShape: 5,
+        seedSitemap: false,
         pageDelayMs: 0,
       });
       const calWithQuery = resWithQuery.pages.filter((p) => p.urlPath.startsWith('/lab/calendar'));
@@ -95,7 +98,7 @@ describe('DeterministicSpider link discovery and trap protection (T-112)', () =>
     } finally {
       await context.close();
     }
-  });
+  }, 90000); // two crawls, each bounded by the shape cap
 
   it('/lab/hash with includeHash: true records two routes; without it, none', async () => {
     const context = await browser.newContext();
@@ -130,6 +133,7 @@ describe('DeterministicSpider link discovery and trap protection (T-112)', () =>
       const spider = new DeterministicSpider([], 10);
       const res = await spider.crawl(context, `${fixtureUrl}/lab/onclick`, {
         exploreClicks: true,
+        seedSitemap: false,
         pageDelayMs: 0,
       });
       const paths = res.pages.map((p) => p.urlPath);

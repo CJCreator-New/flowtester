@@ -660,10 +660,9 @@ export class DeterministicSpider {
               } catch (rErr) {
                 debugLog('crawl', 'mid-crawl session recovery failed', { role: options.role });
               }
-              if (recovered) {
-                consecutiveWalls = 0;
-                debugLog('crawl', 'mid-crawl session restored', { role: options.role });
-              }
+              // A sign-in that succeeds is not yet a restored session: the retried route must load (the reset
+              // below) before the walls stop counting, or a site that bounces every page never reports the loss.
+              if (recovered) debugLog('crawl', 'mid-crawl session restored', { role: options.role });
             }
             if (!recovered) {
               consecutiveWalls++;
