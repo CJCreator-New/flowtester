@@ -35,4 +35,4 @@ None. Must finish before T-35 (both edit `server.ts`).
 `pnpm exec vitest run packages/runner/tests/beta-privacy.test.ts packages/runner/tests/host-policy.test.ts packages/runner/tests/route-inventory.test.ts`
 
 ## Status
-todo
+built

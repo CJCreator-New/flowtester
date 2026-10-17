@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { Finding } from '@qa/types';
+import { releaseVerdict, DEFAULT_RELEASE_GATES } from '@qa/types';
+import type { Finding, SiteAspectGrades } from '@qa/types';
 import { githubAnnotations, escapeData, escapeProperty } from '@qa/core';
 import { exitCodeFor } from '../src/checkup.js';
 
@@ -85,5 +86,38 @@ describe('exitCodeFor', () => {
     expect(exitCodeFor([f({ triageStatus: 'False Positive' })], 'major')).toBe(0);
     expect(exitCodeFor([f({ needsConfirmation: true })], 'blocker')).toBe(0);
     expect(exitCodeFor([], 'blocker')).toBe(0);
+  });
+
+  it('standard exit code always agrees with the stamp', () => {
+    const area = { grade: 'A' as const, score: 100, findings: [] as string[] };
+    const grades = (worst: 'A' | 'D' | null): SiteAspectGrades => ({
+      aspects: {
+        Works: worst === null ? { grade: null, score: 0, findings: [], checked: false } : { ...area, grade: worst },
+        Accessible: area,
+        'Fast and mobile': area,
+        Findable: area,
+        Secure: area,
+        'Looks and reads well': area,
+      },
+      overallGrade: worst ?? 'A',
+      overallScore: 90,
+    });
+    const cases: Array<[Finding[], SiteAspectGrades | undefined]> = [
+      [[], undefined],
+      [[f({ severity: 'Blocker' })], undefined],
+      [[f({ severity: 'Major' })], undefined],
+      [[f({ severity: 'Major' })], grades('A')],
+      [[], grades('D')],
+      [[], grades(null)],
+      [[f({ severity: 'Blocker' })], grades('A')],
+    ];
+    for (const [findings, g] of cases) {
+      const stamp = releaseVerdict(findings, DEFAULT_RELEASE_GATES.standard, g);
+      expect(exitCodeFor(findings, 'standard', g)).toBe(stamp.ready ? 0 : 1);
+      // The stamp with no gate given is the same Standard rule.
+      expect(releaseVerdict(findings, undefined, g).ready).toBe(stamp.ready);
+    }
+    // One Major with every area at C or better does not fail Standard.
+    expect(exitCodeFor([f({ severity: 'Major' })], 'standard', grades('A'))).toBe(0);
   });
 });

@@ -27,6 +27,9 @@ Docs 1 (setup commands and paths), 2 (walkthrough labels), 3 (`.env` never loade
 - A test that every `process.env` read in `packages/*/src` is listed in `.env.example` (add `packages/runner/tests/config-docs.test.ts` or extend `checkup-docs.test.ts`).
 - `scripts/` smoke expectations if `HUB_API_URL` was referenced.
 
+## Carried over from T-39
+- `docs/DEPLOYMENT.md` (~53): says to bump `TOOL_REF` with the version. Update it: the generated workflow runs `main` until tag `v0.1.0` exists, then `TOOL_REF` moves to the tag.
+
 ## Dependencies
 T-30 (ratio and rule numbers), T-37 (labels). Doc edits can start now; re-check labels after T-37.
 

@@ -207,7 +207,10 @@ describe('route inventory (T-203)', () => {
   });
 
   describe('CORS origins', () => {
-    function withOrigin(origin: string, method = 'GET'): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
+    function withOrigin(
+      origin: string,
+      method = 'GET'
+    ): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
       const url = new URL(`${base}/api/runner/status`);
       return new Promise((resolve, reject) => {
         const req = http.request(

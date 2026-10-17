@@ -20,6 +20,8 @@ Requires Node 22 and pnpm 11 (the exact version is pinned in `package.json`).
 5. Open a pull request using the template. CI must pass.
 6. Squash or merge after review.
 
+`.claude/` is local only: its slash commands (`/check`, `/ship`, `/adr`, `/pr-ready`), agents and hand-off files are git-ignored and not part of a clone. The `pnpm` commands above work without it.
+
 ## Definition of done
 
 - Behavior works and is covered by a test that would fail without it
