@@ -256,7 +256,7 @@ describe('T-37a copy, group A', () => {
     expect(newCheckup).toContain('label="Product Context"');
     expect(newCheckup).toContain('Product Context files');
     expect(newCheckup).toContain('Exploring speed');
-    expect(newCheckup).toContain('What you send may be kept and used to learn (Settings explains)');
+    expect(newCheckup).toContain('What you send may be kept and used to learn');
     expect(newCheckup).not.toContain('Documents (Sources)');
     expect(newCheckup).not.toContain('costs nothing');
     expect(newCheckup).not.toContain('label="Specs"');

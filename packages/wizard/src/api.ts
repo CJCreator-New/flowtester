@@ -11,8 +11,12 @@ import type {
 } from '@qa/types';
 // The check-up API's shapes live in @qa/types (T-201): the runner and this client share one copy.
 import type { PlanPatchBody, RunnerStatusReply, RunStartBody } from '@qa/types';
-import { isSignInFailureReason, normalizePlanIntents, signInReasonText } from '@qa/types/src/browser.js';
-import { DEFAULT_RELEASE_GATES } from '@qa/types/src/verdict.js';
+import {
+  DEFAULT_RELEASE_GATES,
+  isSignInFailureReason,
+  normalizePlanIntents,
+  signInReasonText,
+} from '@qa/types/src/browser.js';
 
 /**
  * Every call to the runner lives here, and every failure becomes a RunnerError whose message is a

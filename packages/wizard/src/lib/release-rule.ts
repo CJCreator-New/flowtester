@@ -1,4 +1,4 @@
-import { DEFAULT_RELEASE_GATES, type ReleaseGateCriteria } from '@qa/types/src/verdict.js';
+import { DEFAULT_RELEASE_GATES, type ReleaseGateCriteria } from '@qa/types/src/browser.js';
 
 /** The three named rules from verdict.ts (T-30). Descriptions restate those constants, nothing more. */
 export type GatePreset = keyof typeof DEFAULT_RELEASE_GATES;

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_RELEASE_GATES } from '@qa/types/src/verdict.js';
+import { DEFAULT_RELEASE_GATES } from '@qa/types/src/browser.js';
 import { getStoredReleaseGates } from '../src/api';
 import { PRESET_META, presetOf, sameGate } from '../src/lib/release-rule';
 

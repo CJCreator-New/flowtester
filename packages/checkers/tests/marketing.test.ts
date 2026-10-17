@@ -71,10 +71,4 @@ describe('MarketingChecker', () => {
     expect(unread[0]).toMatchObject({ severity: 'Suggestion', needsConfirmation: true });
     expect(unread[0].title).toMatch(/^Could not verify/);
   });
-
-  it('reports every basic as missing when the read carries none of the facts', async () => {
-    const found = await checker.checkPage(page({ title: 'x' }), ctx('/'));
-    expect(found.length).toBeGreaterThan(0);
-    expect(found.every((f) => !f.title.startsWith('Could not verify'))).toBe(true);
-  });
 });

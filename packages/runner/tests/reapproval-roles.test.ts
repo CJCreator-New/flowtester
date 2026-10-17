@@ -36,6 +36,18 @@ describe('Re-approval Roles (reapproval-roles.test.ts)', () => {
         pages: [],
         flows: [],
         questions: [],
+        // A reviewed test: an approval with nothing to run is refused (ERR_NO_TESTS).
+        testCases: [
+          {
+            id: 'TC-1',
+            flowId: 'home',
+            name: 'Home page loads',
+            role: 'anonymous',
+            startPage: '/',
+            steps: [{ action: 'wait', name: 'Wait for page load' }],
+            expectations: { url: { pattern: '/*' } },
+          },
+        ],
       },
       context: {
         targetUrl: 'http://localhost:3050',
