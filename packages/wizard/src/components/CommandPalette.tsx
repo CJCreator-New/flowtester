@@ -101,7 +101,7 @@ export function CommandPalette({ route }: { route: Route }) {
       },
       {
         id: 'nav-benchmark',
-        title: 'Go to Compare sites',
+        title: 'Go to Compare with another site',
         category: 'Navigation',
         shortcut: 'g c',
         keywords: ['competitor', 'gap', 'ux', 'friction', 'scorecard'],
@@ -188,7 +188,7 @@ export function CommandPalette({ route }: { route: Route }) {
         },
         {
           id: 'plan-jump-docs',
-          title: 'Jump to Specs and design notes',
+          title: 'Jump to Requirements and design notes',
           category: 'Plan Review',
           keywords: ['context', 'requirements', 'notes'],
           run: () => {
@@ -433,7 +433,7 @@ export function CommandPalette({ route }: { route: Route }) {
                   <kbd className="font-mono rounded bg-panel px-2 py-0.5 border border-edge/40">g then b</kbd>
                 </div>
                 <div className="flex items-center justify-between rounded border border-rule bg-surface/60 p-2">
-                  <span>Go to Compare sites</span>
+                  <span>Go to Compare with another site</span>
                   <kbd className="font-mono rounded bg-panel px-2 py-0.5 border border-edge/40">g then c</kbd>
                 </div>
                 <div className="flex items-center justify-between rounded border border-rule bg-surface/60 p-2">
@@ -455,7 +455,7 @@ export function CommandPalette({ route }: { route: Route }) {
                   <kbd className="font-mono rounded bg-panel px-2 py-0.5 border border-edge/40">k / ↑</kbd>
                 </div>
                 <div className="flex items-center justify-between rounded border border-rule bg-surface/60 p-2">
-                  <span>Toggle Run / Skip item</span>
+                  <span>Toggle Leave out item</span>
                   <kbd className="font-mono rounded bg-panel px-2 py-0.5 border border-edge/40">Space</kbd>
                 </div>
                 <div className="flex items-center justify-between rounded border border-rule bg-surface/60 p-2">

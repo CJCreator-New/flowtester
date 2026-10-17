@@ -4,7 +4,7 @@
  * OpenRouter (key check + model list) and the AI model.
  *
  * The tests run in order and follow one site through: the first visit, a scan, the plan, a failed
- * and a stopped test run, the report, Test again, Past check-ups, Go deeper and Settings. Every
+ * and a stopped test run, the report, New check-up of this site, Past check-ups, Go deeper and Settings. Every
  * screen is read for words that must not reach people, and opened at phone size while it exists.
  * Set WIZARD_SCREENSHOTS=<dir> to also save a screenshot of every screen.
  */
@@ -708,9 +708,9 @@ describe('Release check-up end to end, on the one server', () => {
     await checkPhone(`/reports/${firstRunId}`, 'report', { role: 'button', name: 'Download the report' });
   }, 180000);
 
-  it('Test again reuses the approved plan: nothing changed, so it tests at once', async () => {
+  it('New check-up of this site reuses the approved plan: nothing changed, so it tests at once', async () => {
     runRequests.length = 0;
-    await page.getByRole('button', { name: 'Test again' }).click();
+    await page.getByRole('button', { name: 'New check-up of this site' }).click();
     await expect.poll(() => runRequests.length, { timeout: 30000 }).toBe(1);
     expect(runRequests[0]).toMatchObject({ targetUrl: fixtureUrl, owner: true, testAgain: true });
     // The first check-up's specs go along.

@@ -424,7 +424,7 @@ export function Report({
             </button>
           </div>
           <dl className="grid gap-x-4 gap-y-1 font-mono text-sm sm:grid-cols-[12rem_1fr]">
-            <dt className="text-ink-soft">Run</dt>
+            <dt className="text-ink-soft">Check-up</dt>
             <dd className="break-all text-ink">{report.runId}</dd>
             <dt className="text-ink-soft">Address</dt>
             <dd className="break-all text-ink">{report.targetUrl}</dd>

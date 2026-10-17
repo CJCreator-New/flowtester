@@ -115,7 +115,7 @@ export function KeyField({
           onClick={() => setReveal((r) => !r)}
           aria-pressed={reveal}
         >
-          {reveal ? 'Hide' : 'Show'}
+          Show key
         </button>
       </div>
 

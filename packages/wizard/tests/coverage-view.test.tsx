@@ -72,6 +72,7 @@ describe('T-109: Crawl coverage in ReportScreen', () => {
       })
     );
 
+    expect(html).toContain('Pages checked');
     expect(html).toContain('Pages reached 6 of 10');
     expect(html).toContain('/a');
     expect(html).toContain('Needs a sign-in');
@@ -90,7 +91,7 @@ describe('T-109: Crawl coverage in ReportScreen', () => {
       })
     );
 
-    expect(html).not.toContain('Crawl coverage');
+    expect(html).not.toContain('Pages checked');
     expect(html).not.toContain('Pages reached');
   });
 });
@@ -119,6 +120,6 @@ describe('T-109: rolesNotTested rendering', () => {
     expect(html).toContain('Sign-in failed');
 
     // Make sure it is not inside the spec section
-    expect(html).not.toContain('How the site matches its spec');
+    expect(html).not.toContain('How the site matches its requirements');
   });
 });

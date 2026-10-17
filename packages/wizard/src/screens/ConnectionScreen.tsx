@@ -93,9 +93,7 @@ export function ConnectionScreen({ checks }: { checks: number }) {
           <button type="button" className="btn-primary mt-2" onClick={copy}>
             {copied ? 'Copied' : 'Copy the file'}
           </button>
-          {copyFailed && (
-            <ErrorMessage>The copy didn’t work. Select the file above and copy it by hand.</ErrorMessage>
-          )}
+          {copyFailed && <ErrorMessage>The copy didn’t work. Select the file above and copy it by hand.</ErrorMessage>}
         </li>
         <li>
           In your repo, open <strong>Settings, Secrets and variables, Actions</strong> and add a secret named{' '}
@@ -133,9 +131,7 @@ export function ConnectionScreen({ checks }: { checks: number }) {
       <h2 className="mb-2 text-lg font-bold">On your computer</h2>
       <ol className="mb-8 list-decimal space-y-4 pl-6">
         <li>Open a terminal in the Release check-up folder.</li>
-        <li>
-          Start the QA Tool (see the README).
-        </li>
+        <li>Start the QA Tool (see the README).</li>
         <li>Leave the terminal open while you use this page.</li>
       </ol>
 

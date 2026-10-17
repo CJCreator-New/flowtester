@@ -313,3 +313,121 @@ describe('recovery wiring', () => {
     expect(read('../src/screens/VisualBaselinesScreen.tsx')).toContain('Retry');
   });
 });
+
+describe('T-37b: wizard copy, labels and accessibility', () => {
+  const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
+
+  it('Report and Past check-ups say New check-up of this site, never Test again', () => {
+    for (const path of ['../src/screens/ReportScreen.tsx', '../src/screens/PastCheckupsScreen.tsx']) {
+      const source = read(path);
+      expect(source, path).toContain('New check-up of this site');
+      expect(source, path).not.toContain('Test again');
+    }
+  });
+
+  it('Report uses Check-up #id, Requirements and a stable Light view label', () => {
+    const report = read('../src/screens/ReportScreen.tsx');
+    expect(report).toContain('Check-up #');
+    expect(report).not.toContain('run #');
+    expect(report).not.toContain('Spec Override');
+    expect(report).not.toContain('Spec Drift Override');
+    expect(report).toContain('How the site matches its requirements');
+    expect(report).toContain('Record a requirement override');
+    // The Light view button keeps one label; aria-pressed carries the state.
+    expect(report).toMatch(/aria-pressed=\{light\}[\s\S]*?Light view/);
+    expect(report).not.toContain("'Dark view'");
+  });
+
+  it('Report explains SEO, AEO and GEO as visible text, not only in a tooltip', () => {
+    const report = read('../src/screens/ReportScreen.tsx');
+    expect(report).toContain('<dd className="text-xs text-ink-soft">{hint}</dd>');
+    expect(report).not.toContain('<div key={label} title={hint}>');
+  });
+
+  it('Report override fields are linked to their labels', () => {
+    const report = read('../src/screens/ReportScreen.tsx');
+    for (const id of ['override-status', 'override-url', 'override-selector', 'override-reason']) {
+      expect(report, `label for ${id}`).toContain(`htmlFor="${id}"`);
+      expect(report, `input ${id}`).toContain(`id="${id}"`);
+    }
+  });
+
+  it('Report and Connection announce a failed copy', () => {
+    const report = read('../src/screens/ReportScreen.tsx');
+    expect(report).toContain('setCopyFailed(true)');
+    expect(report).toContain('The copy didn’t work. Try again.');
+    expect(report).not.toContain('// fallback');
+    expect(report).not.toContain('(${group.bucket})');
+
+    const connection = read('../src/screens/ConnectionScreen.tsx');
+    expect(connection).toContain('setCopyFailed(true)');
+    expect(connection).toContain('The copy didn’t work.');
+  });
+
+  it('Connection names the start step in words, not a command', () => {
+    const connection = read('../src/screens/ConnectionScreen.tsx');
+    expect(connection).toContain('Start the QA Tool (see the README).');
+    expect(connection).not.toContain('pnpm start');
+  });
+
+  it('Landing hero shows Sample report, never the raw URI, and the footer nav is Tool', () => {
+    const landing = read('../src/screens/LandingScreen.tsx');
+    expect(landing).toContain('Sample report');
+    expect(landing).not.toContain('spec://');
+    expect(landing).toContain('<nav aria-label="Tool">');
+    expect(landing).not.toContain('>Product</p>');
+  });
+
+  it('Settings: Standard shows no major limit, sign-in wording and plain labels', () => {
+    const settings = read('../src/screens/SettingsScreen.tsx');
+    expect(settings).toContain('No limit (Standard)');
+    expect(settings).toContain("preset === 'standard' ? (");
+    expect(settings).toContain('The stamp on every report always uses the Standard rule.');
+    expect(settings).toContain('Site address');
+    expect(settings).toContain('Quick check (faster)');
+    expect(settings).toContain('Use a test sign-in, not a real person’s.');
+    for (const old of ['Target Website URL', 'Quick smoke scan', 'Failed to', 'Use a test account']) {
+      expect(settings, old).not.toContain(old);
+    }
+  });
+
+  it('Visibility, Benchmark and SiteMap use the agreed names', () => {
+    expect(read('../src/screens/VisibilityScreen.tsx')).not.toContain('Schema.org JSON-LD');
+    const benchmark = read('../src/screens/BenchmarkScreen.tsx');
+    expect(benchmark).not.toContain('competitor’s');
+    expect(benchmark).not.toContain('competitor.com');
+    expect(read('../src/components/SiteMap.tsx')).not.toContain('Serious problems');
+  });
+
+  it('TopBar: Visual Baselines, Compare with another site and Visibility', () => {
+    const topbar = read('../src/components/TopBar.tsx');
+    expect(topbar).toContain("label: 'Visual Baselines'");
+    expect(topbar).toContain("'Visual Baselines'");
+    expect(topbar).toContain("label: 'Compare with another site'");
+    expect(topbar).toContain("'Visibility'");
+    expect(topbar).not.toContain("'Baselines'");
+    expect(topbar).not.toContain("'Compare sites'");
+  });
+
+  it('Command palette: Requirements, Leave out and Compare with another site', () => {
+    const palette = read('../src/components/CommandPalette.tsx');
+    expect(palette).toContain('Jump to Requirements and design notes');
+    expect(palette).toContain('Toggle Leave out item');
+    expect(palette).not.toContain('Jump to Specs');
+    expect(palette).not.toContain('Run / Skip item');
+    expect(palette).not.toContain('Compare sites');
+  });
+
+  it('Plan Review heading is Product context and design notes', () => {
+    const plan = read('../src/components/plan/PlanDocument.tsx');
+    expect(plan).toContain('title="Product context and design notes"');
+    expect(plan).not.toContain('Specs and design notes');
+  });
+
+  it('Show key button keeps one label and carries its state in aria-pressed', () => {
+    const keyField = read('../src/components/KeyField.tsx');
+    expect(keyField).toContain('aria-pressed={reveal}');
+    expect(keyField).toContain('Show key');
+    expect(keyField).not.toContain("reveal ? 'Hide' : 'Show'");
+  });
+});
