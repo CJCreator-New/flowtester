@@ -384,7 +384,7 @@ _Reference: Roadmap Gap Table Row 3, Cluster 01 ([01-web-e2e-ai-testing.md](./re
 
 - **Problem in Codebase:**
   - [`packages/core/src/retry-runner.ts`](../packages/core/src/retry-runner.ts) implements `runWithCleanRetry`, but it is never called by [`orchestrator.ts`](../packages/core/src/orchestrator.ts).
-  - In [`packages/hub/src/storage/db.ts`](../packages/hub/src/storage/db.ts) and [`packages/hub/src/ui.ts`](../packages/hub/src/ui.ts), `flakyFlowsCount` is hardcoded to `0`.
+  - In `packages/hub/src/storage/db.ts` and `packages/hub/src/ui.ts`, `flakyFlowsCount` is hardcoded to `0`.
 - **Implementation Spec:**
   1. **Orchestrator Integration:**
      - In [`packages/core/src/orchestrator.ts`](../packages/core/src/orchestrator.ts), wrap journey flow executions with `RetryRunner.runWithCleanRetry`.
@@ -394,8 +394,8 @@ _Reference: Roadmap Gap Table Row 3, Cluster 01 ([01-web-e2e-ai-testing.md](./re
      - Replace hardcoded `flakyFlowsCount: 0` in Hub queries and UI components with the aggregated tally.
 - **Files to Modify:**
   - [`packages/core/src/orchestrator.ts`](../packages/core/src/orchestrator.ts)
-  - [`packages/hub/src/storage/db.ts`](../packages/hub/src/storage/db.ts)
-  - [`packages/hub/src/ui.ts`](../packages/hub/src/ui.ts)
+  - `packages/hub/src/storage/db.ts`
+  - `packages/hub/src/ui.ts`
   - [`packages/core/src/reporter.ts`](../packages/core/src/reporter.ts)
 - **Acceptance Criteria:**
   - [x] Flaky test runs pass on clean retry and are tagged `FLAKY_PASSED`.
@@ -453,7 +453,7 @@ _Reference: Roadmap Gap Table Rows 18, 19, 20, Cluster 02 ([02-visual-crossbrows
      - Add a "Release Record" header to Markdown/HTML reports: Target, Approver, Timestamp, Final Verdict, Known Findings Summary.
      - Extract historical scores from [`site-history.ts`](../packages/core/src/site-history.ts) and render a sparkline/trend strip showing 6-area scores across the last 10 runs.
   5. **CI Release Gate & GitHub Integration:**
-     - In [`packages/cli/src/index.ts`](../packages/cli/src/index.ts), add `--fail-on <blocker|major|none>` flag.
+     - In `packages/cli/src/index.ts`, add `--fail-on <blocker|major|none>` flag.
      - If findings match or exceed the threshold, terminate with exit code `1`.
      - When running in GitHub Actions (`GITHUB_ACTIONS=true`):
        - Append formatted summary to `process.env.GITHUB_STEP_SUMMARY`.
@@ -463,7 +463,7 @@ _Reference: Roadmap Gap Table Rows 18, 19, 20, Cluster 02 ([02-visual-crossbrows
   - [`packages/types/src/index.ts`](../packages/types/src/index.ts)
   - [`packages/core/src/reporter.ts`](../packages/core/src/reporter.ts)
   - [`packages/core/src/html-report.ts`](../packages/core/src/html-report.ts)
-  - [`packages/cli/src/index.ts`](../packages/cli/src/index.ts)
+  - `packages/cli/src/index.ts`
   - [`findings.schema.json`](../findings.schema.json)
   - [`.github/workflows/qa-preview.yml`](../.github/workflows/qa-preview.yml)
 - **Acceptance Criteria:**

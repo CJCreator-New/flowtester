@@ -41,7 +41,7 @@ Bring your own key. Supported providers: OpenRouter (default in CI), Gemini, Ope
 | `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | Provider keys read from the environment |
 | `TEST_MOCK_AI`                                                                | Use the mock provider (tests)           |
 
-Key order (see `core/ai/key-resolver.ts`): command line, then the OS keychain, then the legacy `.qa-keys.json`
+Key order (see `packages/core/src/ai/key-resolver.ts`): command line, then the OS keychain, then the legacy `.qa-keys.json`
 file, then the environment. With no key at all, the Plan is written by fixed rules and no AI is used.
 
 Provider limits worth knowing (they change; the tool reads what the key reports): OpenRouter's free models allow 20
@@ -93,7 +93,7 @@ Setting both `QA_USERNAME` and `QA_PASSWORD` is the consent to sign in and test 
 
 **Sign-in in GitHub Actions is a manual step.** `.github/workflows/qa-check.yml` does not pass `QA_USERNAME`, `QA_PASSWORD` or `QA_LOGIN_PATH`, so a CI Check-up there is unchanged. To use them, add the values as repository secrets (Settings, Secrets and variables, Actions), then add them to the `env:` block of the check-up job yourself (for example `QA_USERNAME: ${{ secrets.QA_USERNAME }}`). Adding them is your consent to sign in and send forms on that address for every run of the workflow, per [ADR 0022](adr/0022-test-sign-in-as-consent.md). Use a test account only. Never write the values into the workflow file.
 
-The CI check-up runs in-process on the Check-up Session without binding a network port (`QA_CHECKUP_PORT` is ignored). When `GITHUB_ACTIONS=true` it also prints annotations for active Blockers (error) and Majors (warning); there is no setting for it.
+The CI check-up runs in-process on the Check-up Session without binding a network port (`QA_CHECKUP_PORT` is ignored). When `GITHUB_ACTIONS=true` it also prints annotations for active Blockers (error) and Majors (warning); there is no setting for it. When `GITHUB_STEP_SUMMARY` is set (GitHub Actions sets it), the run summary is also appended to that file. Both are set by GitHub, not by you.
 
 ## Sign-in and crawl limits
 

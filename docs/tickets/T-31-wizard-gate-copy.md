@@ -32,4 +32,4 @@ T-30.
 `pnpm exec vitest run packages/wizard`
 
 ## Status
-todo
+built

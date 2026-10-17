@@ -16,7 +16,7 @@ Build only; tests run once, in `/verify-all`, after every row here is `built`.
 | id | title | gaps | priority | size | wave | status | depends on |
 |---|---|---|---|---|---|---|---|
 | [T-30](T-30-verdict-gate-scoring.md) | One ready-to-release rule, honest grades | review Core 1,2,4,7,8,12; Docs 5 | P0 | L | 1 | built | - |
-| [T-31](T-31-wizard-gate-copy.md) | Wizard shows one release rule | review Wizard 9, 16 | P0 | S | 3 | todo | T-30 |
+| [T-31](T-31-wizard-gate-copy.md) | Wizard shows one release rule | review Wizard 9, 16 | P0 | S | 3 | built | T-30 |
 | [T-32](T-32-empty-plans-never-run-hidden-tests.md) | A plan runs only what the person saw | review Core 2 | P0 | S | 1 | built | - |
 | [T-33](T-33-checker-false-signals.md) | Checkers report only what they verified | review Core 3,5,6,9,13,14; Docs 6 | P0 | M | 1 | built | - |
 | [T-34](T-34-runner-access-and-isolation.md) | Runner access, isolation and token gate | review Runner 1,4-9 | P0 | L | 1 | built | - |

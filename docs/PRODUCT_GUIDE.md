@@ -196,13 +196,13 @@ mindmap
 ### Deterministic Scoring & Release Verdict System
 
 - **100-Point Scoring Model**: Each of the six aspects begins at 100 points. Deductions are strictly weighted by severity:
-  - **Blocker**: -30 points (and caps aspect at 65 for 1 blocker; 2+ blockers force an **F** grade / max 50 points).
-  - **Major**: -15 points.
+  - **Blocker**: -50 points. An area with a Blocker can never be C or better: it is capped at **D** (or **F** below 40 points).
+  - **Major**: -20 points. One Major caps the area at **B**; two or more cap it at **C**.
   - **Minor**: -5 points.
   - **Suggestion**: -2 points.
 - **Spread Multipliers**: Defects recurring across multiple pages apply spread multipliers (1.0× for 1 page, 1.25× for 2–4 pages, 1.5× for 5+ pages) to prevent duplicate penalties while acknowledging systemic bugs.
 - **The Rubber Stamp Verdict**:
-  - **Ready to release**: Granted only when active release gates are satisfied (zero blockers and zero unmitigated majors under standard gate criteria).
+  - **Ready to release**: Granted when the Standard gate passes: 0 Blockers, and all six areas at C or better (60 or more). A Major lowers its area's grade but does not block a release on its own.
   - **Not ready yet**: Rendered when critical issues remain unresolved, accompanied by a precise count of required fixes.
 
 ### Checking a Fix
@@ -271,8 +271,8 @@ Every test execution occurs inside an isolated Playwright `BrowserContext` with 
 
 ### Prerequisites & System Requirements
 
-- **Node.js**: `v20.x` or `v22.x` LTS
-- **Package Manager**: `pnpm` v9+ (`npm install -g pnpm` or `corepack enable`)
+- **Node.js**: `v22.9` or newer (the `engines` field requires Node 22)
+- **Package Manager**: `pnpm` 11 (`corepack enable` uses the version pinned in `package.json`)
 - **Operating System**: macOS, Linux, or Windows (WSL2 or PowerShell)
 - **Browser Dependencies**: Playwright Chromium binary (`pnpm bootstrap` installs this automatically)
 
@@ -358,16 +358,16 @@ sequenceDiagram
     Runner-->>UI: Render "Ready to release" Verdict & Grades
 ```
 
-1. **Start Check-up**: Navigate to `http://localhost:3001/`. Enter your target web application address (e.g. `localhost:3050`).
+1. **Start the check-up**: Navigate to `http://localhost:3001/`. Enter your target web application address (e.g. `localhost:3050`).
 2. **Environment Classification**:
    - The system inspects the URL. If it resides on `localhost`, a private IP, or a dev tunnel, it is designated a **Test copy** (interactive testing unlocked).
-   - If pointing to an external domain, tick **This is a test copy** and **I own this site** if safe to submit forms; otherwise, it runs in read-only observation mode.
-3. **Execute Scan**: Click **Scan the site**. Watch real-time progress indicators displaying discovered pages, clustered layout groups, and remaining AI request budgets.
+   - If the address is not clearly a test copy, the wizard asks what the check-up may do. Choose **It’s a test copy I’m allowed to test fully** only if forms may be filled in and sent; choose **Only look at it** or **It’s my live site: only look at it** otherwise (read-only).
+3. **Scan**: Click **Start the check-up**. Watch real-time progress indicators displaying discovered pages, clustered layout groups, and remaining AI request budgets.
 4. **Interactive Plan Review**:
    - Inspect the **Full plan** tab: verify planned page visits, navigation checks, and cross-page journeys.
    - Switch any unwanted tests off or click **Re-plan** to refine specific tests with AI instructions.
    - Switch to the **Map** tab to visually explore the site graph.
-5. **Approve & Run**: Click **Approve and run**. Watch tests execute live with real-time test counters, active browser screenshots, and streaming findings.
+5. **Approve and test**: Click **Approve and test**. Watch tests execute live with real-time test counters, active browser screenshots, and streaming findings.
 6. **Evaluate Release Verdict**:
    - Review the inspector's rubber stamp: **Ready to release** (green) or **Not ready yet** (red).
    - Inspect the six aspect letter grades (A–F).
@@ -388,7 +388,7 @@ A preview or staging address is tested as a test copy; any other address is chec
 node packages/runner/dist/checkup.js https://preview.example.com --staging --fail-on blocker
 ```
 
-`--fail-on` takes `blocker`, `major` or `none` and sets when the build fails. See [ADR 0012](adr/0012-hosted-runner-github-actions.md) and [CONFIGURATION.md](CONFIGURATION.md).
+`--fail-on` takes `standard` (the default), `blocker`, `major` or `none` and sets when the build fails. See [ADR 0012](adr/0012-hosted-runner-github-actions.md) and [CONFIGURATION.md](CONFIGURATION.md).
 
 ### Workflow C: Competitive Flow Benchmarking
 

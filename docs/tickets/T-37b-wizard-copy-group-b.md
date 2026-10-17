@@ -39,3 +39,6 @@ T-36 and T-31 (same screens). Run after them, in parallel with T-37a.
 
 ## Status
 todo
+
+## Carried over from T-31
+- Settings, Standard preset: the "Max Major Defects" input still shows 0, but Standard sets no major limit. Hide that input under Standard, or show "No limit (Standard)". Also say on the settings screen that the stamp always uses Standard.
