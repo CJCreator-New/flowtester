@@ -1,6 +1,6 @@
 # 0029: One Ready-to-Release Rule, Honest Grades
 
-Status: Accepted, 2026-10-17 (demo-readiness plan, decision 1; ticket T-30). Builds on [0009](0009-ai-review-advisory.md) where present and 0018.
+Status: Accepted, 2026-10-17 (demo-readiness plan, decision 1; ticket T-30). Builds on [0009](0009-ai-plans-every-plan-item.md) and [0018](0018-claim-wording.md).
 
 ## Context
 Four places defined "ready to release" differently: the verdict, the CLI exit code, the report stamp and the settings text. A Major could fail the stamp but pass the exit code. An area nothing checked showed 100 and an A, the overall grade could read better than the worst area, a 404 on `/items/500` could read as a crash, and completion always read 100%.

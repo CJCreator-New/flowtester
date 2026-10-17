@@ -46,4 +46,4 @@ Record the gate decision in ADR 0018's text or a short new ADR (decision 1 in DE
 `pnpm exec vitest run packages/types packages/core/tests/scoring.test.ts packages/runner/tests`
 
 ## Status
-todo
+built

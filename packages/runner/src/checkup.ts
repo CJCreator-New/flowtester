@@ -30,7 +30,14 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { DEFAULT_RELEASE_GATES, isActiveFinding, releaseVerdict, isSupportedContextName, summarizeDocument, parseHeaderText } from '@qa/types';
+import {
+  DEFAULT_RELEASE_GATES,
+  isActiveFinding,
+  releaseVerdict,
+  isSupportedContextName,
+  summarizeDocument,
+  parseHeaderText,
+} from '@qa/types';
 import { githubAnnotations, docxToMarkdown } from '@qa/core';
 import type { AIProviderType, Finding, ReleaseReport, SiteAspectGrades, RunStartBody } from '@qa/types';
 import { createCheckupSession, createCheckupRun, resolveAuthorization } from './session/checkup-session.js';

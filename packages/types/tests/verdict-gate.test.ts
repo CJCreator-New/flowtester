@@ -13,7 +13,8 @@ const grades = (worst: AspectGrade | null): SiteAspectGrades => {
   const ok = { grade: 'A' as AspectGrade | null, score: 100, findings: [] as string[] };
   return {
     aspects: {
-      Works: worst === null ? { grade: null, score: 0, findings: [], checked: false } : { ...ok, grade: worst, score: 70 },
+      Works:
+        worst === null ? { grade: null, score: 0, findings: [], checked: false } : { ...ok, grade: worst, score: 70 },
       Accessible: ok,
       'Fast and mobile': ok,
       Findable: ok,
