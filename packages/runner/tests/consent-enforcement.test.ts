@@ -135,7 +135,8 @@ describe('sign-in consent is enforced beyond discovery', () => {
   }, 240000);
 
   it('wrong password under consent on the caller-supplied test case path: run fails, nothing interactive is sent', async () => {
-    await post('/api/runner/abort').catch(() => undefined);
+    // Stop keeps a plan that waits for review; the earlier test left one, so throw it away explicitly.
+    await post('/api/runner/abort', { discard: true }).catch(() => undefined);
     sent.length = 0;
     await post('/api/runner/run', {
       ...base,
