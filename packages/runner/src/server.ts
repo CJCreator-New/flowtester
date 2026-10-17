@@ -177,6 +177,8 @@ import {
   peekProofToken,
   claimProofCheck,
   sessionFor,
+  pinSession,
+  SessionRateLimited,
   type BetaLimits,
 } from './beta.js';
 import { testCopyFor } from './host-policy.js';
@@ -713,7 +715,10 @@ export class RunnerServer {
       claimOwner: (runId) => {
         if (this.beta) {
           const me = currentSessionId();
-          if (me) this.runOwners.set(runId, me);
+          if (me) {
+            this.runOwners.set(runId, me);
+            pinSession(me);
+          }
         }
       },
       isMine: (runId) => this.isMine(runId),
@@ -888,7 +893,14 @@ export class RunnerServer {
 
           if (this.beta) {
             const proto = req.headers['x-forwarded-proto'];
-            enterSession(sessionFor(req, res, (Array.isArray(proto) ? proto[0] : proto)?.includes('https') ?? false));
+            try {
+              enterSession(sessionFor(req, res, (Array.isArray(proto) ? proto[0] : proto)?.includes('https') ?? false));
+            } catch (err) {
+              if (!(err instanceof SessionRateLimited)) throw err;
+              res.setHeader('Retry-After', '600');
+              this.sendJson(res, 429, { error: err.message, code: 'ERR_BETA_LIMIT' });
+              return;
+            }
             if (this.closedInBeta(req.method, pathname)) {
               this.sendJson(res, 403, {
                 error: 'This is closed on the shared beta copy, so testers don’t change each other’s check-ups.',
@@ -2375,7 +2387,7 @@ export class RunnerServer {
     const summaryFile = path.join(dir, 'summary.json');
     const summary = JSON.parse(await fs.readFile(summaryFile, 'utf8').catch(() => 'null')) as RunSummary | null;
     if (!summary) return;
-    const verdict = releaseVerdict(report.findings);
+    const verdict = releaseVerdict(report.findings, undefined, report.grades, report.coverage);
     await fs
       .writeFile(
         summaryFile,

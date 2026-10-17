@@ -2,8 +2,11 @@
 // and the one in the repo can't drift apart.
 import template from '../../../../templates/qa-check.yml?raw';
 
-/** Pinned release tag of the QA Tool the workflow gets. Bump with the version; a test guards it. */
-export const TOOL_REF = 'v0.1.0';
+/**
+ * Ref of the QA Tool the workflow gets. `main` until the release tag exists: tag v0.1.0 at release,
+ * then set this to the tag (a test guards that it matches the root version). Generated files pin it.
+ */
+export const TOOL_REF = 'main';
 
 export { ONLINE_APP_URL } from './onlineUrl';
 

@@ -10,18 +10,19 @@ describe('workflow template', () => {
     const out = workflowFor('https://x.test');
     expect(out).not.toContain('__QA_TOOL_REF__');
     expect(out).not.toContain('__DEFAULT_URL__');
-    expect(out).toContain('ref: v0.1.0');
+    expect(out).toContain('ref: main');
+    expect(out).not.toContain('v0.1.0');
     expect(out).toContain("default: 'https://x.test'");
   });
 
-  it('ref is not a branch name', () => {
-    expect(TOOL_REF).toMatch(/^v\d+\.\d+\.\d+$/);
-    expect(workflowFor('https://x.test')).not.toContain('ref: main');
+  it('ref is main or a release tag, never a made-up tag', () => {
+    expect(TOOL_REF === 'main' || /^v\d+\.\d+\.\d+$/.test(TOOL_REF)).toBe(true);
+    expect(workflowFor('https://x.test')).toContain(`ref: ${TOOL_REF}`);
   });
 
-  it('ref equals root package.json version', () => {
+  it('a release tag, once set, equals the root package.json version', () => {
     const { version } = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as { version: string };
-    expect(TOOL_REF).toBe(`v${version}`);
+    if (TOOL_REF !== 'main') expect(TOOL_REF).toBe(`v${version}`);
   });
 
   it('url quote is escaped', () => {

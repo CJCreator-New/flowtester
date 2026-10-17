@@ -48,3 +48,7 @@ Amendment, 2026-10-07: on this shared copy a Test Copy needs a Verified Domain p
 ## Amendment, 2026-10-07: usage limits on the online copy
 
 The online copy now limits how many check-ups and comparisons can be started: per visitor session (default 5) and for the whole copy (default 40), each per UTC day, set by `RUNNER_BETA_RUNS_PER_VISITOR` and `RUNNER_BETA_RUNS_PER_DAY`. Over a limit the start answers 429 `ERR_BETA_LIMIT`. Counts are in memory, so a restart resets them. A visitor who clears their cookie gets a fresh visitor count (and loses their AI key); the daily cap is the backstop. A persistent store and a second host are out of scope.
+
+## Amendment, 2026-10-17: the online copy needs an access token
+
+The runner refuses to start on a non-loopback host (such as `0.0.0.0` in Docker and on Render) without `RUNNER_ACCESS_TOKEN`. On Render the token is set in the dashboard (`sync: false`), and testers open the copy once as `/?access=<key>`. Beta also shuts the writes that change what every tester sees (spec overrides, default screen sizes, triage, accept-judgement, the shared AI model choice), limits new sessions per client address, and never evicts a session that owns a run, a plan or a sign-in. CORS accepts only this server's own origin and the exact origins in `RUNNER_ALLOWED_ORIGINS`.

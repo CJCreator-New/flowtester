@@ -121,4 +121,33 @@ describe('AI Visual and Copy Review (visual-review.ts)', () => {
     expect(result.reviewedCount).toBe(1);
     expect(result.remainingScreens).toEqual([]);
   });
+
+  it('clamps AI severity to Minor or Suggestion and marks every finding advisory', async () => {
+    const provider: AIProvider = {
+      providerType: 'mock',
+      generateText: async () =>
+        JSON.stringify({
+          issues: [
+            { breakpoint: '375px', what: 'Broken layout', why: 'x', suggestedImprovement: 'y', severity: 'Blocker' },
+          ],
+        }),
+    };
+    const result = await reviewer.reviewScreens([mockScreens[0]], provider, { maxCalls: 5 });
+    expect(result.findings.length).toBeGreaterThan(0);
+    for (const f of result.findings) {
+      expect(['Minor', 'Suggestion']).toContain(f.severity);
+      expect(f.advisory).toBe(true);
+    }
+  });
+
+  it('does not let advisory AI findings change the verdict', async () => {
+    const { releaseVerdict } = await import('@qa/types');
+    const ai = {
+      severity: 'Blocker' as const,
+      checker: 'ai-review' as const,
+      advisory: true,
+      title: '[AI Review] Looks odd',
+    };
+    expect(releaseVerdict([ai]).ready).toBe(true);
+  });
 });

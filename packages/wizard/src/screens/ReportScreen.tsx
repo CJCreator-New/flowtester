@@ -174,8 +174,8 @@ export function Report({
   const tokens = Object.entries(report.aiUsage || {});
   const evaluatedGate = useMemo(() => {
     const gate = getStoredReleaseGates();
-    return releaseVerdict(report.findings || [], gate, report.grades);
-  }, [report.findings, report.grades]);
+    return releaseVerdict(report.findings || [], gate, report.grades, report.coverage);
+  }, [report.findings, report.grades, report.coverage]);
 
   useEffect(() => {
     const handleHash = () => {
@@ -702,7 +702,7 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
       <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {ASPECTS.map((aspect) => {
           const data = report.grades!.aspects[aspect];
-          const checked = data && data.checked !== false;
+          const checked = data && data.checked !== false && data.grade !== null;
           const sub = aspect === 'Findable' ? data?.subBreakdown : undefined;
           const problems = checked ? groupProblems(report.findings.filter((f) => data.findings.includes(f.id))) : null;
           const problemCount = problems
@@ -722,7 +722,7 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
                 </span>
                 {checked ? (
                   <span
-                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-control border-2 text-2xl font-bold ${gradeClasses(data.grade)}`}
+                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-control border-2 text-2xl font-bold ${gradeClasses(data.grade ?? 'F')}`}
                   >
                     <span className="sr-only">Grade </span>
                     {data.grade}

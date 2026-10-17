@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { Breakpoint, Finding, FindingSeverity, MarketingCheckResult, MarketingReview } from '@qa/types';
+import { couldNotVerifyFinding } from './could-not-verify.js';
 
 export interface MarketingContext {
   testCaseId?: string;
@@ -268,7 +269,7 @@ export function marketingReview(log: MarketingLog): MarketingReview | undefined 
 export class MarketingChecker {
   async checkPage(page: Page, context: MarketingContext): Promise<Finding[]> {
     const details = await this.collectDetails(page);
-    if (!details) return [];
+    if (!details) return [couldNotVerifyFinding('seo', 'marketing basics', context, 'MKT')];
 
     const isHome = isHomePath(context.urlPath, context.baseUrl);
     if (context.log) {

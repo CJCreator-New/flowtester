@@ -8,7 +8,7 @@ import http from 'http';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { RunnerServer } from '../src/server.js';
-import { refusedTarget, claimBetaRun, betaLimitsFromEnv, resetBetaUsage, sessionFor } from '../src/beta.js';
+import { refusedTarget, claimBetaRun, betaLimitsFromEnv, resetBetaUsage, sessionFor, pinSession } from '../src/beta.js';
 import type { OpenRouterClient } from '@qa/core';
 
 const PORT = 3571;
@@ -214,11 +214,39 @@ describe('beta sessions: lifetime and size stay as they were', () => {
     const ids: string[] = [];
     for (let i = 0; i < 51; i++) {
       vi.setSystemTime(start + i * 1000);
-      ids.push(visit().id);
+      ids.push(visit(undefined, `198.51.100.${i + 1}`).id);
     }
     vi.setSystemTime(start + 60_000);
     for (const id of ids.slice(1)) expect(visit(`qa_session=${id}`).setCookie, id).toEqual([]);
     expect(visit(`qa_session=${ids[0]}`).setCookie[0]).toContain('qa_session=');
+  });
+
+  it('beta sessions: one address cannot make sessions faster than the limit, others are not affected', () => {
+    vi.useFakeTimers();
+    const start = Date.parse('2032-01-01T00:00:00Z');
+    vi.setSystemTime(start);
+    for (let i = 0; i < 20; i++) visit(undefined, '192.0.2.50');
+    expect(() => visit(undefined, '192.0.2.50')).toThrow(/Too many new sessions/);
+    expect(() => visit(undefined, '192.0.2.51')).not.toThrow();
+    // A visitor who already has a session is not counted again.
+    const kept = visit(undefined, '192.0.2.52');
+    expect(() => visit(`qa_session=${kept.id}`, '192.0.2.50')).not.toThrow();
+    vi.setSystemTime(start + 11 * 60_000);
+    expect(() => visit(undefined, '192.0.2.50')).not.toThrow();
+  });
+
+  it('beta sessions: the cap never evicts a session that owns a run or a sign-in', () => {
+    vi.useFakeTimers();
+    const start = Date.parse('2033-01-01T00:00:00Z');
+    vi.setSystemTime(start);
+    const owner = visit(undefined, '203.0.113.200');
+    pinSession(owner.id);
+    for (let i = 1; i <= 55; i++) {
+      vi.setSystemTime(start + i * 1000);
+      visit(undefined, `198.51.100.${i}`);
+    }
+    vi.setSystemTime(start + 120_000);
+    expect(visit(`qa_session=${owner.id}`, '203.0.113.200').setCookie).toEqual([]);
   });
 
   it('beta sessions: a session unseen for 24 hours is forgotten', () => {

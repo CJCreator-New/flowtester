@@ -15,6 +15,9 @@ Demo review: Core 1 (verdict and gates), Core 2 (coverage and grade of unchecked
 - `packages/core/src/reporter.ts` and the HTML report: a "What this did not check" section, listing skipped tests and areas not checked (ADR 0018).
 - Coverage passed into the verdict: "Not checked" counts appear in the verdict text.
 
+## Carried over from T-33
+- T-33 reports a check that could not run as a `could-not-verify` Suggestion finding (`packages/checkers/src/could-not-verify.ts`). Count those under "Not checked" for the area, not as findings that lower the grade or pass silently. Check the verdict and report agree.
+
 ## Out of scope
 Wizard copy (T-31). Plan approval (T-32).
 

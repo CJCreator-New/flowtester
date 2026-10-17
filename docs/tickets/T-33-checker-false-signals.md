@@ -35,4 +35,4 @@ Uses T-30's `Not checked` counts. Can be built in parallel.
 `pnpm exec vitest run packages/checkers packages/core/tests/visual-review.test.ts packages/core/tests/finding-groups.test.ts`
 
 ## Status
-todo
+built

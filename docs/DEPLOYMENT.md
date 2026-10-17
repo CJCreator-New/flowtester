@@ -41,6 +41,8 @@ lockfile or only the Dockerfile fails this check. To upgrade, change the `playwr
 Local build: `docker build -f packages/runner/Dockerfile -t qa-check-up .`
 Run: `docker run -p 3001:3001 -e RUNNER_ACCESS_TOKEN=<key> -v qa-data:/data qa-check-up`
 
+The image binds `0.0.0.0`, so `RUNNER_ACCESS_TOKEN` is required: the runner exits at start without it. The same holds on Render: set `RUNNER_ACCESS_TOKEN` in the dashboard (`render.yaml` lists it with `sync: false`), then open the copy once as `https://<host>/?access=<key>` to set the cookie.
+
 ## Release checklist
 
 - [ ] CI green on the PR; `pnpm test` and `pnpm build` pass locally

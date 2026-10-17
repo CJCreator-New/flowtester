@@ -292,4 +292,20 @@ describe('SecurityChecker', () => {
       expect(findings).toHaveLength(0);
     });
   });
+
+  it('passes the main response headers to the HSTS and nosniff checks', async () => {
+    const mockPage = {
+      url: () => 'https://example.com/',
+      evaluate: async () => [],
+      context: () => ({ cookies: async () => [] }),
+    } as unknown as Page;
+    const findings = await checker.checkPage(mockPage, {
+      role: 'visitor',
+      breakpoint: '1440px',
+      urlPath: '/',
+      baseUrl: 'https://example.com/',
+      responseHeaders: { 'content-type': 'text/html' },
+    });
+    expect(findings.some((f) => f.title.includes('X-Content-Type-Options'))).toBe(true);
+  });
 });

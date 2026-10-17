@@ -1328,13 +1328,16 @@ export class FlowTestOrchestrator {
               status === 'Skipped'
                 ? undefined
                 : checksRun(keptFindings, {
-              ux: !lightChecks,
-              pageLevel: pageLevelChecks,
-              search: searchHere && options.searchChecks !== false,
-              spec: !sentData && !openingFailed && Object.keys(testCase.expectations || {}).some((k) => k !== 'origin'),
-              permissions: !!permChecker,
-              design: (!!designTokens && pageLevelChecks) || designFindings.length > 0,
-            }),
+                    ux: !lightChecks,
+                    pageLevel: pageLevelChecks,
+                    search: searchHere && options.searchChecks !== false,
+                    spec:
+                      !sentData &&
+                      !openingFailed &&
+                      Object.keys(testCase.expectations || {}).some((k) => k !== 'origin'),
+                    permissions: !!permChecker,
+                    design: (!!designTokens && pageLevelChecks) || designFindings.length > 0,
+                  }),
           };
         } catch (fatalErr: unknown) {
           // Stopping isn't a failure of the site: nothing is recorded, and the run ends.
@@ -1451,7 +1454,7 @@ export class FlowTestOrchestrator {
       skipped,
       couldNotVerify,
       flakyFlows: results.filter((r) => r.retry?.status === 'FLAKY_PASSED').length,
-      completionRate: totalTestPoints > 0 ? (totalTestPoints / totalTestPoints) * 100 : 100,
+      completionRate: totalTestPoints > 0 ? (passed / totalTestPoints) * 100 : 0,
     };
 
     // Apply Suppressions & Compute Delta

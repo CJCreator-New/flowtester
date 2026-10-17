@@ -222,6 +222,33 @@ describe('On the shared copy, a visitor sees only their own check-up', () => {
     expect((await call('POST', '/api/runner/baselines/accept', bob.cookie, {})).status).toBe(403);
   });
 
+  it('refuses evidence of another visitor’s run reached through a ".." in the path', async () => {
+    for (const rawPath of [
+      '/api/evidence/runs/run-1002/..%2Frun-1001/evidence/shot.png',
+      '/api/evidence/runs/run-1002/%2e%2e/run-1001/evidence/shot.png',
+      '/api/evidence/runs/run-1002/..%5Crun-1001/evidence/shot.png',
+    ]) {
+      const answer = await call('GET', rawPath, bob.cookie);
+      expect(answer.status, rawPath).toBe(404);
+      expect(answer.body).not.toContain('png');
+    }
+    expect((await call('GET', '/api/evidence/runs/run-1002/evidence/shot.png', bob.cookie)).status).toBe(200);
+  });
+
+  it('shuts the writes that change what every tester sees', async () => {
+    const writes: Array<[string, string]> = [
+      ['POST', '/api/runner/spec-override'],
+      ['POST', '/api/settings/defaults'],
+      ['POST', '/api/runs/run-1002/triage'],
+      ['POST', '/api/runs/run-1002/accept-judgement'],
+    ];
+    for (const [method, route] of writes) {
+      const answer = await call(method, route, bob.cookie, {});
+      expect(answer.status, route).toBe(403);
+      expect(JSON.parse(answer.body).code, route).toBe('ERR_BETA');
+    }
+  });
+
   it('keeps what is remembered about a site to the visitor who checked it', async () => {
     // Alice's memory of a site is in her own folder, where only her requests look.
     const dir = path.join(scratch, 'data', 'sessions', alice.id, 'sites');

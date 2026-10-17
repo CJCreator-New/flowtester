@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { Finding, ReleaseReport, RunCoverage } from '@qa/types';
 import { releaseVerdict } from '@qa/types';
+import { notChecked } from './not-checked.js';
 import { AGENTS_SNIPPET, buildFixThese, buildKnownFindings, withFindingsContract } from './findings-contract.js';
 import { buildIssuesModel, documentedItemsLine, renderIssuesMarkdown, rolesNotTestedLines } from './issues-document.js';
 import { renderIssuesHtml } from './issues-html.js';
@@ -97,7 +98,7 @@ export class ReportGenerator {
     lines.push(``);
 
     // Summary banner: the same verdict as the screen and report.html.
-    const verdict = releaseVerdict(findings, undefined, report.grades);
+    const verdict = releaseVerdict(findings, undefined, report.grades, report.coverage);
     lines.push(verdict.ready ? `> [!TIP]` : verdict.counts.Blocker > 0 ? `> [!CAUTION]` : `> [!WARNING]`);
     lines.push(
       `> **${verdict.stamp}**: ${verdict.reason}${
@@ -176,7 +177,7 @@ export class ReportGenerator {
     // Coverage statistics
     lines.push(`## 📊 Test Coverage & Execution Summary`);
     lines.push(``);
-    lines.push(`| Total Test Points | Passed | Failed | Blocked | Skipped | Could not verify | Completion Rate |`);
+    lines.push(`| Total Test Points | Passed | Failed | Blocked | Skipped | Could not verify | Passed |`);
     lines.push(`| :---: | :---: | :---: | :---: | :---: | :---: | :---: |`);
     lines.push(
       `| **${coverage.totalTestPoints}** | ✅ ${coverage.passed} | ❌ ${coverage.failed} | ⛔ ${coverage.blocked} | ⏭️ ${coverage.skipped} | ❓ ${coverage.couldNotVerify} | **${coverage.completionRate.toFixed(1)}%** |`
@@ -188,6 +189,18 @@ export class ReportGenerator {
       );
       lines.push(``);
     }
+
+    // What this check-up did not look at (ADR 0018). Always present, so a clean run says so.
+    const nc = notChecked(report);
+    lines.push(`## What this did not check`);
+    lines.push(``);
+    if (nc.empty) {
+      lines.push(`Everything in the plan ran, and every area was checked.`);
+    } else {
+      if (nc.areas.length > 0) lines.push(`Not checked at all: ${nc.areas.join(', ')}.`, ``);
+      for (const t of nc.tests) lines.push(`- **${t.name}**: ${t.reason}`);
+    }
+    lines.push(``);
 
     // Requirement Traceability Matrix
     if (report.traceability && report.traceability.length > 0) {

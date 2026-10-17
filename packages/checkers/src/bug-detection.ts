@@ -101,6 +101,7 @@ export class BugDetectionChecker {
               ? 'Backend API error (5xx). Check server endpoint logs and database connections.'
               : 'Client request failure (4xx). Check request payload, authentication headers, or route.',
           thirdParty: isThirdParty,
+          is5xx,
         });
       }
 

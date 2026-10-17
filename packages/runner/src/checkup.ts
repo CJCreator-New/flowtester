@@ -30,7 +30,7 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { isActiveFinding, releaseVerdict, isSupportedContextName, summarizeDocument, parseHeaderText } from '@qa/types';
+import { DEFAULT_RELEASE_GATES, isActiveFinding, releaseVerdict, isSupportedContextName, summarizeDocument, parseHeaderText } from '@qa/types';
 import { githubAnnotations, docxToMarkdown } from '@qa/core';
 import type { AIProviderType, Finding, ReleaseReport, SiteAspectGrades, RunStartBody } from '@qa/types';
 import { createCheckupSession, createCheckupRun, resolveAuthorization } from './session/checkup-session.js';
@@ -359,22 +359,13 @@ export function exitCodeFor(findings: Finding[], failOn: FailOn, grades?: SiteAs
   if (failOn === 'blocker') {
     return active(findings).some((f) => f.severity === 'Blocker') ? 1 : 0;
   }
-  // Default 'standard' mirrors Standard Gate per PRD FR-10.2:
-  // Exit 0 if 0 Blockers AND all 6 quality areas score >= C (score >= 60); Exit 1 otherwise.
-  const hasBlocker = active(findings).some((f) => f.severity === 'Blocker');
-  if (hasBlocker) return 1;
-  if (grades) {
-    const checked = Object.values(grades.aspects).filter((a) => a.checked !== false);
-    if (checked.some((a) => a.score < 60 || a.grade === 'D' || a.grade === 'F')) {
-      return 1;
-    }
-  }
-  return 0;
+  // 'standard': the same rule as the stamp (PRD FR-8.2, FR-10.2), from the one function that defines it.
+  return releaseVerdict(findings, DEFAULT_RELEASE_GATES.standard, grades).ready ? 0 : 1;
 }
 
 /** Markdown for the Actions job summary page. */
 export function summaryMarkdown(report: ReleaseReport, args: Pick<CheckupArgs, 'url' | 'failOn'>): string {
-  const verdict = releaseVerdict(report.findings, undefined, report.grades);
+  const verdict = releaseVerdict(report.findings, undefined, report.grades, report.coverage);
   const findings = active(report.findings);
   const bySeverity = (s: string) => findings.filter((f) => f.severity === s).length;
   const lines = [
@@ -484,7 +475,7 @@ export async function runCheckup(args: CheckupArgs): Promise<number> {
     if (!report) {
       throw new Error('No completed run yet');
     }
-    const verdict = releaseVerdict(report.findings, undefined, report.grades);
+    const verdict = releaseVerdict(report.findings, undefined, report.grades, report.coverage);
     console.log(`\n[checkup] ${verdict.stamp}: ${verdict.reason}`);
     console.log(`[checkup] Report written to ${args.outputDir}`);
 

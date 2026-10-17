@@ -97,7 +97,7 @@ export class DefaultReportStore implements ReportStore {
     const dir = this.dirFor(report.runId);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, 'report.json'), JSON.stringify(report), 'utf8');
-    const verdict = releaseVerdict(report.findings);
+    const verdict = releaseVerdict(report.findings, undefined, report.grades, report.coverage);
     let host = siteHost;
     try {
       host ??= new URL(typedTargetUrl).host;

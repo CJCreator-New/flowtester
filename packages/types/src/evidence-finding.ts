@@ -87,6 +87,8 @@ export interface Finding {
   triageReason?: string;
   /** True when this finding originated from a request/resource on a different origin than the page under test (e.g. third-party analytics, fonts, CDNs) rather than a first-party defect. */
   thirdParty?: boolean;
+  /** True when the finding is a request that answered with an HTTP 5xx status. Set by the checker, so scoring never reads the title. */
+  is5xx?: boolean;
   /**
    * An AI guess the site didn't match. Shown as "Could not verify" (never as a defect) until
    * someone confirms or rejects the rule behind it.
