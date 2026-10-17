@@ -38,3 +38,7 @@ T-30 (ratio and rule numbers), T-37 (labels). Doc edits can start now; re-check 
 
 ## Status
 todo
+
+## Carried over from T-34
+- `dev:wizard` (Vite on 3002) needs `RUNNER_ALLOWED_ORIGINS` now that other localhost ports are refused. Document it in `docs/CONFIGURATION.md` and `.env.example`.
+- The Docker image now needs `RUNNER_ACCESS_TOKEN` (the runner refuses 0.0.0.0 without one). Document the `docker run -e` line in `docs/DEPLOYMENT.md`.

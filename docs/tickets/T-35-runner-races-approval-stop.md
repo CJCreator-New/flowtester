@@ -42,3 +42,6 @@ T-34 (both edit `server.ts`).
 
 ## Status
 todo
+
+## Carried over from T-34 (decision needed)
+- Beta AI settings POST still saves the tester's own key but skips the shared model-choice file. Keep as is, unless the owner decides testers must not enter keys at all. Record the decision here.
