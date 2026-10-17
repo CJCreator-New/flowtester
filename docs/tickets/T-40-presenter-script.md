@@ -32,3 +32,6 @@ built
 
 ## Carried over from T-37b
 - The command palette item reads "Jump to Requirements and design notes", but its section is now "Product context and design notes". Make the palette item match the section name, and use the section name in the script.
+
+## Verification note
+- The fixture server now sends CSP, nosniff, X-Frame-Options and Referrer-Policy (`fixtures/test-app/server.js`, ~33-48), so the invoice case passes. This changes the demo target: check that `docs/DEMO.md` and `fixtures/benchmarks/fixture.json` still list the right expected findings, and that the planted defects are unchanged.
