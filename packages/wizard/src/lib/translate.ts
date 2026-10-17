@@ -158,7 +158,7 @@ export function plainFailure(error: unknown, mode: RunMode): string {
     return 'Your site took too long to respond, so the check stopped. Try again when it’s less busy.';
   }
   if (/abort|stopped by user|was stopped/i.test(text)) {
-    return 'The run was stopped.';
+    return 'The check-up was stopped.';
   }
   return 'Something went wrong and the check stopped before it finished. Try again. If it happens again, ask whoever set up this tool to look at its terminal for details.';
 }
@@ -179,6 +179,20 @@ export function timeLeft(seconds?: number): string | null {
 }
 
 const SERIOUS = new Set(['Blocker', 'Major']);
+
+const SITE_TYPE_NAMES: Record<string, string> = {
+  shop: 'Online shop',
+  SaaS: 'Web app',
+  content: 'Content site',
+  booking: 'Booking site',
+  app: 'App',
+  other: 'Other',
+};
+
+/** A site type as a reader sees it, such as "Online shop" for shop. Unknown types pass through. */
+export function siteTypeName(type: string): string {
+  return SITE_TYPE_NAMES[type] ?? type;
+}
 
 /** Applies one event to the feed. Events the wizard doesn't know get a generic line, never a blank or a crash. */
 export function reduceFeed(state: FeedState, event: RunnerEvent, mode: RunMode): FeedState {
@@ -214,7 +228,7 @@ export function reduceFeed(state: FeedState, event: RunnerEvent, mode: RunMode):
       return milestone(
         flows > 0
           ? `Found ${flows} ${flows === 1 ? 'thing' : 'things'} people can do on your site. Planning how to test ${flows === 1 ? 'it' : 'them'}…`
-          : 'Couldn’t map out your site in detail, so a basic check will run instead.'
+          : 'Couldn’t map out your site in detail, so a simpler plan will be used instead.'
       );
     }
 
@@ -313,8 +327,8 @@ export function reduceFeed(state: FeedState, event: RunnerEvent, mode: RunMode):
       return {
         ...state,
         status: 'failed',
-        current: 'Run was stopped by user.',
-        failure: 'Run was stopped by user.',
+        current: 'The check-up was stopped.',
+        failure: 'The check-up was stopped.',
         planKept: !!event.planKept,
       };
 

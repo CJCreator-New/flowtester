@@ -214,5 +214,6 @@ describe('Discovery Agent headers, handoff, and session awareness (T-113)', () =
         expect(r.redirectChain.length).toBeLessThanOrEqual(5);
       }
     }
-  }, 60000);
+    // Crawls up to 500 routes: about a minute alone, more on a shared runner.
+  }, 180000);
 });

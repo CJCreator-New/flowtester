@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isCheckRoute, matchRoute, PATHS } from '../src/lib/router';
+import { isCheckRoute, matchRoute, PATHS, readsAddressParam } from '../src/lib/router';
 
 describe('every screen has an address', () => {
   it.each([
@@ -35,5 +35,12 @@ describe('every screen has an address', () => {
     expect(isCheckRoute(matchRoute('/reports/run-1'))).toBe(false);
     expect(isCheckRoute(matchRoute('/'))).toBe(false);
     expect(isCheckRoute(matchRoute('/check'))).toBe(false);
+  });
+
+  it('reads the landing page address on /check as well as the check-up screens', () => {
+    expect(readsAddressParam(matchRoute('/check'))).toBe(true);
+    expect(readsAddressParam(matchRoute('/check/plan'))).toBe(true);
+    expect(readsAddressParam(matchRoute('/'))).toBe(false);
+    expect(readsAddressParam(matchRoute('/reports'))).toBe(false);
   });
 });

@@ -35,8 +35,8 @@ const PRIMARY: NavItem[] = [
   { to: PATHS.settings, label: 'Settings', names: ['settings'] },
 ];
 const MORE: NavItem[] = [
-  { to: PATHS.baselines, label: 'Baselines', names: ['baselines'] },
-  { to: PATHS.benchmark, label: 'Compare sites', names: ['benchmark'] },
+  { to: PATHS.baselines, label: 'Visual Baselines', names: ['baselines'] },
+  { to: PATHS.benchmark, label: 'Compare with another site', names: ['benchmark'] },
 ];
 /** Check-up screens show the StepBar instead of a breadcrumb row. */
 const NO_CRUMBS: Route['name'][] = ['new', 'scan', 'plan', 'testing', 'report'];
@@ -261,9 +261,9 @@ export function TopBar({
                   : route.name === 'report'
                     ? 'Report'
                     : route.name === 'baselines'
-                      ? 'Baselines'
+                      ? 'Visual Baselines'
                       : route.name === 'benchmark'
-                        ? 'Compare sites'
+                        ? 'Compare with another site'
                         : route.name === 'settings'
                           ? 'Settings'
                           : route.name === 'scan'
@@ -272,7 +272,7 @@ export function TopBar({
                               ? 'Testing'
                               : route.name === 'plan'
                                 ? 'Plan review'
-                                : 'Page'}
+                                : 'Visibility'}
             </span>
           </nav>
         </div>

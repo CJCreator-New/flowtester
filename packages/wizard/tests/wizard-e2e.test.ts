@@ -4,7 +4,7 @@
  * OpenRouter (key check + model list) and the AI model.
  *
  * The tests run in order and follow one site through: the first visit, a scan, the plan, a failed
- * and a stopped test run, the report, Test again, Past check-ups, Go deeper and Settings. Every
+ * and a stopped test run, the report, New check-up of this site, Past check-ups, Go deeper and Settings. Every
  * screen is read for words that must not reach people, and opened at phone size while it exists.
  * Set WIZARD_SCREENSHOTS=<dir> to also save a screenshot of every screen.
  */
@@ -288,7 +288,7 @@ describe('Release check-up end to end, on the one server', () => {
     ).toBe(false);
     await page.locator('summary', { hasText: 'More options' }).click();
     await page.getByText('Add notes, design rules or journeys').click();
-    await page.getByLabel('Specs', { exact: true }).fill(SPECS);
+    await page.getByLabel('Product Context', { exact: true }).fill(SPECS);
     // This copy isn't the shared one, so there is no shared-copy warning.
     expect(await page.getByText('This is a shared copy').count()).toBe(0);
     // No key yet doesn't stop a first scan: fixed rules write the plan, and the key is offered as an upgrade.
@@ -321,7 +321,7 @@ describe('Release check-up end to end, on the one server', () => {
 
     // Nothing typed was lost.
     expect(await address.inputValue()).toBe(fixtureHost);
-    expect(await page.getByLabel('Specs', { exact: true }).inputValue()).toBe(SPECS);
+    expect(await page.getByLabel('Product Context', { exact: true }).inputValue()).toBe(SPECS);
 
     await owner.check();
     await expect
@@ -379,9 +379,7 @@ describe('Release check-up end to end, on the one server', () => {
     expect(runRequests[0].skipReview).toBeFalsy();
     expect(runRequests[0].productContext).toContain('# Specs\n\n# Invoices\n- Amount must be positive');
     // The specs pasted before the key reached the plan.
-    expect(await page.getByLabel('Specs, requirements or user stories').inputValue()).toContain(
-      'Amount must be positive'
-    );
+    expect(await page.getByLabel('Product Context', { exact: true }).inputValue()).toContain('Amount must be positive');
 
     // The complete plan: every page found, every link, every journey.
     const plan = await api<ReviewPlan>('/api/runner/plan');
@@ -420,7 +418,7 @@ describe('Release check-up end to end, on the one server', () => {
     await page.getByRole('group', { name: 'How to show the map' }).waitFor();
     await page.getByRole('tab', { name: 'Full plan' }).click();
     // On a phone the approval bar is one line with a short button.
-    await checkPhone('/check/plan', 'plan', { role: 'button', name: 'Approve and test' });
+    await checkPhone('/check/plan', 'plan', { role: 'button', name: 'Approve the plan and start testing' });
 
     // Intents: chips filter the plan view; a switch turns a whole Intent off and the plan remembers it.
     const chips = page.getByTestId('intent-chips');
@@ -710,9 +708,9 @@ describe('Release check-up end to end, on the one server', () => {
     await checkPhone(`/reports/${firstRunId}`, 'report', { role: 'button', name: 'Download the report' });
   }, 180000);
 
-  it('Test again reuses the approved plan: nothing changed, so it tests at once', async () => {
+  it('New check-up of this site reuses the approved plan: nothing changed, so it tests at once', async () => {
     runRequests.length = 0;
-    await page.getByRole('button', { name: 'Test again' }).click();
+    await page.getByRole('button', { name: 'New check-up of this site' }).click();
     await expect.poll(() => runRequests.length, { timeout: 30000 }).toBe(1);
     expect(runRequests[0]).toMatchObject({ targetUrl: fixtureUrl, owner: true, testAgain: true });
     // The first check-up's specs go along.

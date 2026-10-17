@@ -134,4 +134,14 @@ describe('EvidenceCollector', () => {
     expect(first.consoleErrors.map((c) => c.text)).toEqual(['first problem']);
     expect(second.consoleErrors).toEqual([]);
   }, 30000);
+
+  it('keeps the confirmed Major when a Minor guess of the same problem is merged in', () => {
+    const merged = mergeDuplicateFindings([
+      finding({ urlPath: '/', testCaseId: 'TC-1', severity: 'Minor', needsConfirmation: true }),
+      finding({ urlPath: '/', testCaseId: 'TC-2', severity: 'Major' }),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].severity).toBe('Major');
+    expect(merged[0].needsConfirmation).toBe(false);
+  });
 });

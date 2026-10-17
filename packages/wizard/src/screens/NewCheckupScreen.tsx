@@ -72,6 +72,9 @@ export interface StartFacts {
 
 const CHECK_DELAY_MS = 600;
 
+/** The fixture app that ships with the tool: `pnpm fixture` serves it here. */
+const BUILT_IN_TEST_APP = 'http://localhost:3050';
+
 /** The runner's own site facts decide whether the address is a Test Copy; the person can mark a live-looking one. */
 function testCopyOf(facts: SiteFacts, form: CheckupForm): { natural: boolean; showMark: boolean; isTestCopy: boolean } {
   const natural = !!facts.testCopy && !facts.remembered?.markedTestCopy;
@@ -92,6 +95,7 @@ export function NewCheckupScreen({
   onResumePlan,
   shared = false,
   busy = false,
+  onRetryAi,
 }: {
   /** null while it's being read. */
   ai: AiSetup | null;
@@ -111,6 +115,8 @@ export function NewCheckupScreen({
   shared?: boolean;
   /** Someone else's check-up is running on the shared copy, so a new one has to wait. */
   busy?: boolean;
+  /** Asks the AI setup again, after it failed to load. */
+  onRetryAi?: () => void;
 }) {
   useDocumentTitle('New check-up');
   const [check, setCheck] = useState<AddressCheck>({ state: 'empty' });
@@ -238,6 +244,22 @@ export function NewCheckupScreen({
     !needsProdConfirmation &&
     !blockedHint &&
     headerErrors.length === 0;
+  // Why Start is off, in words: a disabled button alone never says.
+  const startOffReason: string | null = starting
+    ? null
+    : ai === null
+      ? 'Waiting for Release check-up to answer. Start is on as soon as it does.'
+      : check.state === 'empty'
+        ? 'Enter the address of the site first.'
+        : check.state === 'checking'
+          ? 'Checking the address…'
+          : check.state !== 'ok'
+            ? 'Start is off until the address can be reached.'
+            : needsProdConfirmation
+              ? 'Say whether this is a test copy first.'
+              : headerErrors.length > 0
+                ? 'Fix the custom headers first.'
+                : null;
   const start = () => {
     if (check.state !== 'ok' || !kind || !canStart) return;
     onStart({
@@ -350,6 +372,26 @@ export function NewCheckupScreen({
           aria-describedby="url-status"
           aria-invalid={check.state === 'invalid' || check.state === 'unreachable'}
         />
+        {!form.address.trim() && (
+          <p className="mt-2 text-sm text-ink-soft">
+            No site handy?{' '}
+            <button
+              type="button"
+              className="btn-link text-sm"
+              onClick={() =>
+                onFormChange((f) =>
+                  withAddress(f, BUILT_IN_TEST_APP, (a) => {
+                    const n = normalizeUrl(a);
+                    return n.ok ? hostOf(n.url) : null;
+                  })
+                )
+              }
+            >
+              Try the built-in test app
+            </button>{' '}
+            (start it first with <code className="font-mono">pnpm fixture</code>).
+          </p>
+        )}
         <div id="url-status" role="status" className="mt-2 min-h-[1.6em] text-sm">
           {check.state === 'checking' && <Spinner label="Checking the address…" />}
           {check.state === 'invalid' && <span className="text-fail font-medium">{check.reason}</span>}
@@ -415,9 +457,9 @@ export function NewCheckupScreen({
                 <button
                   type="button"
                   className="min-h-[44px] px-2 py-2.5 text-xs text-ink-soft hover:underline"
-                  onClick={() => setChoice({ owner: true, markedTestCopy: false })}
+                  onClick={() => setChoice({ owner: false, markedTestCopy: false })}
                 >
-                  Only look at it instead
+                  Only look at it instead: nothing is sent or changed
                 </button>
               </div>
             </Notice>
@@ -611,8 +653,8 @@ export function NewCheckupScreen({
                 </p>
                 <MaterialField
                   id="specs"
-                  label="Specs"
-                  hint="Requirements, user stories or acceptance criteria."
+                  label="Product Context"
+                  hint="Requirements or user stories the site must meet, as text."
                   placeholder={
                     'For example:\n- Only managers can see reports\n- A new invoice needs a client name and an amount above zero'
                   }
@@ -670,7 +712,7 @@ export function NewCheckupScreen({
                 </div>
 
                 <div>
-                  <span className="block font-semibold text-ink">Crawl pace</span>
+                  <span className="block font-semibold text-ink">Exploring speed</span>
                   <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
                     <div className="flex items-center gap-2">
                       <label htmlFor="crawl-concurrency">Pages at once</label>
@@ -739,7 +781,16 @@ export function NewCheckupScreen({
           <AiEstimateLine url={check.url} maxPages={form.maxPages} form={form} onFormChange={onFormChange} />
         )}
 
-        {startError && <ErrorMessage>{startError}</ErrorMessage>}
+        {startError && (
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <ErrorMessage>{startError}</ErrorMessage>
+            {ai === null && onRetryAi && (
+              <button type="button" className="btn-quiet" onClick={onRetryAi}>
+                Retry
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="mt-8 flex flex-wrap items-center gap-x-4 gap-y-2">
           <button
@@ -753,6 +804,10 @@ export function NewCheckupScreen({
           {blockedHint ? (
             <p id="scan-blocked-hint" role="alert" className="text-sm font-semibold text-warn">
               {blockedHint}
+            </p>
+          ) : startOffReason ? (
+            <p id="start-hint" className="text-sm text-ink-soft">
+              {startOffReason}
             </p>
           ) : (
             <p id="start-hint" className="text-sm text-ink-soft">
@@ -775,8 +830,8 @@ export function NewCheckupScreen({
           <div className="border-t border-rule p-5">
             <p className="mb-4 text-sm text-ink-soft">
               Without it, fixed rules write the plan and you can start now. With it, the AI writes a plan that fits your
-              site. It runs on OpenRouter’s free models, so it costs nothing. You only do this once, and anything you
-              typed above is kept.
+              site. It runs on OpenRouter’s free models. What you send may be kept and used to learn (Settings
+              explains). You only do this once, and anything you typed above is kept.
             </p>
             <KeyField
               onSaved={(model) => {
@@ -934,7 +989,7 @@ function ReferenceDocuments({
   return (
     <div className="space-y-3 border-t border-rule pt-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="font-bold">Documents (Sources)</span>
+        <span className="font-bold">Product Context files</span>
         <label className="cursor-pointer text-sm font-bold text-stamp underline underline-offset-4 hover:text-stamp-dark focus-within:outline focus-within:outline-2 focus-within:outline-stamp">
           Add files
           <input
@@ -1051,7 +1106,12 @@ function AccessChoice({
     set: Partial<Pick<CheckupForm, 'owner' | 'markedTestCopy'>>;
   }> = isTestCopyHost
     ? [
-        { id: 'look', title: 'Only look at it', hint: 'Nothing is filled in, sent or changed.', set: { owner: false } },
+        {
+          id: 'look',
+          title: 'Only look at it: nothing is sent or changed',
+          hint: 'Nothing is filled in, sent or changed. Nothing is recorded about who owns it.',
+          set: { owner: false },
+        },
         {
           id: 'test',
           title: 'Test it fully: it’s my test copy',
@@ -1062,14 +1122,14 @@ function AccessChoice({
     : [
         {
           id: 'look',
-          title: 'Only look at it',
-          hint: 'Someone else’s site, or you’re not sure. Nothing is sent or changed.',
+          title: 'Only look at it: nothing is sent or changed',
+          hint: 'Someone else’s site, or you’re not sure. Nothing is recorded about who owns it.',
           set: { owner: false, markedTestCopy: false },
         },
         {
           id: 'live',
           title: 'It’s my live site: only look at it',
-          hint: 'Nothing is sent or changed on the real site.',
+          hint: 'Nothing is sent or changed on the real site. It is remembered as yours.',
           set: { owner: true, markedTestCopy: false },
         },
         {
@@ -1411,7 +1471,7 @@ function ConsentNotice({
           <span>Let me review the plan before testing starts</span>
         </label>
         <button type="button" className="btn-link mt-3 text-sm" onClick={() => onFormChange(lookOnly)}>
-          Only look at it instead
+          Only look at it instead: nothing is sent or changed
         </button>
       </Notice>
     </div>

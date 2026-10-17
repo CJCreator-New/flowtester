@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { ReleaseReport, AspectType, FindingSeverity, RankedRecommendation } from '@qa/types';
 import { groupIntoProblems, releaseVerdict } from '@qa/types';
+import { notChecked } from './not-checked.js';
 
 export interface HtmlReportOptions {
   outputDir?: string;
@@ -37,7 +38,7 @@ export async function generateSingleFileHtmlReport(
 
   // One verdict, the same as on screen: the stamp and its reason. There is no overall grade to
   // contradict it; the aspects are graded below.
-  const verdict = releaseVerdict(report.findings, undefined, report.grades);
+  const verdict = releaseVerdict(report.findings, undefined, report.grades, report.coverage);
   const gradeStyle = verdict.ready ? GRADE_COLORS.A : GRADE_COLORS.F;
   /** Problems among an area's findings, counted as the verdict counts them. */
   const problemsIn = (ids: string[]) =>
@@ -56,7 +57,7 @@ export async function generateSingleFileHtmlReport(
   const aspectCardsHtml = aspects
     .map((aspect) => {
       const data = report.grades?.aspects[aspect];
-      if (!data || data.checked === false) {
+      if (!data || data.checked === false || data.grade === null) {
         return `
         <div class="aspect-card" style="border-top: 4px solid #94A3B8;">
           <div class="aspect-header">
@@ -87,6 +88,23 @@ export async function generateSingleFileHtmlReport(
       `;
     })
     .join('');
+
+  // What this check-up did not look at (ADR 0018). Always present, so a clean run says so.
+  const nc = notChecked(report);
+  const notCheckedHtml = `
+      <section class="section card not-checked-section">
+        <h2 class="section-title">What this did not check</h2>
+        ${
+          nc.empty
+            ? '<p>Everything in the plan ran, and every area was checked.</p>'
+            : `${nc.areas.length > 0 ? `<p>Not checked at all: ${nc.areas.map(escapeHtml).join(', ')}.</p>` : ''}
+        ${
+          nc.tests.length > 0
+            ? `<ul>${nc.tests.map((t) => `<li><strong>${escapeHtml(t.name)}</strong>: ${escapeHtml(t.reason)}</li>`).join('')}</ul>`
+            : ''
+        }`
+        }
+      </section>`;
 
   // Living Spec & Documented Requirements Coverage (FR-2.6)
   let documentedItemsHtml = '';
@@ -572,6 +590,7 @@ export async function generateSingleFileHtmlReport(
       ${aspectCardsHtml}
     </div>
 
+    ${notCheckedHtml}
     ${documentedItemsHtml}
     ${historyBannerHtml}
     ${slowerHtml}

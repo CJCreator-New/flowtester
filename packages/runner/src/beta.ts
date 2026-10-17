@@ -26,6 +26,8 @@ interface Session {
   usage?: { day: string; count: number };
   /** When each address last had its Verified Domain proof fetched (ms). In memory only. */
   proofChecks?: Map<string, number>;
+  /** Owns a run or a plan: kept when the session cap is reached. */
+  pinned?: boolean;
 }
 const sessions = new Map<string, Session>();
 
@@ -37,15 +39,61 @@ function cookieValue(header: string | undefined, name: string): string | undefin
   return undefined;
 }
 
+/** A session that owns a run, a plan or a sign-in is never pushed out to make room. */
+function ownsSomething(s: Session): boolean {
+  return !!s.pinned || s.secrets.size > 0;
+}
+
+/** Marks the session as owning a run or plan, so the cap never evicts it. */
+export function pinSession(sessionId: string | undefined): void {
+  const s = sessionId ? sessions.get(sessionId) : undefined;
+  if (s) s.pinned = true;
+}
+
 function forgetOldSessions(): void {
   const cutoff = Date.now() - SESSION_HOURS * 3_600_000;
   for (const [id, s] of sessions) if (s.lastSeen < cutoff) sessions.delete(id);
-  // Over the cap, the least recently seen go first.
+  // Over the cap, the least recently seen go first, but never one that owns a run, plan or sign-in.
   const extra = sessions.size - MAX_SESSIONS;
   if (extra > 0) {
-    const oldest = [...sessions.entries()].sort((a, b) => a[1].lastSeen - b[1].lastSeen).slice(0, extra);
+    const oldest = [...sessions.entries()]
+      .filter(([, s]) => !ownsSomething(s))
+      .sort((a, b) => a[1].lastSeen - b[1].lastSeen)
+      .slice(0, extra);
     for (const [id] of oldest) sessions.delete(id);
   }
+}
+
+/** Thrown by sessionFor when one client address is making sessions faster than the limit. */
+export class SessionRateLimited extends Error {
+  constructor() {
+    super('Too many new sessions from this address. Try again in a few minutes.');
+  }
+}
+
+const NEW_SESSIONS_PER_WINDOW = 20;
+const NEW_SESSION_WINDOW_MS = 10 * 60_000;
+const newSessionTimes = new Map<string, number[]>();
+
+/** The client address: the last X-Forwarded-For entry (added by the nearest proxy) or the socket's. */
+function clientAddress(req: http.IncomingMessage): string {
+  const forwarded = req.headers?.['x-forwarded-for'];
+  const last = (Array.isArray(forwarded) ? forwarded.join(',') : forwarded)?.split(',').pop()?.trim();
+  return last || req.socket?.remoteAddress || 'unknown';
+}
+
+/** Counts one new session for the address; false when it is over the limit. */
+function claimNewSession(address: string, now: number): boolean {
+  for (const [key, times] of newSessionTimes) {
+    const recent = times.filter((t) => now - t < NEW_SESSION_WINDOW_MS);
+    if (recent.length === 0) newSessionTimes.delete(key);
+    else newSessionTimes.set(key, recent);
+  }
+  const times = newSessionTimes.get(address) ?? [];
+  if (times.length >= NEW_SESSIONS_PER_WINDOW) return false;
+  times.push(now);
+  newSessionTimes.set(address, times);
+  return true;
 }
 
 /**
@@ -57,6 +105,7 @@ export function sessionFor(req: http.IncomingMessage, res: http.ServerResponse, 
   const sent = cookieValue(req.headers.cookie, SESSION_COOKIE);
   let id = sent && sessions.has(sent) ? sent : undefined;
   if (!id) {
+    if (!claimNewSession(clientAddress(req), Date.now())) throw new SessionRateLimited();
     id = randomBytes(18).toString('base64url');
     sessions.set(id, { secrets: new Map(), lastSeen: Date.now() });
     const flags = `Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_HOURS * 3600}${secure ? '; Secure' : ''}`;
@@ -155,6 +204,7 @@ export function claimBetaRun(
 /** Test helper: forgets the day's count and every session's count. */
 export function resetBetaUsage(): void {
   dayUsage = { day: '', count: 0 };
+  newSessionTimes.clear();
   for (const s of sessions.values()) s.usage = undefined;
 }
 

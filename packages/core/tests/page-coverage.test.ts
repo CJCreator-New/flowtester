@@ -68,12 +68,14 @@ describe('page coverage: found = reached + skipped', () => {
       // Independent of the coverage arithmetic: reached is the draft site map's page count, and the
       // skipped count is every page that was queued but never opened (links found on reached pages).
       expect(coverage!.reached).toBe(draft.pages.length);
-      const reachedPaths = new Set(draft.pages.map((p) => p.urlPath));
+      // A trailing slash names the same route ('/settings' and '/settings/' are one key), so compare without it.
+      const bare = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p);
+      const reachedPaths = new Set(draft.pages.map((p) => bare(p.urlPath)));
       const linked = new Set<string>();
       for (const p of draft.pages)
-        for (const l of p.links || []) if (!l.leavesSite) linked.add(new URL(l.to, 'http://x').pathname);
+        for (const l of p.links || []) if (!l.leavesSite) linked.add(bare(new URL(l.to, 'http://x').pathname));
       const unvisited = [...linked].filter((l) => !reachedPaths.has(l));
-      const skippedPaths = new Set(coverage!.skipped.map((s) => s.urlPath));
+      const skippedPaths = new Set(coverage!.skipped.map((s) => bare(s.urlPath)));
       for (const u of unvisited) {
         expect(skippedPaths.has(u)).toBe(true);
       }

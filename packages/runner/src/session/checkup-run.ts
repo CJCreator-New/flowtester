@@ -89,7 +89,11 @@ export interface CheckupRun {
     authorization: RunAuthorization;
   }): Promise<{ runId: string; awaitingReview: boolean }>;
   /** Today's handleAbortRun. `finish: true` stops after the current stage. */
-  stop(input?: { finish?: boolean }): Promise<{ aborted: boolean; planKept?: boolean; finishing?: boolean }>;
+  stop(input?: {
+    finish?: boolean;
+    /** Throw away a plan that is waiting for review. Without it, stopping keeps the plan. */
+    discard?: boolean;
+  }): Promise<{ aborted: boolean; planKept?: boolean; finishing?: boolean }>;
   /** Resolves when the current run is over, or when the deadline passes (today's CLI poll loop). */
   waitFor(deadlineMs: number): Promise<void>;
   /** Executes testing for an approved plan or explicit spec. */
@@ -377,6 +381,18 @@ export function screensForReview(
 
 export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): CheckupRun {
   let currentRunPromise: Promise<void> | null = null;
+  /** True from the moment start() is called until it has claimed the slot (or failed). Set before any await. */
+  let starting = false;
+  let startDone: Promise<void> | null = null;
+  const runBusy = () =>
+    Object.assign(
+      new Error(
+        deps.beta
+          ? 'Someone else is running a check-up on this shared copy. Try again in a few minutes.'
+          : 'Another check-up is running. Wait for it to finish, or stop it first.'
+      ),
+      { code: 'ERR_RUN_IN_PROGRESS', status: 409 }
+    );
 
   const broadcast = (event: OrchestratorEvent | Record<string, unknown>): void => {
     session.events.publish(event.type === 'RUN_COMPLETED' ? { type: event.type, runId: (event as any).runId } : event);
@@ -658,6 +674,12 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
           guard: makeRequestGuard(deps.hostChecks),
           pinned: checked.ok && !isIpLiteral(typed.hostname) ? { [typed.hostname]: checked.address } : undefined,
         });
+      } else {
+        // Same alias the runner's own requests use, so the browser reaches a live-looking host on this machine too.
+        const alias = deps.hostAliases?.[typed.hostname.toLowerCase()];
+        setBrowserPolicy(
+          alias ? { pinned: { [typed.hostname]: LOOPBACK_HOSTS.includes(alias) ? '127.0.0.1' : alias } } : null
+        );
       }
 
       const searchChecks = body.searchChecks ?? memory?.searchChecks ?? (urlFirst ? !testHost : true);
@@ -697,6 +719,12 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
         return;
       }
       if (!body.useAI && !urlFirst) {
+        // No plan exists here, so there is nothing to test. The home page is still opened once, and the
+        // report says so instead of passing it off as a checked journey (T-35 decision).
+        context.reportNotes = [
+          ...(context.reportNotes || []),
+          'Nothing to test: no plan was made, so only the home page was opened to see that the site responds. This is not a checked journey.',
+        ];
         await executeTesting({ plan: emptyPlan(runId, body.targetUrl), context }, [defaultTestCase()], [], generation);
         return;
       }
@@ -725,7 +753,8 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
           };
         });
 
-      const ai = await prepareAIFn(body.planWithoutAI ? { ...body, useAI: true } : body);
+      // A no-AI run must not need a key: forcing useAI here made it fail with ERR_NO_AI_KEY when none is saved.
+      const ai = await prepareAIFn(body);
       context.aiModels = ai.models;
       context.ai = ai.settings;
       if (body.planWithoutAI) ai.provider = undefined;
@@ -907,10 +936,56 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
       authorization: RunAuthorization;
     }): Promise<{ runId: string; awaitingReview: boolean }> {
       const { body, authorization } = input;
+      // Checked and set before the first await: a second start while this one is still starting is refused.
+      if (starting || (session.run.isRunning && session.run.phase !== 'awaiting-review')) throw runBusy();
+      starting = true;
+      let finishStarting!: () => void;
+      startDone = new Promise<void>((resolve) => (finishStarting = resolve));
+      try {
+        return await startRun(body, authorization);
+      } finally {
+        starting = false;
+        startDone = null;
+        finishStarting();
+      }
+    },
+
+    async stop(input?: {
+      finish?: boolean;
+      discard?: boolean;
+    }): Promise<{ aborted: boolean; planKept?: boolean; finishing?: boolean }> {
+      // A stop that arrives while a run is still starting waits for the start, then stops that run.
+      if (starting && startDone) await startDone;
+      return stopRun(input);
+    },
+
+    async waitFor(deadlineMs: number): Promise<void> {
+      if (!currentRunPromise && !session.run.isRunning) return;
+      let timer: NodeJS.Timeout | undefined;
+      const timeoutPromise = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, Math.max(0, deadlineMs));
+      });
+      try {
+        await Promise.race([currentRunPromise ?? Promise.resolve(), timeoutPromise]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+
+    executeTesting,
+  };
+
+  async function startRun(
+    body: RunStartBody,
+    authorization: RunAuthorization
+  ): Promise<{ runId: string; awaitingReview: boolean }> {
+    {
       await session.plan.current();
       const waiting = session.run.phase === 'awaiting-review' ? session.plan.currentRecord : null;
       const othersPlan = !!deps.beta && !!waiting && (deps.isMine ? !deps.isMine(waiting.plan.runId) : false);
-      const parkWaiting = !!waiting && (othersPlan || session.plan.hostOf(waiting) !== hostOfAddress(body.targetUrl));
+      // On the shared copy another tester's waiting plan is never moved: the start is refused instead.
+      if (othersPlan) throw runBusy();
+      const parkWaiting = !!waiting && session.plan.hostOf(waiting) !== hostOfAddress(body.targetUrl);
       if (waiting && !parkWaiting && !body.replacePlan) {
         let waitingFor = waiting.plan.targetUrl;
         try {
@@ -938,8 +1013,8 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
       const runId = `run-${Date.now()}`;
       if (deps.claimOwner) deps.claimOwner(runId);
 
-      session.run.release();
-      session.run.begin(runId, body.targetUrl);
+      // begin() refuses when a run holds the slot; the start never goes on without it.
+      if (!session.run.begin(runId, body.targetUrl)) throw runBusy();
       session.run.setPhase('scanning');
       session.report.setError(null, null);
 
@@ -1002,9 +1077,14 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
       currentRunPromise = runPromise;
 
       return { runId, awaitingReview: false };
-    },
+    }
+  }
 
-    async stop(input?: { finish?: boolean }): Promise<{ aborted: boolean; planKept?: boolean; finishing?: boolean }> {
+  async function stopRun(input?: {
+    finish?: boolean;
+    discard?: boolean;
+  }): Promise<{ aborted: boolean; planKept?: boolean; finishing?: boolean }> {
+    {
       const runId = session.run.runId;
       const finishCtrl = session.run.finishController();
       if (input?.finish && (session.run.phase === 'scanning' || session.run.phase === 'testing') && finishCtrl) {
@@ -1019,6 +1099,10 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
       }
       if (!session.run.isRunning && session.run.phase === 'idle') {
         return { aborted: false };
+      }
+      // Nothing is running while a plan waits for review. Stop keeps that plan; only an explicit discard clears it.
+      if (session.run.phase === 'awaiting-review' && !input?.discard) {
+        return { aborted: false, planKept: true };
       }
 
       session.run.setGeneration(session.run.generation + 1);
@@ -1054,21 +1138,6 @@ export function createCheckupRun(session: CheckupSession, deps: RunDeps = {}): C
       });
 
       return { aborted: true, planKept, finishing: false };
-    },
-
-    async waitFor(deadlineMs: number): Promise<void> {
-      if (!currentRunPromise && !session.run.isRunning) return;
-      let timer: NodeJS.Timeout | undefined;
-      const timeoutPromise = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, Math.max(0, deadlineMs));
-      });
-      try {
-        await Promise.race([currentRunPromise ?? Promise.resolve(), timeoutPromise]);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    },
-
-    executeTesting,
-  };
+    }
+  }
 }

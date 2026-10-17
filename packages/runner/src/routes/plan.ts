@@ -896,26 +896,57 @@ export async function interpret(c: PlanRouteContext): Promise<void> {
   sendJson(res, 200, interpretation);
 }
 
+const NO_TESTS_FALLBACK =
+  'Nothing to test: the scan found no page or journey to check. Add a page or a journey, or choose another address.';
+
+/** Sessions with an approval in flight: a second approve while one is running is refused, key or not. */
+const approving = new WeakSet<CheckupSession>();
+
 export async function approvePlan(c: PlanRouteContext): Promise<void> {
   const { session, req, res } = c;
   const idempotencyKey = (req.headers['idempotency-key'] as string | undefined)?.trim();
   if (idempotencyKey) {
     const existing = session.plan.recentApproval(idempotencyKey);
     if (existing && Date.now() - existing.timestamp < 60 * 60 * 1000) {
-      sendJson(res, 409, {
-        error: 'This plan was already approved and is currently being tested.',
-        code: 'ERR_DUPLICATE_APPROVAL',
-        runId: existing.runId,
+      // The same approval again: it ran once, so answer with the first result.
+      sendJson(res, 200, {
+        status: 'approved',
+        runId: existing.runId || session.run.runId || '',
+        repeated: true,
       });
       return;
     }
   }
+  if (approving.has(session)) {
+    sendJson(res, 409, {
+      error: 'This plan is already being approved. Wait a moment.',
+      code: 'ERR_DUPLICATE_APPROVAL',
+      runId: session.run.runId ?? undefined,
+    });
+    return;
+  }
+  // Both are set before any await, so a second request that arrives next sees them.
+  approving.add(session);
+  if (idempotencyKey) session.plan.rememberApproval(idempotencyKey, session.run.runId ?? '');
+  try {
+    await approveOnce(c, idempotencyKey);
+  } catch (err) {
+    if (idempotencyKey) session.plan.forgetApproval(idempotencyKey);
+    throw err;
+  } finally {
+    approving.delete(session);
+  }
+  if (idempotencyKey && res.statusCode !== 200) session.plan.forgetApproval(idempotencyKey);
+}
 
+async function approveOnce(c: PlanRouteContext, idempotencyKey: string | undefined): Promise<void> {
+  const { session, req, res } = c;
   const record = await ensurePlanLoaded(session);
   if (!record || session.run.phase !== 'awaiting-review') {
     sendJson(res, 404, { error: 'No plan awaiting review' });
     return;
   }
+  if (idempotencyKey) session.plan.rememberApproval(idempotencyKey, record.plan.runId);
   if (session.plan.update()) {
     sendJson(res, 409, {
       error: 'The plan is still being updated. Approve it when that’s done.',
@@ -1068,15 +1099,22 @@ export async function approvePlan(c: PlanRouteContext): Promise<void> {
     return;
   }
 
+  // Beta: the read-only decision is made here, before the tests are chosen. When it flips, the
+  // reviewed list is stale (it was made with writes allowed), so it is derived again once.
+  let flippedReadOnly = false;
   if (c.isBeta && !record.context.readOnly && c.siteDir && c.testCopyOf) {
     try {
       const typed = new URL(record.context.targetUrl);
       const memory = record.context.siteHost
         ? await loadSiteMemory(c.siteDir(), record.context.siteHost).catch(() => null)
         : null;
-      if (!(await c.testCopyOf(typed, !!memory?.staging))) record.context.readOnly = true;
+      if (!(await c.testCopyOf(typed, !!memory?.staging))) {
+        record.context.readOnly = true;
+        flippedReadOnly = true;
+      }
     } catch {
       record.context.readOnly = true;
+      flippedReadOnly = true;
     }
   }
 
@@ -1087,15 +1125,36 @@ export async function approvePlan(c: PlanRouteContext): Promise<void> {
   applySafeAnswers(record.plan.questions);
   if (draft?.ambiguityQuestions) applySafeAnswers(draft.ambiguityQuestions);
 
-  let specTestCases: TestCase[];
+  // The tests that run are the ones the review showed (record.plan.testCases). They are derived
+  // again only when there is no reviewed list, or the read-only flip above changed what may run.
+  let specTestCases: TestCase[] = [];
   let notRun: RunOptions['notRun'] = [];
-  if (record.context.customTestCases && record.plan.testCases?.length) {
-    specTestCases = record.plan.testCases;
-  } else if (draft) {
-    ({ specTestCases, notRun } = testsFor(record.context));
-    record.plan.testCases = specTestCases;
-  } else {
-    specTestCases = [defaultTestCase()];
+  let noTests: string | undefined;
+  const reviewed = record.plan.testCases?.length ? record.plan.testCases : undefined;
+  if (draft) {
+    const fresh = testsFor(record.context);
+    notRun = fresh.notRun;
+    noTests = fresh.noTests;
+    if (reviewed && !flippedReadOnly) {
+      specTestCases = reviewed;
+      noTests = undefined;
+    } else if (reviewed && record.context.customTestCases) {
+      specTestCases = reviewed;
+      noTests = undefined;
+    } else {
+      specTestCases = fresh.specTestCases;
+      record.plan.testCases = specTestCases;
+    }
+  } else if (reviewed) {
+    specTestCases = reviewed;
+  }
+  if (specTestCases.length === 0) {
+    sendJson(res, 409, {
+      error: noTests ?? NO_TESTS_FALLBACK,
+      code: 'ERR_NO_TESTS',
+      noTests: noTests ?? NO_TESTS_FALLBACK,
+    });
+    return;
   }
   if (draft) {
     record.context.reportNotes = [...(record.context.reportNotes || []), ...handCheckNotes(draft)];
@@ -1112,14 +1171,14 @@ export async function approvePlan(c: PlanRouteContext): Promise<void> {
     }
   }
 
-  if (idempotencyKey) {
-    session.plan.rememberApproval(idempotencyKey, record.plan.runId);
-  }
-
   record.status = 'approved';
   await session.plan.save(record);
 
-  sendJson(res, 200, { status: 'approved', runId: record.plan.runId });
+  sendJson(res, 200, {
+    status: 'approved',
+    runId: record.plan.runId,
+    tests: specTestCases.map((t) => ({ id: t.id, name: t.name })),
+  });
 
   const generation = session.run.generation + 1;
   session.run.setGeneration(generation);
@@ -1164,13 +1223,24 @@ export async function waitingPlans(c: PlanRouteContext): Promise<void> {
     sendJson(res, 404, { error: 'There’s no plan kept for that site.' });
     return;
   }
+  // The plan now waiting is set aside for the new one. On the shared copy that is only ever the
+  // asker's own: someone else's plan is never moved, and nothing is taken out of the kept-aside
+  // list until this is known.
+  const current = await ensurePlanLoaded(session);
+  const waitingNow = current && session.run.phase === 'awaiting-review' ? current : null;
+  if (c.isBeta && waitingNow && c.isMine && !c.isMine(waitingNow.plan.runId)) {
+    sendJson(res, 409, {
+      error: 'Someone else is reviewing a plan on this shared copy. Try again in a few minutes.',
+      code: 'ERR_RUN_IN_PROGRESS',
+    });
+    return;
+  }
   const record = body.host ? await session.plan.unpark(body.host) : null;
   if (!record) {
     sendJson(res, 404, { error: 'There’s no plan kept for that site.' });
     return;
   }
-  const current = await ensurePlanLoaded(session);
-  if (current && session.run.phase === 'awaiting-review') await session.plan.park(current);
+  if (waitingNow) await session.plan.park(waitingNow);
   await session.plan.save(record);
   session.run.setPhase('awaiting-review');
   session.run.setIsRunning(true);

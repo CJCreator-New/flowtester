@@ -20,6 +20,8 @@ export interface NetworkEntry {
   postData?: string;
   durationMs?: number;
   timestamp: number;
+  /** Cancelled because the page went away (a form submit that navigates), not a failure of the site. */
+  aborted?: boolean;
 }
 
 export interface StepEvidence {
@@ -85,11 +87,15 @@ export interface Finding {
   triageReason?: string;
   /** True when this finding originated from a request/resource on a different origin than the page under test (e.g. third-party analytics, fonts, CDNs) rather than a first-party defect. */
   thirdParty?: boolean;
+  /** True when the finding is a request that answered with an HTTP 5xx status. Set by the checker, so scoring never reads the title. */
+  is5xx?: boolean;
   /**
    * An AI guess the site didn't match. Shown as "Could not verify" (never as a defect) until
    * someone confirms or rejects the rule behind it.
    */
   needsConfirmation?: boolean;
+  /** An AI-written opinion. Shown in the report, but never changes the verdict or the grades (ADR 0009). */
+  advisory?: boolean;
   /** Sub-category tag for fine-grained categorization, such as 'SEO', 'AEO', or 'GEO' under Findable. */
   categoryTag?: 'SEO' | 'AEO' | 'GEO' | 'MKT';
   /** The area it counts toward, when not its checker's: a missing viewport tag is about phones. */

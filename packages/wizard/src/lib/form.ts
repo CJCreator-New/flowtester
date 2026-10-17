@@ -287,6 +287,9 @@ export function withAddress(
 export function lookOnly(form: CheckupForm): CheckupForm {
   return {
     ...resetSignInChoices(form),
+    // Looking only records no ownership.
+    owner: false,
+    markedTestCopy: false,
     signIns: form.signIns.map((s, n) => (n === 0 ? { ...s, username: '', password: '' } : s)),
   };
 }

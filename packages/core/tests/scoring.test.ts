@@ -124,6 +124,9 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
     expect(grades.aspects.Secure).toMatchObject({ score: 95, checked: true });
     for (const aspect of ['Fast and mobile', 'Findable', 'Looks and reads well'] as const) {
       expect(grades.aspects[aspect].checked, aspect).toBe(false);
+      // Never an A, never 100: no grade at all.
+      expect(grades.aspects[aspect].grade, aspect).toBeNull();
+      expect(grades.aspects[aspect].score, aspect).toBe(0);
     }
     // (100 + 95 + 95) / 3, not lifted by three untouched A 100s.
     expect(grades.overallScore).toBe(97);
@@ -172,8 +175,8 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
     const grades = calculateSiteAspectGrades(criticalFindings);
     expect(grades.aspects.Secure.score).toBeLessThanOrEqual(50);
     expect(grades.aspects.Secure.grade).toBe('F');
-    // An F in any aspect caps overall grade at C
-    expect(['C', 'D', 'F']).toContain(grades.overallGrade);
+    // The overall grade is never better than the worst area grade
+    expect(grades.overallGrade).toBe('F');
   });
 
   it('keeps AI visual review non-graded as advisory commentary', () => {
@@ -207,6 +210,7 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
         severity: 'Blocker',
         checker: 'bug-detection',
         thirdParty: false,
+        is5xx: true,
         where: { urlPath: '/invoices', role: 'visitor', breakpoint: '1440px' },
         expectedVsActual: { expected: '', actual: '' },
         stepsToReproduce: [],
@@ -216,6 +220,45 @@ describe('A–F Aspect Grading (scoring.ts)', () => {
     ];
     const grades = calculateSiteAspectGrades(findings);
     expect(grades.aspects.Works.grade).toBe('F');
+  });
+
+  it('reads the crash from the structured status, not the title text', () => {
+    const base: Finding = {
+      id: 'F-HTTP-404',
+      title: 'HTTP 404 on GET /items/500',
+      severity: 'Major',
+      checker: 'bug-detection',
+      thirdParty: false,
+      is5xx: false,
+      where: { urlPath: '/items/500', role: 'visitor', breakpoint: '1440px' },
+      expectedVsActual: { expected: '', actual: '' },
+      stepsToReproduce: [],
+      evidence: {},
+      resolution: '',
+    };
+    const grades = calculateSiteAspectGrades([base]);
+    expect(grades.aspects.Works.grade).not.toBe('F');
+  });
+
+  it('caps the overall grade at the worst area grade, and is null when nothing was checked', () => {
+    const major: Finding = {
+      id: 'F-SEC-1',
+      title: 'Missing header',
+      severity: 'Blocker',
+      checker: 'security',
+      where: { urlPath: '/', role: 'visitor', breakpoint: '1440px' },
+      expectedVsActual: { expected: '', actual: '' },
+      stepsToReproduce: [],
+      evidence: {},
+      resolution: '',
+    };
+    // Five areas at A and one at D would average above C; the cap holds the overall at D.
+    const grades = calculateSiteAspectGrades([major]);
+    expect(grades.aspects.Secure.grade).toBe('D');
+    expect(grades.overallGrade).toBe('D');
+
+    const none = calculateSiteAspectGrades([], { checkersRun: [] });
+    expect(none.overallGrade).toBeNull();
   });
 
   it('does not assign automatic Grade F for third-party failures', () => {

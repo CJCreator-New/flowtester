@@ -11,7 +11,7 @@ Settings can go in the shell or in a `.env` file at the repo root (never commit 
 | `RUNNER_HOST`                                 | `localhost`         | Bind address. Use `0.0.0.0` only in a container or behind a proxy                                                                                                                                                                                                         |
 | `RUNNER_DATA_DIR`                             | `.qa-data/`         | Site memory, history, waiting plans, saved model choices                                                                                                                                                                                                                  |
 | `RUNNER_OUTPUT_DIR`                           | `.qa-runner-report` | Where reports are written                                                                                                                                                                                                                                                 |
-| `RUNNER_ACCESS_TOKEN`                         | none                | A key every request must carry (`?access=<key>` sets a cookie; scripts send `X-QA-Access`). Required whenever the server is reachable beyond this computer                                                                                                                |
+| `RUNNER_ACCESS_TOKEN`                         | none                | A key every request must carry (`?access=<key>` sets a cookie; scripts send `X-QA-Access`). Required whenever the server is reachable beyond this computer: the runner refuses to start on a non-loopback `RUNNER_HOST` (such as `0.0.0.0`) without it                    |
 | `RUNNER_ALLOWED_ORIGINS`                      | none                | Comma-separated extra origins allowed to call the API. Warns if set without an access token                                                                                                                                                                               |
 | `RUNNER_LOCALHOST_ALIAS`                      | none                | Host name that stands for localhost when the runner runs in a container                                                                                                                                                                                                   |
 | `RUNNER_BETA`                                 | off                 | `1` turns on shared-beta mode: keys and sign-ins live in memory per session, only public sites can be checked, some routes are closed; a Test Copy needs a Verified Domain proof, and addresses (or redirects, or DNS answers) that lead to private addresses are refused |
@@ -41,7 +41,7 @@ Bring your own key. Supported providers: OpenRouter (default in CI), Gemini, Ope
 | `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | Provider keys read from the environment |
 | `TEST_MOCK_AI`                                                                | Use the mock provider (tests)           |
 
-Key order (see `core/ai/key-resolver.ts`): command line, then the OS keychain, then the legacy `.qa-keys.json`
+Key order (see `packages/core/src/ai/key-resolver.ts`): command line, then the OS keychain, then the legacy `.qa-keys.json`
 file, then the environment. With no key at all, the Plan is written by fixed rules and no AI is used.
 
 Provider limits worth knowing (they change; the tool reads what the key reports): OpenRouter's free models allow 20
@@ -93,7 +93,7 @@ Setting both `QA_USERNAME` and `QA_PASSWORD` is the consent to sign in and test 
 
 **Sign-in in GitHub Actions is a manual step.** `.github/workflows/qa-check.yml` does not pass `QA_USERNAME`, `QA_PASSWORD` or `QA_LOGIN_PATH`, so a CI Check-up there is unchanged. To use them, add the values as repository secrets (Settings, Secrets and variables, Actions), then add them to the `env:` block of the check-up job yourself (for example `QA_USERNAME: ${{ secrets.QA_USERNAME }}`). Adding them is your consent to sign in and send forms on that address for every run of the workflow, per [ADR 0022](adr/0022-test-sign-in-as-consent.md). Use a test account only. Never write the values into the workflow file.
 
-The CI check-up runs in-process on the Check-up Session without binding a network port (`QA_CHECKUP_PORT` is ignored). When `GITHUB_ACTIONS=true` it also prints annotations for active Blockers (error) and Majors (warning); there is no setting for it.
+The CI check-up runs in-process on the Check-up Session without binding a network port (`QA_CHECKUP_PORT` is ignored). When `GITHUB_ACTIONS=true` it also prints annotations for active Blockers (error) and Majors (warning); there is no setting for it. When `GITHUB_STEP_SUMMARY` is set (GitHub Actions sets it), the run summary is also appended to that file. Both are set by GitHub, not by you.
 
 ## Sign-in and crawl limits
 
@@ -126,16 +126,16 @@ The CI check-up runs in-process on the Check-up Session without binding a networ
 
 ## Wizard (front end)
 
-| Variable                  | Meaning                                                                                        |
-| ------------------------- | ---------------------------------------------------------------------------------------------- |
-| `VITE_RUNNER_URL`         | Only for `pnpm dev` hot reload: where the wizard's API calls go                                |
-| `VITE_BASE`               | Base path for static hosting                                                                   |
-| `VITE_ONLINE_APP_URL`     | Address of the online app. Shows an "Open the online app" button on the Vercel site            |
-| `VITE_WAKE_LIMIT_SECONDS` | How long the landing page waits for the online copy to wake, in seconds (5 to 600). Default 90 |
-| `WIZARD_SCREENSHOTS`      | Turns on screenshot capture in the wizard end-to-end test                                      |
-| `VITE_COUNTER_URL`        | Full GoatCounter-style `https://.../count` endpoint. Unset = no counting and no request        |
-| `VITE_CONTACT_EMAIL`      | Landing footer shows a mailto. Unset = GitHub issues                                           |
-| `VITE_SIGNUP_URL`         | https form-post endpoint for the email-updates control. Unset = "Send feedback" link           |
+| Variable                  | Meaning                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------ |
+| `VITE_RUNNER_URL`         | Only for `pnpm dev` hot reload: where the wizard's API calls go. Default `http://localhost:3001` |
+| `VITE_BASE`               | Base path for static hosting                                                                     |
+| `VITE_ONLINE_APP_URL`     | Address of the online app. Shows an "Open the online app" button on the Vercel site              |
+| `VITE_WAKE_LIMIT_SECONDS` | How long the landing page waits for the online copy to wake, in seconds (5 to 600). Default 90   |
+| `WIZARD_SCREENSHOTS`      | Turns on screenshot capture in the wizard end-to-end test                                        |
+| `VITE_COUNTER_URL`        | Full GoatCounter-style `https://.../count` endpoint. Unset = no counting and no request          |
+| `VITE_CONTACT_EMAIL`      | Landing footer shows a mailto. Unset = GitHub issues                                             |
+| `VITE_SIGNUP_URL`         | https form-post endpoint for the email-updates control. Unset = "Send feedback" link             |
 
 The three landing variables are read when the wizard is built and must be public values only. Set them in both
 the Vercel project and Render (the runner Dockerfile takes them as build args). See `LANDING_MEASUREMENT.md`.

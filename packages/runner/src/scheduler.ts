@@ -107,33 +107,46 @@ export class SchedulerManager {
     return target;
   }
 
-  start(onRunScheduled: (schedule: CheckupSchedule) => Promise<boolean>): void {
-    if (this.timer) return;
-    this.timer = setInterval(async () => {
-      try {
-        const schedules = await this.loadSchedules();
-        const now = new Date();
-        let changed = false;
+  private ticking = false;
 
-        for (const sched of schedules) {
-          if (!sched.enabled) continue;
-          const runTime = new Date(sched.nextRunAt);
-          if (now >= runTime) {
-            sched.lastRunAt = now.toISOString();
-            const success = await onRunScheduled(sched).catch(() => false);
-            sched.lastRunStatus = success ? 'passed' : 'failed';
-            sched.nextRunAt = this.calculateNextRun(sched.cadence, sched.hour, sched.dayOfWeek);
-            changed = true;
-          }
-        }
-
-        if (changed) {
-          await this.saveSchedules(schedules);
-        }
-      } catch {
-        // scheduler tick error resilience
+  /**
+   * Runs every schedule that is due, once. The next run time is saved before the run is started, so a
+   * schedule that is due is never fired twice, and a tick that is still going is not entered again.
+   */
+  async tick(onRunScheduled: (schedule: CheckupSchedule) => Promise<boolean>, now: Date = new Date()): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      const schedules = await this.loadSchedules();
+      const due = schedules.filter((s) => s.enabled && now >= new Date(s.nextRunAt));
+      if (due.length === 0) return;
+      for (const sched of due) {
+        sched.lastRunAt = now.toISOString();
+        sched.nextRunAt = this.calculateNextRun(sched.cadence, sched.hour, sched.dayOfWeek);
       }
-    }, 60000);
+      await this.saveSchedules(schedules);
+      for (const sched of due) {
+        const started = await onRunScheduled(sched).catch(() => false);
+        sched.lastRunStatus = started ? 'passed' : 'failed';
+      }
+      // Re-read so a schedule added or removed while a run was starting is not undone.
+      const latest = await this.loadSchedules();
+      for (const sched of due) {
+        const target = latest.find((s) => s.id === sched.id);
+        if (target) target.lastRunStatus = sched.lastRunStatus;
+      }
+      await this.saveSchedules(latest);
+    } catch {
+      // scheduler tick error resilience
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  start(onRunScheduled: (schedule: CheckupSchedule) => Promise<boolean>, intervalMs = 60000): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => void this.tick(onRunScheduled), intervalMs);
+    this.timer.unref?.();
   }
 
   stop(): void {

@@ -1,0 +1,54 @@
+# One shard of the test suite. CI calls it for every pull request, and Deploy calls it before publishing
+# main, so a push to main is tested the same way as the pull request it came from.
+name: Tests
+
+on:
+  workflow_call:
+    inputs:
+      shard:
+        description: 'Which part of the suite to run, as N/4 (for example 2/4).'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the site (also type-checks types and the wizard)
+        run: pnpm run vercel-build
+
+      - name: Build the runner and the packages it uses
+        run: pnpm --filter "@qa/runner..." run build
+
+      - name: Cache Playwright browser
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/pnpm-lock.yaml') }}
+
+      - name: Install Chromium (the browser tests drive it)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @qa/core exec playwright install --with-deps chromium
+
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @qa/core exec playwright install-deps chromium
+
+      # wizard-e2e and auth-crawl run in their own jobs in ci.yml; every other test runs here.
+      - name: Tests (shard ${{ inputs.shard }})
+        run: pnpm exec vitest run --shard=${{ inputs.shard }} --exclude "**/wizard-e2e.test.ts" --exclude "**/auth-crawl-*.test.ts"

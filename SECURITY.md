@@ -20,7 +20,7 @@ The tool drives real browsers against real sites, so safety is enforced in code,
 
 - Binds to `localhost` and rejects requests whose `Host` header is not a loopback name (ADR 0008).
 - Cross-origin browser requests are refused unless `RUNNER_ALLOWED_ORIGINS` lists them, so a web page you visit cannot start runs.
-- Sharing the server over a tunnel or proxy **requires** `RUNNER_ACCESS_TOKEN` (the runner prints a warning without it). A tunnel presents a localhost Host header, so the loopback check alone cannot protect it. `pnpm tunnel` sets a token for you.
+- Sharing the server over a tunnel or proxy **requires** `RUNNER_ACCESS_TOKEN` (the runner refuses to start on a non-loopback host without it, and prints a warning when tunnel settings are set without it). Share the link as `https://<host>/?access=<key>`; it sets a cookie. Cross-origin requests are accepted only from this server's own origin and the exact origins in `RUNNER_ALLOWED_ORIGINS`. A tunnel presents a localhost Host header, so the loopback check alone cannot protect it. `pnpm tunnel` sets a token for you.
 - Beta mode (`RUNNER_BETA=1`): only public sites; private and internal addresses are refused, including a name that resolves to one, a redirect to one, and a name that changes its answer between two lookups (every address is classified, the connection goes to the checked address, every redirect hop is checked again, and a DNS failure counts as refused); in the browser every request is checked the same way; each tester's AI key and sign-ins are held in memory for 24 hours at most (max 50 sessions) and never written to disk; state-changing routes are closed; check-ups and comparisons are limited per visitor session and per UTC day (in memory).
 
 ## Secrets

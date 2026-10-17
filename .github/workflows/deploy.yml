@@ -27,6 +27,10 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Run JavaScript actions on Node 24 now, ahead of GitHub retiring Node 20 for them.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   build-and-smoke:
     # The copy of this workflow in the mirror repo does nothing: only the source repo publishes.
@@ -64,8 +68,20 @@ jobs:
       - name: Smoke check
         run: pnpm run smoke
 
+  # The full test suite, the same shards a pull request runs (see tests.yml). Nothing reaches main's
+  # publish step without passing them.
+  test:
+    if: github.repository == 'CJCreator/qa-flow-tester'
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: ['1/4', '2/4', '3/4', '4/4']
+    uses: ./.github/workflows/tests.yml
+    with:
+      shard: ${{ matrix.shard }}
+
   publish:
-    needs: build-and-smoke
+    needs: [build-and-smoke, test]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -89,22 +105,25 @@ jobs:
   verify:
     needs: publish
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     env:
       VERCEL_SITE_URL: ${{ vars.VERCEL_SITE_URL || 'https://flowtester.vercel.app' }}
       RENDER_APP_URL: ${{ vars.RENDER_APP_URL || 'https://qa-check-up-2q68.onrender.com' }}
+      COMMIT: ${{ github.sha }}
     steps:
-      # Both builds take a few minutes, and a free Render service sleeps: check both concurrently.
-      - name: Verify Vercel and Render deployments concurrently
+      # The Vercel build takes a few minutes, and a free Render service sleeps: poll both for up to 10 minutes.
+      # Vercel must serve version.json naming this commit, so an old build cannot pass. Render answers
+      # /healthz only, so for Render this step shows the service is up, not which commit it runs.
+      - name: Verify Vercel serves this commit and Render is up
         run: |
-          echo "Verifying Vercel ($VERCEL_SITE_URL) and Render ($RENDER_APP_URL) concurrently..."
+          echo "Verifying Vercel ($VERCEL_SITE_URL, commit $COMMIT) and Render ($RENDER_APP_URL)..."
           vercel_ready=0
           render_ready=0
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if [ "$vercel_ready" -eq 0 ]; then
-              code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$VERCEL_SITE_URL/") || code="000"
-              if [ "$code" = "200" ]; then
-                echo "Vercel ready (200 OK) on attempt $i"
+              body=$(curl -s -m 10 "$VERCEL_SITE_URL/version.json") || body=""
+              if echo "$body" | grep -q "\"commit\":\"$COMMIT\""; then
+                echo "Vercel serves this commit on attempt $i"
                 vercel_ready=1
               fi
             fi
@@ -116,16 +135,16 @@ jobs:
               fi
             fi
             if [ "$vercel_ready" -eq 1 ] && [ "$render_ready" -eq 1 ]; then
-              echo "Deployment verification PASSED: Both Vercel and Render are responding with HTTP 200."
+              echo "Deployment verification PASSED."
               exit 0
             fi
-            echo "Attempt $i: Vercel ready=$vercel_ready, Render ready=$render_ready. Waiting 5s..."
-            sleep 5
+            echo "Attempt $i: Vercel ready=$vercel_ready, Render ready=$render_ready. Waiting 10s..."
+            sleep 10
           done
           if [ "$vercel_ready" -ne 1 ]; then
-            echo "::error::Vercel site ($VERCEL_SITE_URL) did not become ready in time."
+            echo "::error::Vercel site ($VERCEL_SITE_URL) does not serve commit $COMMIT in time."
           fi
           if [ "$render_ready" -ne 1 ]; then
-            echo "::error::Render app ($RENDER_APP_URL) did not become ready in time."
+            echo "::error::Render app ($RENDER_APP_URL) did not answer /healthz in time."
           fi
           exit 1

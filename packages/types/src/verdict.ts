@@ -1,4 +1,4 @@
-import type { AspectGrade, AspectType, Finding, FindingSeverity, SiteAspectGrades } from './index.js';
+import type { AspectGrade, AspectType, Finding, FindingSeverity, RunCoverage, SiteAspectGrades } from './index.js';
 import { groupIntoProblems, isDismissed } from './problems.js';
 
 export interface ReleaseGateCriteria {
@@ -12,6 +12,17 @@ export interface ReleaseGateCriteria {
   advisoryAreas?: AspectType[];
 }
 
+/**
+ * The one definition of "ready to release" (PRD FR-8.2, DEMO-READINESS-PLAN decision 1). It is
+ * applied only by `releaseVerdict`; the screens, report.html, report.md, the stamp and the CLI exit
+ * code all call it.
+ * - standard (the default): 0 Blockers and every checked area at C or better. Majors do not block on
+ *   their own, but they lower the area grade (see scoring.ts).
+ * - strict: 0 Blockers, 0 Majors, every checked area at A (score 90+), Accessible at A.
+ * - lenient: 0 Blockers; area grades are not checked.
+ * An area nothing checked (grade null) is never counted as a pass and never fails a gate; it is listed
+ * as "not checked" in the verdict.
+ */
 export const DEFAULT_RELEASE_GATES: Record<'strict' | 'standard' | 'lenient', ReleaseGateCriteria> = {
   strict: {
     maxBlockers: 0,
@@ -59,10 +70,16 @@ export interface ReleaseVerdict {
   gate?: ReleaseGateCriteria;
   /** Specific criteria that failed, if any. */
   breaches?: string[];
+  /** Areas nothing checked this time. Shown as "Not checked", never counted as a pass. */
+  notChecked?: AspectType[];
+  /** Tests that were planned but did not run (skipped, blocked), when the caller passed coverage. */
+  skippedTests?: number;
 }
 
-export function countsTowardVerdict(f: Pick<Finding, 'triageStatus' | 'needsConfirmation'>): boolean {
-  return !isDismissed(f) && !f.needsConfirmation;
+export function countsTowardVerdict(
+  f: Pick<Finding, 'triageStatus' | 'needsConfirmation'> & Partial<Finding>
+): boolean {
+  return !isDismissed(f) && !f.needsConfirmation && !f.advisory && f.checker !== 'ai-review';
 }
 
 export function releaseVerdict(
@@ -70,9 +87,13 @@ export function releaseVerdict(
     Pick<Finding, 'severity' | 'triageStatus' | 'needsConfirmation' | 'title'> & Partial<Finding>
   > | null,
   gate?: ReleaseGateCriteria,
-  grades?: SiteAspectGrades
+  grades?: SiteAspectGrades,
+  coverage?: Pick<RunCoverage, 'skipped' | 'blocked'>
 ): ReleaseVerdict {
-  const safeFindings = findings ?? [];
+  gate = gate ?? DEFAULT_RELEASE_GATES.standard;
+  const customGate = gate !== DEFAULT_RELEASE_GATES.standard;
+  // AI-written findings are advisory: they never change the verdict (ADR 0009).
+  const safeFindings = (findings ?? []).filter((f) => !f.advisory && f.checker !== 'ai-review');
   const problems = groupIntoProblems(
     safeFindings.map(
       (f) =>
@@ -83,9 +104,9 @@ export function releaseVerdict(
   const counts: Record<FindingSeverity, number> = { Blocker: 0, Major: 0, Minor: 0, Suggestion: 0 };
   for (const p of active) counts[p.severity]++;
 
-  const maxBlockers = gate?.maxBlockers ?? 0;
-  const maxMajors = gate ? gate.maxMajors : 0;
-  const maxMinors = gate?.maxMinors;
+  const maxBlockers = gate.maxBlockers ?? 0;
+  const maxMajors = gate.maxMajors;
+  const maxMinors = gate.maxMinors;
 
   const blockersBreached = counts.Blocker > maxBlockers;
   const majorsBreached = maxMajors !== undefined && counts.Major > maxMajors;
@@ -102,7 +123,8 @@ export function releaseVerdict(
     breaches.push(`${counts.Minor} minor ${counts.Minor === 1 ? 'problem' : 'problems'} (${maxMinors} allowed)`);
 
   // Area score and grade evaluations per PRD FR-8.2
-  if (grades && gate) {
+  const notChecked: AspectType[] = [];
+  if (grades) {
     const aspects = grades.aspects;
     const gradeRanks: Record<AspectGrade, number> = { A: 4, B: 3, C: 2, D: 1, F: 0 };
     const minRank = gate.minAreaGrade ? gradeRanks[gate.minAreaGrade] : undefined;
@@ -110,7 +132,10 @@ export function releaseVerdict(
     for (const [name, scoreInfo] of Object.entries(aspects || {}) as Array<
       [AspectType, (typeof aspects)[AspectType]]
     >) {
-      if (!scoreInfo || scoreInfo.checked === false) continue;
+      if (!scoreInfo || scoreInfo.checked === false || scoreInfo.grade === null) {
+        notChecked.push(name);
+        continue;
+      }
       if (gate.advisoryAreas?.includes(name)) continue;
 
       if (gate.minAreaScore !== undefined && scoreInfo.score < gate.minAreaScore) {
@@ -121,7 +146,12 @@ export function releaseVerdict(
       }
     }
 
-    if (gate.strictAccessibility && aspects?.Accessible && aspects.Accessible.checked !== false) {
+    if (
+      gate.strictAccessibility &&
+      aspects?.Accessible &&
+      aspects.Accessible.checked !== false &&
+      aspects.Accessible.grade !== null
+    ) {
       if (aspects.Accessible.grade !== 'A' || aspects.Accessible.score < 90) {
         breaches.push(`Accessible area must achieve Grade A under strict accessibility gating`);
       }
@@ -132,6 +162,13 @@ export function releaseVerdict(
   const mustFix = counts.Blocker + counts.Major;
   const others = counts.Minor + counts.Suggestion;
 
+  const skippedTests = coverage ? coverage.skipped + coverage.blocked : undefined;
+  const notRun: string[] = [];
+  if (notChecked.length > 0)
+    notRun.push(`${notChecked.length} ${notChecked.length === 1 ? 'area' : 'areas'} not checked`);
+  if (skippedTests) notRun.push(`${skippedTests} ${skippedTests === 1 ? 'test' : 'tests'} did not run`);
+  const notRunText = notRun.length > 0 ? ` Not checked: ${notRun.join(', ')}.` : '';
+
   let reason = '';
   if (ready) {
     reason =
@@ -139,10 +176,12 @@ export function releaseVerdict(
         ? 'No problems found.'
         : `Nothing blocks release under active quality gates. ${others} smaller ${others === 1 ? 'problem is' : 'problems are'} worth fixing.`;
   } else {
-    reason = gate
-      ? `Quality gate breached: ${breaches.join(' and ')} must be fixed first.`
-      : `${mustFix} ${mustFix === 1 ? 'problem must' : 'problems must'} be fixed first.`;
+    reason =
+      !customGate && breaches.length === 1 && blockersBreached
+        ? `${mustFix} ${mustFix === 1 ? 'problem must' : 'problems must'} be fixed first.`
+        : `Quality gate breached: ${breaches.join(' and ')} must be fixed first.`;
   }
+  reason += notRunText;
 
   return {
     ready,
@@ -155,5 +194,7 @@ export function releaseVerdict(
     findings: safeFindings.filter(countsTowardVerdict).length,
     gate,
     breaches: breaches.length > 0 ? breaches : undefined,
+    notChecked: notChecked.length > 0 ? notChecked : undefined,
+    skippedTests: skippedTests || undefined,
   };
 }

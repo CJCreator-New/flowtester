@@ -50,52 +50,17 @@ jobs:
             echo "Typecheck found **$count** error(s)." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  # Full Build & Browser Test Suite: Sharded across 4 parallel runners to complete in ~2-3 minutes instead of 15-20 minutes
+  # Full test suite, sharded across 4 parallel runners (see tests.yml). Deploy runs the same shards on push to main.
   build-and-test:
-    # PRs and manual runs only: a push to main was tested on its PR, and Deploy builds and smoke-checks it.
+    # PRs and manual runs only: a push to main is tested by Deploy before it publishes.
     if: github.event_name != 'push'
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1/4, 2/4, 3/4, 4/4]
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install
-        run: pnpm install --frozen-lockfile
-
-      - name: Build the site (also type-checks types and the wizard)
-        run: pnpm run vercel-build
-
-      - name: Build the runner and the packages it uses
-        run: pnpm --filter "@qa/runner..." run build
-
-      - name: Cache Playwright browser
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('**/pnpm-lock.yaml') }}
-
-      - name: Install Chromium (the browser tests drive it)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm --filter @qa/core exec playwright install --with-deps chromium
-
-      - name: Install Playwright system dependencies
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: pnpm --filter @qa/core exec playwright install-deps chromium
-
-      # Every package test run across 4 parallel shards (except wizard-e2e and auth-crawl which is tested in parallel in auth-crawl job).
-      # Chromium is installed above for the browser-driven checker and core tests.
-      - name: Tests (Shard ${{ matrix.shard }})
-        run: pnpm exec vitest run --shard=${{ matrix.shard }} --exclude "**/wizard-e2e.test.ts" --exclude "**/auth-crawl-*.test.ts"
+        shard: ['1/4', '2/4', '3/4', '4/4']
+    uses: ./.github/workflows/tests.yml
+    with:
+      shard: ${{ matrix.shard }}
 
   # Integration tests for authenticated crawls against the fixture app.
   # Runs on PRs touching packages/core, packages/runner, fixtures, or packages/types.

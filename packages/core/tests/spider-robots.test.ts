@@ -75,7 +75,8 @@ describe('DeterministicSpider honours robots.txt (T-304)', () => {
     const recorded = result.pages.map((p) => p.urlPath);
     expect(recorded).toContain('/public');
     // A route no rule matches is still crawled, proving the gate is what changed.
-    expect(recorded).toContain('/search');
+    // Routes keep their query string as the key (see frontier.test.ts), so the search page is '/search?q=1'.
+    expect(recorded).toContain('/search?q=1');
     expect(recorded).not.toContain('/private/');
     expect(recorded).not.toContain('/private/ok');
 

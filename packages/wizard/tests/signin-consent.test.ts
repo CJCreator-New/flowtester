@@ -82,6 +82,7 @@ describe('consent cannot go stale or leak', () => {
     expect(next.signIns[0]).toMatchObject({ username: '', password: '' });
     expect(next.signIns[1]).toEqual(second);
     expect(consentRequestOf(next, undefined).owner).toBe(false);
+    expect(next).toMatchObject({ owner: false, markedTestCopy: false });
   });
   it('stores the password in the keychain under consent only when remember was ticked', () => {
     expect(consentRequestOf(consented(), undefined).rememberSignIns).toBe(false);

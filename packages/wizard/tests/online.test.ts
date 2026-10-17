@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { DEFAULT_WAKE_LIMIT_MS, startAddress, wakeAddress, wakeLimitMs } from '../src/lib/online';
 
 describe('where "Start a free check-up" leads', () => {
@@ -45,5 +45,40 @@ describe('how long to wait for the online copy to wake', () => {
   it('clamps to 5 s..600 s', () => {
     expect(wakeLimitMs('1')).toBe(5_000);
     expect(wakeLimitMs('9999')).toBe(600_000);
+  });
+});
+
+describe('what the wizard says when the runner answers badly', () => {
+  const reply = (status: number, body: unknown) =>
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify(body), { status }));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('says access was refused only for 401 and 403', async () => {
+    const { checkReachable } = await import('../src/api');
+    for (const status of [401, 403]) {
+      reply(status, { reachable: false, error: 'Nope' });
+      expect(await checkReachable('http://x.test')).toMatchObject({ ok: false, code: 'ERR_RUNNER_REFUSED' });
+    }
+  });
+
+  it('reports a 500 as what failed, never as a refusal', async () => {
+    const { checkReachable } = await import('../src/api');
+    reply(500, { error: 'Preflight crashed' });
+    const result = await checkReachable('http://x.test');
+    expect(result).toMatchObject({ ok: false, reason: 'Preflight crashed', statusCode: 500 });
+    expect(result.ok === false && result.code).not.toBe('ERR_RUNNER_REFUSED');
+    reply(500, {});
+    const bare = await checkReachable('http://x.test');
+    expect(bare.ok === false && bare.reason).not.toMatch(/refused/i);
+  });
+
+  it('a failed stop says so', async () => {
+    const { abortRun } = await import('../src/api');
+    reply(500, {});
+    expect(await abortRun()).toMatchObject({ aborted: false, error: expect.stringContaining('couldn’t stop') });
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('down');
+    });
+    expect(await abortRun(true)).toMatchObject({ aborted: false, error: expect.any(String) });
   });
 });

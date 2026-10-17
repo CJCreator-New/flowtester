@@ -61,6 +61,8 @@ describe('ReportGenerator', () => {
     expect(mdContent).toContain('# Pre-Release Readiness Report');
     expect(mdContent).toContain('product-omega');
     expect(mdContent).toContain('**Not ready yet**: 1 problem must be fixed first.');
+    expect(mdContent).toContain('## What this did not check');
+    expect(mdContent).toContain('Everything in the plan ran, and every area was checked.');
     expect(mdContent).toContain('F-BLOCKER-001');
     expect(mdContent).toContain('Critical checkout crash');
     expect(mdContent).toContain('Run the check-up again on the same address');

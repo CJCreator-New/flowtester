@@ -14,12 +14,12 @@ import { runCheckup, parseArgs } from '../src/checkup.js';
 
 const SITE_PORT = 3291;
 const RUNNER_PORT = 3292;
-const CHECKUP_PORT = 3293;
 const runnerUrl = `http://localhost:${RUNNER_PORT}`;
 const outputDir = path.join(process.cwd(), '.tmp-consent-enforcement');
 const dataDir = `${outputDir}-data`;
 const ciOut = `${outputDir}-ci`;
 const PASSWORD = 'Enf0rce-Pw-Qx47-unique';
+// A live-looking shop: consent rules apply to it, and it is aliased to this machine (see hostAliases below).
 const siteUrl = `http://shop.example.com:${SITE_PORT}`;
 const roles = [{ role: 'manager', username: 'owner@shop.test', password: PASSWORD, loginPath: '/signin' }];
 
@@ -135,7 +135,8 @@ describe('sign-in consent is enforced beyond discovery', () => {
   }, 240000);
 
   it('wrong password under consent on the caller-supplied test case path: run fails, nothing interactive is sent', async () => {
-    await post('/api/runner/abort').catch(() => undefined);
+    // Stop keeps a plan that waits for review; the earlier test left one, so throw it away explicitly.
+    await post('/api/runner/abort', { discard: true }).catch(() => undefined);
     sent.length = 0;
     await post('/api/runner/run', {
       ...base,
@@ -178,8 +179,6 @@ describe('sign-in consent is enforced beyond discovery', () => {
 describe('headless Check-up keeps sign-in sessions out of the report folder', () => {
   it('no session file under the report folder, and the working folder is deleted', async () => {
     const before = await qaTempDirs();
-    const prev = process.env.QA_CHECKUP_PORT;
-    process.env.QA_CHECKUP_PORT = String(CHECKUP_PORT);
     await new Promise<void>((resolve) => shop2.listen(CHECKUP_SITE_PORT, () => resolve()));
     try {
       const args = parseArgs(
@@ -199,8 +198,6 @@ describe('headless Check-up keeps sign-in sessions out of the report folder', ()
       }
       expect(await qaTempDirs()).toEqual(before);
     } finally {
-      if (prev === undefined) delete process.env.QA_CHECKUP_PORT;
-      else process.env.QA_CHECKUP_PORT = prev;
       await new Promise<void>((resolve) => shop2.close(() => resolve()));
     }
   }, 300000);

@@ -50,6 +50,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: CJCreator/qa-flow-tester
+          # The QA Tool version to run: a release tag once one is published, otherwise the main branch.
           ref: __QA_TOOL_REF__
           path: .qa-tool
 

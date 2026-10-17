@@ -177,6 +177,8 @@ import {
   peekProofToken,
   claimProofCheck,
   sessionFor,
+  pinSession,
+  SessionRateLimited,
   type BetaLimits,
 } from './beta.js';
 import { testCopyFor } from './host-policy.js';
@@ -210,6 +212,11 @@ function isSavedSession(dir: string, file: string): boolean {
     .some((part) => part.toLowerCase() === 'auth');
 }
 
+/** True when a decoded path has a ".." part, split on either kind of slash. */
+function hasDotDotSegment(rel: string): boolean {
+  return rel.split(/[\\/]/).some((part) => part === '..');
+}
+
 /** Run ids are made here ("run-<time>"); anything else in an address is refused, so it can't leave the runs folder. */
 function isRunId(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(value) && !value.includes('..');
@@ -223,14 +230,6 @@ async function exists(file: string): Promise<boolean> {
 }
 
 export { redactedMessage };
-
-function isLoopbackOrigin(origin: string): boolean {
-  try {
-    return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(origin).hostname);
-  } catch {
-    return false;
-  }
-}
 
 /** The Host header names this computer. A page that points a name it controls at this port (DNS rebinding) doesn't. */
 function isLoopbackHost(host: string | undefined): boolean {
@@ -716,7 +715,10 @@ export class RunnerServer {
       claimOwner: (runId) => {
         if (this.beta) {
           const me = currentSessionId();
-          if (me) this.runOwners.set(runId, me);
+          if (me) {
+            this.runOwners.set(runId, me);
+            pinSession(me);
+          }
         }
       },
       isMine: (runId) => this.isMine(runId),
@@ -826,6 +828,9 @@ export class RunnerServer {
     await this.moveLegacyData();
     await this.ensurePlanLoaded();
     await this.loadLatestReport();
+    // A schedule does what its screen says: it is checked every minute from the moment the server is up.
+    // Schedules are closed in beta, so the shared copy never starts runs on its own.
+    if (!this.beta) this.scheduler.start((schedule) => this.runSchedule(schedule));
     return new Promise((resolve, reject) => {
       this.server = http.createServer(async (req, res) => {
         try {
@@ -865,7 +870,11 @@ export class RunnerServer {
           // would let any website trigger runs. Extra origins are set via RUNNER_ALLOWED_ORIGINS.
           const origin = req.headers.origin;
           const originNorm = origin ? origin.replace(/\/+$/, '') : undefined;
-          if (origin && (isLoopbackOrigin(origin) || (originNorm && this.allowedOrigins.has(originNorm)))) {
+          // Only exact origins: this server's own, or one listed. Not any other localhost port.
+          const ownHost = (req.headers.host ?? '').toLowerCase();
+          const isOwnOrigin =
+            !!originNorm && !!ownHost && [`http://${ownHost}`, `https://${ownHost}`].includes(originNorm.toLowerCase());
+          if (origin && (isOwnOrigin || (originNorm && this.allowedOrigins.has(originNorm)))) {
             res.setHeader('Access-Control-Allow-Origin', origin);
             res.setHeader('Access-Control-Allow-Credentials', 'true');
             res.setHeader('Vary', 'Origin');
@@ -887,7 +896,14 @@ export class RunnerServer {
 
           if (this.beta) {
             const proto = req.headers['x-forwarded-proto'];
-            enterSession(sessionFor(req, res, (Array.isArray(proto) ? proto[0] : proto)?.includes('https') ?? false));
+            try {
+              enterSession(sessionFor(req, res, (Array.isArray(proto) ? proto[0] : proto)?.includes('https') ?? false));
+            } catch (err) {
+              if (!(err instanceof SessionRateLimited)) throw err;
+              res.setHeader('Retry-After', '600');
+              this.sendJson(res, 429, { error: err.message, code: 'ERR_BETA_LIMIT' });
+              return;
+            }
             if (this.closedInBeta(req.method, pathname)) {
               this.sendJson(res, 403, {
                 error: 'This is closed on the shared beta copy, so testers don’t change each other’s check-ups.',
@@ -1127,6 +1143,11 @@ export class RunnerServer {
           // dir. A run's files are under runs/<runId>/ (evidence, page thumbnails, its reports).
           if (pathname.startsWith('/api/evidence/') && req.method === 'GET') {
             const relPath = decodeURIComponent(pathname.replace('/api/evidence/', ''));
+            if (hasDotDotSegment(relPath)) {
+              res.writeHead(403, { 'Content-Type': 'text/plain' });
+              res.end('Forbidden');
+              return;
+            }
             const targetFile = path.resolve(this.outputDir, relPath);
             // Checked again on the path the file system really opens, so neither a link nor another
             // spelling of the same folder can reach a saved session.
@@ -1191,7 +1212,42 @@ export class RunnerServer {
     });
   }
 
+  /**
+   * A due schedule starts a read-only check-up of its address (nothing is sent or changed, no AI request
+   * is spent). False when it could not start, for instance because a check-up is already running.
+   */
+  private async runSchedule(schedule: CheckupSchedule): Promise<boolean> {
+    if (this.phase === 'scanning' || this.phase === 'testing' || this.benchmarkBusy || this.runStartDone) return false;
+    let finishStart!: () => void;
+    this.runStartDone = new Promise<void>((resolve) => (finishStart = resolve));
+    try {
+      const body: RunStartBody = {
+        targetUrl: schedule.targetUrl,
+        owner: false,
+        useAI: false,
+        planWithoutAI: true,
+        skipReview: true,
+        maxPages: schedule.preset === 'quick' ? 20 : undefined,
+      };
+      const authorization = await resolveAuthorization({
+        targetUrl: body.targetUrl,
+        owner: false,
+        ownerExplicit: false,
+        beta: false,
+        hostChecks: this.hostChecks,
+      });
+      await this.checkupRun.start({ body, authorization });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      this.runStartDone = null;
+      finishStart();
+    }
+  }
+
   public async stop(): Promise<void> {
+    this.scheduler.stop();
     if (this.beta) setBrowserPolicy(null);
     // Open event streams would otherwise keep the server from ever finishing its close.
     for (const client of this.streamClients) client.end();
@@ -1254,6 +1310,8 @@ export class RunnerServer {
       } catch {
         // not a path
       }
+      // Ownership is read from the decoded path; one that climbs out of its run folder is nobody's.
+      if (hasDotDotSegment(rel)) return this.refuseNotMine(res, undefined);
       return this.refuseNotMine(res, rel.match(/^runs\/(run-\d+)\//)?.[1]);
     }
     // Visual baselines are kept per site for the whole copy: not offered here.
@@ -1274,6 +1332,10 @@ export class RunnerServer {
   /** Routes that change what every tester sees; shut on a beta copy. */
   private closedInBeta(method: string | undefined, pathname: string): boolean {
     if (pathname.startsWith('/api/runner/schedules') && method !== 'GET') return true;
+    if (method === 'POST' && pathname === '/api/runner/spec-override') return true;
+    if (method === 'POST' && pathname === '/api/settings/defaults') return true;
+    // Triage is remembered for the whole copy's next check-ups; judgement edits a stored report.
+    if (method === 'POST' && /^\/api\/runs\/[^/]+\/(triage|accept-judgement)$/.test(pathname)) return true;
     return method === 'DELETE' && (pathname.startsWith('/api/runs/') || pathname.startsWith('/api/runner/baselines/'));
   }
 
@@ -2363,7 +2425,7 @@ export class RunnerServer {
     const summaryFile = path.join(dir, 'summary.json');
     const summary = JSON.parse(await fs.readFile(summaryFile, 'utf8').catch(() => 'null')) as RunSummary | null;
     if (!summary) return;
-    const verdict = releaseVerdict(report.findings);
+    const verdict = releaseVerdict(report.findings, undefined, report.grades, report.coverage);
     await fs
       .writeFile(
         summaryFile,
@@ -2533,15 +2595,20 @@ export class RunnerServer {
       const current = await this.readAiModels();
       const sameProvider = (current.provider ?? 'openrouter') === provider;
       const chosen = body.model !== undefined || body.visionModel !== undefined;
-      await this.writeAiModels({
-        provider,
-        text: body.model !== undefined ? body.model : sameProvider ? current.text : null,
-        vision: body.visionModel !== undefined ? body.visionModel : sameProvider ? current.vision : null,
-        chosenBy: chosen ? 'person' : sameProvider ? current.chosenBy : undefined,
-      });
+      // Beta: the model choice file is shared by every tester, so only the tester's own key is kept.
+      if (!this.beta) {
+        await this.writeAiModels({
+          provider,
+          text: body.model !== undefined ? body.model : sameProvider ? current.text : null,
+          vision: body.visionModel !== undefined ? body.visionModel : sameProvider ? current.vision : null,
+          chosenBy: chosen ? 'person' : sameProvider ? current.chosenBy : undefined,
+        });
+      }
       // Without a chosen model, OpenRouter's free models are picked automatically.
       const key = await this.storedKey(provider);
-      if (provider === 'openrouter' && key && !chosen) await this.refreshAiModels(key).catch(() => null);
+      if (!this.beta && provider === 'openrouter' && key && !chosen) {
+        await this.refreshAiModels(key).catch(() => null);
+      }
       const setup = await this.aiSetup();
       this.sendJson(res, 200, {
         saved: true,
@@ -2699,7 +2766,39 @@ export class RunnerServer {
     this.sendJson(res, 404, { error: 'Not found' });
   }
 
+  /** Set synchronously when a start begins and cleared when it has claimed the slot or failed. */
+  private runStartDone: Promise<void> | null = null;
+
   private async handleTriggerRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (
+      this.phase === 'scanning' ||
+      this.phase === 'testing' ||
+      this.benchmarkBusy ||
+      this.runStartDone // a second start while the first is still starting
+    ) {
+      this.sendJson(res, 409, {
+        error: this.beta
+          ? 'Someone else is running a check-up on this shared copy. Try again in a few minutes.'
+          : 'Another check-up is running. Wait for it to finish, or stop it first.',
+        code: 'ERR_RUN_IN_PROGRESS',
+        suggestion: this.beta
+          ? 'Only one check-up runs at a time here. Try again in a few minutes.'
+          : 'Wait for the check-up in progress to finish, or stop it, then start this one.',
+      });
+      return;
+    }
+    // No await between the check above and this line, so two requests never both pass it.
+    let finishStart!: () => void;
+    this.runStartDone = new Promise<void>((resolve) => (finishStart = resolve));
+    try {
+      await this.startRunFromRequest(req, res);
+    } finally {
+      this.runStartDone = null;
+      finishStart();
+    }
+  }
+
+  private async startRunFromRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (this.phase === 'scanning' || this.phase === 'testing' || this.benchmarkBusy) {
       this.sendJson(res, 409, {
         error: this.beta
@@ -2741,6 +2840,18 @@ export class RunnerServer {
     }
 
     if (await this.refuseTarget(res, body.targetUrl)) return;
+    // Outside beta refuseTarget lets everything through, so the scheme is checked here for every copy.
+    if (
+      /^[a-z][a-z0-9+.-]*:(?!\d+(\/|$))/i.test(body.targetUrl.trim()) &&
+      !/^https?:\/\//i.test(body.targetUrl.trim())
+    ) {
+      this.sendJson(res, 400, {
+        error: 'Only http and https addresses can be checked.',
+        code: 'ERR_INVALID_REQUEST',
+        suggestion: 'Type an address that starts with http:// or https://.',
+      });
+      return;
+    }
 
     // The new Source inputs are checked before anything starts. Messages never repeat what was sent.
     let typedHostname = '';
@@ -2792,7 +2903,16 @@ export class RunnerServer {
     const waiting = this.phase === 'awaiting-review' ? this.session.plan.currentRecord : null;
     // Beta: a plan another visitor left waiting is kept aside for them, whatever the site, and is never named here.
     const othersPlan = this.beta && !!waiting && !this.isMine(waiting.plan.runId);
-    const parkWaiting = !!waiting && (othersPlan || this.hostOfPlan(waiting) !== hostOfAddress(body.targetUrl));
+    // Beta: another visitor's waiting plan is never moved aside by this start; the start waits instead.
+    if (othersPlan) {
+      this.sendJson(res, 409, {
+        error: 'Someone else is running a check-up on this shared copy. Try again in a few minutes.',
+        code: 'ERR_RUN_IN_PROGRESS',
+        suggestion: 'Only one check-up runs at a time here. Try again in a few minutes.',
+      });
+      return;
+    }
+    const parkWaiting = !!waiting && this.hostOfPlan(waiting) !== hostOfAddress(body.targetUrl);
     if (waiting && !parkWaiting && !body.replacePlan) {
       let waitingFor = waiting.plan.targetUrl;
       try {
@@ -2866,12 +2986,20 @@ export class RunnerServer {
         });
         return;
       }
+      if (err?.code === 'ERR_RUN_IN_PROGRESS') {
+        this.sendJson(res, 409, { error: err.message, code: err.code });
+        return;
+      }
       this.sendJson(res, 500, { error: this.redactedMessage(err) });
     }
   }
 
   private async handleAbortRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readJsonBody<{ finish?: boolean }>(req).catch(() => ({}) as { finish?: boolean });
+    const body = await this.readJsonBody<{ finish?: boolean; discard?: boolean }>(req).catch(
+      () => ({}) as { finish?: boolean; discard?: boolean }
+    );
+    // A stop that arrives while a start is still under way waits for the start, then stops that run.
+    if (this.runStartDone) await this.runStartDone;
     const result = await this.checkupRun.stop(body);
     if (result.finishing) {
       this.sendJson(res, 200, { aborted: false, finishing: true });
@@ -2928,10 +3056,15 @@ export class RunnerServer {
     let visionModel: string | null | undefined;
     let fallbacks: string[] | undefined;
     if (providerType === 'openrouter') {
-      const chosen = await this.refreshAiModels(apiKey!).catch(async () => ({
-        ...(await this.readAiModels()),
-        fallbacks: [] as string[],
-      }));
+      const chosen = await this.refreshAiModels(apiKey!).catch(async (err: unknown) => {
+        // A rejected key is not a reason to carry on with older model names: say so.
+        if (err instanceof OpenRouterAuthError) {
+          throw Object.assign(new Error('The key was not recognised. Check it in Settings, then start again.'), {
+            code: 'ERR_NO_AI_KEY',
+          });
+        }
+        return { ...(await this.readAiModels()), fallbacks: [] as string[] };
+      });
       model ??= chosen.text ?? undefined;
       visionModel = chosen.vision;
       fallbacks = chosen.fallbacks;
@@ -3136,16 +3269,24 @@ export class RunnerServer {
 
   private async handleAcceptBaseline(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await this.readJsonBody<{ id: string; currentEvidencePath?: string }>(req).catch(() => null);
-    if (!body || !body.id) {
+    if (!body || typeof body.id !== 'string' || !body.id) {
       this.sendJson(res, 400, { error: 'Missing baseline id' });
+      return;
+    }
+    if (!/^[\w-]+$/.test(body.id)) {
+      this.sendJson(res, 400, { error: 'That baseline id is not allowed.' });
       return;
     }
     try {
       await fs.mkdir(this.baselineDir, { recursive: true });
       const dest = path.join(this.baselineDir, `${body.id}.png`);
+      if (!isInside(this.baselineDir, dest)) {
+        this.sendJson(res, 403, { error: 'Forbidden' });
+        return;
+      }
       if (body.currentEvidencePath) {
-        const src = path.resolve(this.outputDir, body.currentEvidencePath);
-        if (isInside(this.outputDir, src)) {
+        const src = path.resolve(this.outputDir, String(body.currentEvidencePath));
+        if (isInside(this.outputDir, src) && !isSavedSession(this.outputDir, src)) {
           await fs.copyFile(src, dest);
         }
       }

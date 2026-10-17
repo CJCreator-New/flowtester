@@ -9,7 +9,7 @@ pnpm bootstrap     # install, Playwright Chromium, build everything
 pnpm start         # http://localhost:3001
 ```
 
-Requires Node 22 and pnpm 11 (the exact version is pinned in `package.json`).
+Requires Node 22.9 or newer and pnpm 11 (the exact version is pinned in `package.json`).
 
 ## Workflow
 
@@ -19,6 +19,8 @@ Requires Node 22 and pnpm 11 (the exact version is pinned in `package.json`).
 4. Commit using [Conventional Commits](https://www.conventionalcommits.org/), as the history already does: `feat(landing): …`, `fix: …`, `ci: …`, `chore: …`, `docs: …`.
 5. Open a pull request using the template. CI must pass.
 6. Squash or merge after review.
+
+`.claude/` is local only: its slash commands (`/check`, `/ship`, `/adr`, `/pr-ready`), agents and hand-off files are git-ignored and not part of a clone. The `pnpm` commands above work without it.
 
 ## Definition of done
 

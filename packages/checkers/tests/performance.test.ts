@@ -346,4 +346,18 @@ describe('PerformanceChecker', () => {
       expect(without.length).toBeGreaterThan(0);
     });
   });
+
+  it('reports "Could not verify" when the probe fails, never a pass', async () => {
+    const failing = {
+      evaluate: async () => {
+        throw new Error('page closed');
+      },
+      url: () => 'http://localhost:3050/reports',
+      context: () => ({ cookies: async () => [] }),
+    } as unknown as Page;
+    const findings = await checker.checkPage(failing, { role: 'visitor', breakpoint: '1440px', urlPath: '/reports' });
+    const unverified = findings.filter((f) => f.title.startsWith('Could not verify'));
+    expect(unverified).toHaveLength(1);
+    expect(unverified[0].needsConfirmation).toBe(true);
+  });
 });

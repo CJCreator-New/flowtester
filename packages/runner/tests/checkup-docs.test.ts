@@ -2,13 +2,60 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { parseArgs, buildRunBody, scrub, loadCheckupDocuments, redactIngest, zeroYield } from '../src/checkup.js';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+/** All .ts, .tsx and .css text under a folder, joined. */
+async function sourceText(dir: string): Promise<string> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const parts = await Promise.all(
+    entries.map((e) => {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) return sourceText(p);
+      return /\.(tsx?|css)$/.test(e.name) ? fs.readFile(p, 'utf8') : '';
+    })
+  );
+  return parts.join('\n');
+}
+
+/** Curly and straight quotes are the same character for this check. */
+const plainQuotes = (s: string) => s.replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
 
 const base = { QA_TARGET_URL: 'https://x.test' } as NodeJS.ProcessEnv;
 const roles = JSON.stringify([
   { role: 'admin', username: 'admin@x.test', password: 'Adm1n-pw-77', loginPath: '/admin/login' },
   { role: 'guest', username: 'guest@x.test', password: 'Gu3st-pw-55' },
 ]);
+
+describe('docs/DEMO.md labels', () => {
+  it('every label quoted in DEMO.md appears in the wizard source', async () => {
+    const demo = await fs.readFile(path.join(root, 'docs', 'DEMO.md'), 'utf8');
+    const wizard = plainQuotes(await sourceText(path.join(root, 'packages', 'wizard', 'src')));
+    const labels = [...demo.matchAll(/"([^"\n]+)"/g)].map((m) => m[1]);
+    expect(labels.length).toBeGreaterThan(20);
+    const missing = labels.filter((label) => !wizard.includes(plainQuotes(label)));
+    expect(missing).toEqual([]);
+  });
+
+  it('the two stamp words in DEMO.md are the verdict stamps', async () => {
+    const demo = await fs.readFile(path.join(root, 'docs', 'DEMO.md'), 'utf8');
+    const verdict = await fs.readFile(path.join(root, 'packages', 'types', 'src', 'verdict.ts'), 'utf8');
+    for (const stamp of ['Ready to release', 'Not ready yet']) {
+      expect(demo).toContain(`\`${stamp}\``);
+      expect(verdict).toContain(`'${stamp}'`);
+    }
+  });
+
+  it('the palette jump label matches its section name', async () => {
+    const palette = await fs.readFile(
+      path.join(root, 'packages', 'wizard', 'src', 'components', 'CommandPalette.tsx'),
+      'utf8'
+    );
+    expect(palette).toContain("'Jump to Product context and design notes'");
+  });
+});
 
 describe('checkup --docs and several roles', () => {
   it('--docs takes paths until the next flag and keeps them out of URL detection', () => {

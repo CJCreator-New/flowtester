@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { Finding, Breakpoint } from '@qa/types';
+import { couldNotVerifyFinding } from './could-not-verify.js';
 
 export interface GeoContext {
   testCaseId?: string;
@@ -24,7 +25,7 @@ export class GeoChecker {
   async checkPage(page: Page, context: GeoContext): Promise<Finding[]> {
     const findings: Finding[] = [];
     const details = await this.collectDetails(page);
-    if (!details) return findings;
+    if (!details) return [couldNotVerifyFinding('seo', 'generative search readiness', context, 'GEO')];
 
     const tcId = context.testCaseId || 'GEO';
     const isSpecialPath =

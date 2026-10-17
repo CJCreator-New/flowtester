@@ -62,7 +62,7 @@ const STATUS_WORDS: Record<NonNullable<PageNode['status']>, string> = {
   running: 'Being tested now',
   pass: 'No problems',
   warn: 'Minor problems',
-  fail: 'Serious problems',
+  fail: 'Must-fix problems',
 };
 
 function statusText(node: PageNode): string {
@@ -243,7 +243,7 @@ export function SiteMap({
             <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-warn" /> Minor problems
           </li>
           <li className="flex items-center gap-1.5">
-            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-fail" /> Serious problems
+            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-fail" /> Must-fix problems
           </li>
           <li className="flex items-center gap-1.5">
             <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-rule" />{' '}

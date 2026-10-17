@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { Breakpoint, Finding, FindingSeverity, PageSpeedSample } from '@qa/types';
+import { couldNotVerifyFinding } from './could-not-verify.js';
 
 export interface PerformanceContext {
   testCaseId?: string;
@@ -144,6 +145,7 @@ export class PerformanceChecker {
             measurements: { loads: 1, throttled: false },
           }
         : null);
+    if (!metrics && !vitals) findings.push(couldNotVerifyFinding('performance', 'speed and mobile layout', context));
     if (repeated && context.onSpeed) {
       const speed = repeated.lcpMs ?? repeated.domReadyMs;
       if (speed !== undefined && speed > 0) {
