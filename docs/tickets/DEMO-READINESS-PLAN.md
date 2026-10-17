@@ -47,3 +47,5 @@ Build order. Tickets in the same wave touch disjoint behaviour and can run in pa
 | T-40 | Presenter script | Docs 14; Demo walkthrough notes | haiku |
 
 Human items, not ticket work: merge the branch to `main` so the deploy gate runs (Docs 7); confirm the old key revocation (Docs 8); confirm the default AI model names (Docs 11); run `docker build` (Docs 10); decide whether `.pipeline/`, `dev-pipeline/`, `agent-dashboard/` and `PRODUCT_REVIEW.md` stay tracked (Docs 20); confirm the count and scores items in the walkthrough (Demo 6).
+
+Added after the build: the landing page links to `PRIVACY.md`, which does not exist (`packages/wizard/src/screens/LandingScreen.tsx`). Owner decides: add the file or drop the link.

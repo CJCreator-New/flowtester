@@ -378,15 +378,15 @@ mindmap
 
 ## 7. Non-Functional Requirements (NFRs)
 
-| Category               | Requirement Specification                                         | Metric / Target                                                                                          |
-| :--------------------- | :---------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------- |
-| **Performance**        | Spider discovery crawl speed across static and client-side apps.  | <= 60 seconds for 50 pages on local/staging networks.                                                    |
-| **Execution Speed**    | Test plan execution throughput using Playwright workers.          | <= 3 minutes for 60 standard tests on modern multi-core machines.                                        |
-| **Token Efficiency**   | AI Planner prompt and completion token economics.                 | Average <= 1,000 prompt tokens per page batch; 0 token waste on deterministic link names.                |
-| **Resource Footprint** | Memory and CPU footprint of runner process during testing.        | Operates reliably within 512MB RAM for headless runner; <= 1.5GB during concurrent Playwright execution. |
-| **Accessibility**      | Self-compliance of the Wizard UI against accessibility standards. | 100% WCAG 2.2 AA conformance; 0 axe violations; tap targets >= 24px (standard) / 44px (primary).         |
-| **Portability**        | Platform independence across operating systems and browsers.      | Windows (PowerShell), macOS, and Linux; Chromium (Playwright). Firefox and WebKit are planned, not supported yet.                      |
-| **Reliability**        | Deterministic reproducibility of checkers.                        | 0% false positives on static checks; flaky rate < 2% with Clean Flow Retry enabled.                      |
+| Category               | Requirement Specification                                         | Metric / Target                                                                                                   |
+| :--------------------- | :---------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------- |
+| **Performance**        | Spider discovery crawl speed across static and client-side apps.  | <= 60 seconds for 50 pages on local/staging networks.                                                             |
+| **Execution Speed**    | Test plan execution throughput using Playwright workers.          | <= 3 minutes for 60 standard tests on modern multi-core machines.                                                 |
+| **Token Efficiency**   | AI Planner prompt and completion token economics.                 | Average <= 1,000 prompt tokens per page batch; 0 token waste on deterministic link names.                         |
+| **Resource Footprint** | Memory and CPU footprint of runner process during testing.        | Operates reliably within 512MB RAM for headless runner; <= 1.5GB during concurrent Playwright execution.          |
+| **Accessibility**      | Self-compliance of the Wizard UI against accessibility standards. | 100% WCAG 2.2 AA conformance; 0 axe violations; tap targets >= 24px (standard) / 44px (primary).                  |
+| **Portability**        | Platform independence across operating systems and browsers.      | Windows (PowerShell), macOS, and Linux; Chromium (Playwright). Firefox and WebKit are planned, not supported yet. |
+| **Reliability**        | Deterministic reproducibility of checkers.                        | 0% false positives on static checks; flaky rate < 2% with Clean Flow Retry enabled.                               |
 
 ---
 

@@ -126,16 +126,16 @@ The CI check-up runs in-process on the Check-up Session without binding a networ
 
 ## Wizard (front end)
 
-| Variable                  | Meaning                                                                                        |
-| ------------------------- | ---------------------------------------------------------------------------------------------- |
-| `VITE_RUNNER_URL`         | Only for `pnpm dev` hot reload: where the wizard's API calls go                                |
-| `VITE_BASE`               | Base path for static hosting                                                                   |
-| `VITE_ONLINE_APP_URL`     | Address of the online app. Shows an "Open the online app" button on the Vercel site            |
-| `VITE_WAKE_LIMIT_SECONDS` | How long the landing page waits for the online copy to wake, in seconds (5 to 600). Default 90 |
-| `WIZARD_SCREENSHOTS`      | Turns on screenshot capture in the wizard end-to-end test                                      |
-| `VITE_COUNTER_URL`        | Full GoatCounter-style `https://.../count` endpoint. Unset = no counting and no request        |
-| `VITE_CONTACT_EMAIL`      | Landing footer shows a mailto. Unset = GitHub issues                                           |
-| `VITE_SIGNUP_URL`         | https form-post endpoint for the email-updates control. Unset = "Send feedback" link           |
+| Variable                  | Meaning                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------ |
+| `VITE_RUNNER_URL`         | Only for `pnpm dev` hot reload: where the wizard's API calls go. Default `http://localhost:3001` |
+| `VITE_BASE`               | Base path for static hosting                                                                     |
+| `VITE_ONLINE_APP_URL`     | Address of the online app. Shows an "Open the online app" button on the Vercel site              |
+| `VITE_WAKE_LIMIT_SECONDS` | How long the landing page waits for the online copy to wake, in seconds (5 to 600). Default 90   |
+| `WIZARD_SCREENSHOTS`      | Turns on screenshot capture in the wizard end-to-end test                                        |
+| `VITE_COUNTER_URL`        | Full GoatCounter-style `https://.../count` endpoint. Unset = no counting and no request          |
+| `VITE_CONTACT_EMAIL`      | Landing footer shows a mailto. Unset = GitHub issues                                             |
+| `VITE_SIGNUP_URL`         | https form-post endpoint for the email-updates control. Unset = "Send feedback" link             |
 
 The three landing variables are read when the wizard is built and must be public values only. Set them in both
 the Vercel project and Render (the runner Dockerfile takes them as build args). See `LANDING_MEASUREMENT.md`.

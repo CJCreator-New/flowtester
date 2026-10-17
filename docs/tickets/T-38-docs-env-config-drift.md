@@ -37,7 +37,7 @@ T-30 (ratio and rule numbers), T-37 (labels). Doc edits can start now; re-check 
 `pnpm exec vitest run packages/runner/tests/checkup-docs.test.ts` and the new config-docs test.
 
 ## Status
-todo
+built
 
 ## Carried over from T-34
 - `dev:wizard` (Vite on 3002) needs `RUNNER_ALLOWED_ORIGINS` now that other localhost ports are refused. Document it in `docs/CONFIGURATION.md` and `.env.example`.

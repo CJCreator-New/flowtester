@@ -41,7 +41,18 @@ T-34 (both edit `server.ts`).
 `pnpm exec vitest run packages/runner/tests/runner-server.test.ts packages/runner/tests/checkups.test.ts packages/runner/tests/beta-privacy.test.ts`
 
 ## Status
-todo
+built
 
 ## Carried over from T-34 (decision needed)
 - Beta AI settings POST still saves the tester's own key but skips the shared model-choice file. Keep as is, unless the owner decides testers must not enter keys at all. Record the decision here.
+
+## Decisions recorded at build
+- Beta AI settings: kept as is (a tester saves their own key; the shared model-choice file is not written). The owner can still decide that testers may not enter keys at all; no code changed for it.
+- Direct no-AI run (`checkup-run.ts`): the sanity test is kept, and the report now carries the note "Nothing to test: ... This is not a checked journey." instead of passing it as a check.
+- Approval with nothing to run is refused with 409 `ERR_NO_TESTS` and a `noTests` reason. The wizard does not show it yet (T-36).
+- A repeat approve with the same Idempotency-Key now answers 200 `{ status: 'approved', runId, repeated: true }` (was 409 `ERR_DUPLICATE_APPROVAL`; the wizard treated both as success). A second keyless approve while one runs gets 409 `ERR_DUPLICATE_APPROVAL`.
+- Approve answers with `tests: [{ id, name }]`, the list that runs. The reviewed list (`plan.testCases`) is used as is; tests are derived again only when none was reviewed or the beta read-only flip changed what may run.
+- Stop during plan review keeps the plan and answers `aborted: false, planKept: true`. `POST /api/runner/abort` with `{ discard: true }` throws it away.
+- Beta: a start or an unpark that would move another tester's waiting plan is refused with 409 `ERR_RUN_IN_PROGRESS`.
+- Scheduled runs start read-only, without AI, quick preset capped at 20 pages. Not started in beta (schedules are closed there).
+- Not done: `ai-planner.ts` still turns an AI failure into the fixed-rules fallback; the invalid key is caught earlier, in `prepareAI`.
