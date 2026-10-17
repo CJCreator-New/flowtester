@@ -15,8 +15,8 @@ Docs 14 (no presenter script), Demo walkthrough notes (the golden path, the form
 - Link `docs/DEMO.md` from `docs/README.md`.
 
 ## Acceptance criteria
-- [ ] Every label in the script appears in the wizard source (grep check listed in the doc).
-- [ ] The golden path in the doc matches the screens after T-36 and T-37.
+- [x] Every label in the script appears in the wizard source (grep check listed in the doc).
+- [x] The golden path in the doc matches the screens after T-36 and T-37.
 
 ## Tests to update or add (written, not run)
 - None, unless the doc's grep check is added as a test (`packages/runner/tests/checkup-docs.test.ts` already checks docs; extend it to `DEMO.md` labels).
@@ -28,7 +28,7 @@ T-36 and T-37 (labels must be final).
 `pnpm exec vitest run packages/runner/tests/checkup-docs.test.ts`
 
 ## Status
-todo
+built
 
 ## Carried over from T-37b
 - The command palette item reads "Jump to Requirements and design notes", but its section is now "Product context and design notes". Make the palette item match the section name, and use the section name in the script.

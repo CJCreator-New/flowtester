@@ -188,7 +188,7 @@ export function CommandPalette({ route }: { route: Route }) {
         },
         {
           id: 'plan-jump-docs',
-          title: 'Jump to Requirements and design notes',
+          title: 'Jump to Product context and design notes',
           category: 'Plan Review',
           keywords: ['context', 'requirements', 'notes'],
           run: () => {

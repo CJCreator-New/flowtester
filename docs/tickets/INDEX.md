@@ -26,4 +26,4 @@ Build only; tests run once, in `/verify-all`, after every row here is `built`.
 | [T-37b](T-37b-wizard-copy-group-b.md) | Wizard copy and glossary, group B | review Wizard 5-7,16,18-22; Demo 3 | P1 | M | 4 | built | T-36, T-31 |
 | [T-38](T-38-docs-env-config-drift.md) | Docs, environment and config drift | review Docs 1,2,3,9,15-19 | P1 | M | 1 | built | T-30 |
 | [T-39](T-39-deploy-ref-docker-hygiene.md) | Generated workflow ref, Docker, hygiene | review Docs 1,10,12,13,20 | P1 | S | 1 | built | - |
-| [T-40](T-40-presenter-script.md) | Presenter script for the demo | review Docs 14; Demo notes | P2 | S | 5 | todo | T-36, T-37a, T-37b |
+| [T-40](T-40-presenter-script.md) | Presenter script for the demo | review Docs 14; Demo notes | P2 | S | 5 | built | T-36, T-37a, T-37b |

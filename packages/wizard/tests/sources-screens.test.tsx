@@ -411,7 +411,8 @@ describe('T-37b: wizard copy, labels and accessibility', () => {
 
   it('Command palette: Requirements, Leave out and Compare with another site', () => {
     const palette = read('../src/components/CommandPalette.tsx');
-    expect(palette).toContain('Jump to Requirements and design notes');
+    expect(palette).toContain('Jump to Product context and design notes');
+    expect(palette).not.toContain('Jump to Requirements and design notes');
     expect(palette).toContain('Toggle Leave out item');
     expect(palette).not.toContain('Jump to Specs');
     expect(palette).not.toContain('Run / Skip item');
