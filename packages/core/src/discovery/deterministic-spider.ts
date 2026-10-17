@@ -140,7 +140,7 @@ const CREDENTIAL_FIELD = /user|email|login|otp|code|phone|token/i;
  * field beside other fields — a change-password form, a two-factor step — is a page like any other, not a
  * wall a Role has to get past (LC-002).
  */
-function isSignInOnlyForm(forms: ReadForm[]): boolean {
+export function isSignInOnlyForm(forms: ReadForm[]): boolean {
   const visible = forms.filter((f) => f.visible);
   const withPassword = visible.filter((f) => f.inputs.some((i) => i.type === 'password'));
   if (withPassword.length !== 1) return false;
