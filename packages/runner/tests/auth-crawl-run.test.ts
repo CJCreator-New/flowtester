@@ -166,7 +166,9 @@ describe('T-117 Runner auth crawl SSE and report (auth-crawl-run.test.ts)', () =
       body: JSON.stringify({
         targetUrl: `${fixtureBase}/account`,
         skipReview: true,
-        maxPages: 20,
+        // Enough pages to reach /account/security (the seventh the signed-in crawl visits), and no more: every page
+        // adds planned tests, and the run times out on a shared runner otherwise.
+        maxPages: 10,
         breakpoints: ['1440px'],
         owner: true,
         signInConsent: true,
@@ -182,8 +184,10 @@ describe('T-117 Runner auth crawl SSE and report (auth-crawl-run.test.ts)', () =
     });
     expect(runRes.status).toBe(202);
 
+    // A full run (crawl, then every planned test as the signed-in role) takes about 7 minutes on a shared runner.
+    // The report's page coverage only exists once the whole run has finished.
     let isRunning = true;
-    for (let i = 0; i < 300 && isRunning; i++) {
+    for (let i = 0; i < 1200 && isRunning; i++) {
       await new Promise((r) => setTimeout(r, 500));
       const status = await (await fetch(`${runnerBase}/api/runner/status`)).json();
       isRunning = status.isRunning;
@@ -195,7 +199,7 @@ describe('T-117 Runner auth crawl SSE and report (auth-crawl-run.test.ts)', () =
     const skippedPaths = (report.pageCoverage.skipped ?? []).map((s: { urlPath: string }) => s.urlPath);
     // A page with a password field that is not the sign-in page is reached, not skipped as a wall.
     expect(skippedPaths).not.toContain('/account/security');
-  }, 180000);
+  }, 720000);
 
   it('asserts RUN_FAILED event carries signInReason when credentials fail under consent', async () => {
     const events: any[] = [];

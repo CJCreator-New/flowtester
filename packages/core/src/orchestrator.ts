@@ -24,6 +24,7 @@ import { captureVisualShot, readBaselineMode, writeVisualBaseline } from './visu
 import { PreFlightChecker, SignInFailedError, type PreFlightResult } from './preflight.js';
 import { restoreSession } from './discovery/discovery-agent.js';
 import { navigate, looksLikeLogin } from './navigate.js';
+import { isSignInOnlyForm, readPageForms } from './discovery/deterministic-spider.js';
 import { debugLog } from './debug-log.js';
 import { SourceLocator } from './source-locator.js';
 import { ReproScriptGenerator } from './repro-generator.js';
@@ -643,6 +644,8 @@ export class FlowTestOrchestrator {
         let blockedChanges: string[] = [];
         // Content-Security-Policy of the page's main response; read only by the weak-policy check.
         let cspHeader: string | undefined;
+        // All headers of the page's main response, read by the HSTS and nosniff checks.
+        let mainResponseHeaders: Record<string, string> | undefined;
         /** Lists where the planned option wasn't there, and what was picked instead. */
         const substitutes: Array<{ step: string; planned: string; chosen: string }> = [];
         // Test Copy only: one token per Test point, shared by both attempts, and a memory of any form sent.
@@ -692,6 +695,7 @@ export class FlowTestOrchestrator {
             page.on('response', (r) => {
               if (r.request().isNavigationRequest() && r.frame() === attachedPage.mainFrame()) {
                 cspHeader = r.headers()['content-security-policy'];
+                mainResponseHeaders = r.headers();
               }
             });
 
@@ -710,8 +714,16 @@ export class FlowTestOrchestrator {
 
             if (isRoleSignedIn) {
               const loginPath = credential.loginPath || '/login';
-              const targetIsLogin = testCase.startPage.replace(/\/$/, '') === loginPath.replace(/\/$/, '');
-              const isLogin = !targetIsLogin && (await looksLikeLogin(page, [loginPath]));
+              // A bounce is being sent from the page the test asked for to a sign-in page. A test that starts on the
+              // sign-in page is not bounced, and a change-password form (a password field beside other fields) is a
+              // page like any other (LC-002).
+              const startedOn = new URL(testCase.startPage, options.targetUrl).pathname.replace(/\/$/, '');
+              const landedOn = new URL(page.url()).pathname.replace(/\/$/, '');
+              const redirectedToLogin =
+                landedOn !== startedOn &&
+                (landedOn === loginPath.replace(/\/$/, '') ||
+                  ((await looksLikeLogin(page)) && isSignInOnlyForm(await readPageForms(page))));
+              const isLogin = redirectedToLogin;
               const isBounced = navRes.status === 401 || isLogin;
               startPageBounced = isBounced;
 
@@ -1069,6 +1081,7 @@ export class FlowTestOrchestrator {
                     breakpoint: bp,
                     urlPath: new URL(page.url(), options.targetUrl).pathname,
                     baseUrl: options.targetUrl,
+                    responseHeaders: mainResponseHeaders,
                   })),
                   ...(await this.securityDepth.checkPage(page, {
                     testCaseId: testCase.id,
@@ -1310,14 +1323,21 @@ export class FlowTestOrchestrator {
             skipReason: sentData ? NEEDS_TEST_COPY : undefined,
             breakpoint: bp,
             retry: flakyRetry,
-            checks: checksRun(keptFindings, {
-              ux: !lightChecks,
-              pageLevel: pageLevelChecks,
-              search: searchHere && options.searchChecks !== false,
-              spec: !sentData && !openingFailed && Object.keys(testCase.expectations || {}).some((k) => k !== 'origin'),
-              permissions: !!permChecker,
-              design: (!!designTokens && pageLevelChecks) || designFindings.length > 0,
-            }),
+            // A skipped point checked nothing, so it carries no checks.
+            checks:
+              status === 'Skipped'
+                ? undefined
+                : checksRun(keptFindings, {
+                    ux: !lightChecks,
+                    pageLevel: pageLevelChecks,
+                    search: searchHere && options.searchChecks !== false,
+                    spec:
+                      !sentData &&
+                      !openingFailed &&
+                      Object.keys(testCase.expectations || {}).some((k) => k !== 'origin'),
+                    permissions: !!permChecker,
+                    design: (!!designTokens && pageLevelChecks) || designFindings.length > 0,
+                  }),
           };
         } catch (fatalErr: unknown) {
           // Stopping isn't a failure of the site: nothing is recorded, and the run ends.
@@ -1434,7 +1454,7 @@ export class FlowTestOrchestrator {
       skipped,
       couldNotVerify,
       flakyFlows: results.filter((r) => r.retry?.status === 'FLAKY_PASSED').length,
-      completionRate: totalTestPoints > 0 ? (totalTestPoints / totalTestPoints) * 100 : 100,
+      completionRate: totalTestPoints > 0 ? (passed / totalTestPoints) * 100 : 0,
     };
 
     // Apply Suppressions & Compute Delta

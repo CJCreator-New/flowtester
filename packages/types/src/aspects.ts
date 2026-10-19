@@ -32,7 +32,8 @@ export interface MarketingReview {
 }
 
 export interface AspectScore {
-  grade: AspectGrade;
+  /** Null when none of the area's checks ran: it is "Not checked", never an A. */
+  grade: AspectGrade | null;
   score: number;
   findings: string[];
   /**
@@ -52,7 +53,8 @@ export interface AspectScore {
 
 export interface SiteAspectGrades {
   aspects: Record<AspectType, AspectScore>;
-  overallGrade: AspectGrade;
+  /** Capped at the worst area grade. Null when no area was checked. */
+  overallGrade: AspectGrade | null;
   overallScore: number;
 }
 
@@ -73,8 +75,8 @@ export interface RankedRecommendation {
 }
 
 export interface AspectGradeDelta {
-  previousGrade?: AspectGrade;
-  currentGrade: AspectGrade;
+  previousGrade?: AspectGrade | null;
+  currentGrade: AspectGrade | null;
   previousScore?: number;
   currentScore: number;
 }

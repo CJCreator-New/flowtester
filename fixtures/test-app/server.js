@@ -1,4 +1,5 @@
 import http from 'http';
+import { randomBytes } from 'crypto';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 
@@ -29,6 +30,20 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', `http://localhost:${port}`);
   // Name the port this socket is on (not PORT), so robots/sitemap/llms point at the running fixture.
   const origin = `http://localhost:${req.socket.localPort}`;
+
+  // Baseline security headers: the security checker now reads response headers, and the fixture is the
+  // reference "healthy" app. Inline scripts get a per-response nonce so the policy needs no 'unsafe-inline'.
+  const nonce = randomBytes(12).toString('base64');
+  res.setHeader(
+    'Content-Security-Policy',
+    `default-src 'self'; script-src 'self' 'nonce-${nonce}'; script-src-attr 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'`
+  );
+  const end = res.end.bind(res);
+  res.end = (chunk, ...rest) =>
+    end(typeof chunk === 'string' ? chunk.replace(/<script(?=[\s>])/g, `<script nonce="${nonce}"`) : chunk, ...rest);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
 
   if (req.headers['x-qa-bypass-token']) {
     const p = url.pathname;

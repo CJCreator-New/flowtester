@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { Finding, Breakpoint } from '@qa/types';
+import { couldNotVerifyFinding } from './could-not-verify.js';
 
 export interface AeoContext {
   testCaseId?: string;
@@ -27,7 +28,7 @@ export class AeoChecker {
   async checkPage(page: Page, context: AeoContext): Promise<Finding[]> {
     const findings: Finding[] = [];
     const details = await this.collectDetails(page);
-    if (!details) return findings;
+    if (!details) return [couldNotVerifyFinding('seo', 'answer engine readiness', context, 'AEO')];
 
     const tcId = context.testCaseId || 'AEO';
     const isRootOrAbout = context.urlPath === '/' || context.urlPath === '' || context.urlPath.includes('/about');

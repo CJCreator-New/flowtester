@@ -126,6 +126,8 @@ export interface ReviewPlan {
   roles?: string[];
   /** What won't run, and why. */
   wontRun?: PlanWontRun[];
+  /** Set when the plan has no tests: why, shown in Plan Review as "Nothing to test". */
+  noTests?: string;
   budget?: AIRequestBudget;
   /** What approving runs, and every default applied. */
   summary?: PlanSummary;

@@ -29,6 +29,7 @@ import { DEFAULT_RELEASE_GATES, type ReleaseGateCriteria } from '@qa/types';
 import { KeyField } from '../components/KeyField';
 import { ErrorMessage, Notice, Question, Spinner } from '../components/text';
 import { formatWhen } from '../lib/format';
+import { PRESET_META, presetOf, type GatePreset } from '../lib/release-rule';
 import { useDocumentTitle } from '../lib/title';
 
 const PROVIDERS: Array<{ id: AiProviderId; name: string; hint: string }> = [
@@ -516,30 +517,18 @@ function Defaults() {
   );
 }
 
-const PRESET_META: Record<'strict' | 'standard' | 'lenient', { name: string; description: string }> = {
-  strict: { name: 'Strict', description: 'Zero tolerance: 0 blockers, 0 majors, strict accessibility' },
-  standard: { name: 'Standard', description: 'Balanced release bar: 0 blockers, up to 2 majors' },
-  lenient: { name: 'Lenient', description: 'Permissive dev/staging bar: up to 1 blocker, up to 5 majors' },
-};
-
-/** Release readiness criteria: configure thresholds for blockers, major defects, WCAG compliance, and test coverage. */
+/** The one release rule: the three named rules from verdict.ts, or a custom one. The stamp always uses Standard. */
 function ReleaseGates() {
   const [gate, setGate] = useState<ReleaseGateCriteria>(() => getStoredReleaseGates());
-  const [preset, setPreset] = useState<'strict' | 'standard' | 'lenient' | 'custom'>(() => {
-    const current = getStoredReleaseGates();
-    if (current.strictAccessibility && current.maxBlockers === 0 && current.maxMajors === 0) return 'strict';
-    if (!current.strictAccessibility && current.maxBlockers === 0 && current.maxMajors === 2) return 'standard';
-    if (!current.strictAccessibility && current.maxBlockers === 1 && current.maxMajors === 5) return 'lenient';
-    return 'custom';
-  });
+  const [preset, setPreset] = useState<GatePreset | 'custom'>(() => presetOf(getStoredReleaseGates()));
   const [message, setMessage] = useState<string | null>(null);
 
-  const applyPreset = (key: 'strict' | 'standard' | 'lenient') => {
+  const applyPreset = (key: GatePreset) => {
     const next = { ...DEFAULT_RELEASE_GATES[key] };
     setPreset(key);
     setGate(next);
     saveStoredReleaseGates(next);
-    setMessage(`Quality gate set to ${PRESET_META[key].name} (${PRESET_META[key].description}).`);
+    setMessage(`Release rule set to ${PRESET_META[key].name} (${PRESET_META[key].description}).`);
   };
 
   const updateGate = <K extends keyof ReleaseGateCriteria>(key: K, val: ReleaseGateCriteria[K]) => {
@@ -550,16 +539,17 @@ function ReleaseGates() {
     };
     setGate(next);
     saveStoredReleaseGates(next);
-    setMessage('Custom release gate thresholds saved.');
+    setMessage('Custom release rule saved.');
   };
 
   return (
     <section aria-labelledby="gates-title" className="mt-8 rounded-lg border-2 border-edge bg-surface p-5">
       <h2 id="gates-title" className="mb-1 text-xl font-bold">
-        Release Readiness Gates
+        Release rule
       </h2>
       <p className="mb-4 text-sm text-ink-soft">
-        Configure the quality standards that decide whether a build or website passes as READY FOR RELEASE.
+        The stamp on every report always uses the Standard rule. Your release rule is shown under the stamp, beside it,
+        and never changes the stamp.
       </p>
 
       {/* Preset cards */}
@@ -585,9 +575,10 @@ function ReleaseGates() {
               </div>
               <p className="text-xs text-ink-soft mt-1">{meta.description}</p>
               <div className="mt-2 text-[11px] font-mono text-ink-soft space-y-0.5">
-                <div>Max blockers: {p.maxBlockers}</div>
-                <div>Max majors: {p.maxMajors}</div>
-                {p.strictAccessibility && <div>A11y: Required</div>}
+                <div>Max blockers: {p.maxBlockers ?? 'not limited'}</div>
+                <div>Max majors: {p.maxMajors ?? 'not limited'}</div>
+                <div>{p.minAreaGrade ? `Lowest area grade: ${p.minAreaGrade}` : 'Area grades: not checked'}</div>
+                {p.strictAccessibility && <div>Accessible: Grade A required</div>}
               </div>
             </button>
           );
@@ -597,7 +588,7 @@ function ReleaseGates() {
       {/* Threshold sliders / inputs */}
       <div className="border-t border-rule pt-4 space-y-4">
         <h3 className="text-sm font-bold uppercase tracking-wider text-ink-soft">
-          Gate Criteria {preset === 'custom' && '(Custom)'}
+          Limits {preset === 'custom' && '(Custom)'}
         </h3>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -618,18 +609,27 @@ function ReleaseGates() {
           </div>
 
           <div>
-            <label htmlFor="gate-max-majors" className="label">
-              Max Major Defects Permitted
-            </label>
-            <input
-              id="gate-max-majors"
-              type="number"
-              min="0"
-              max="50"
-              value={gate.maxMajors ?? 0}
-              onChange={(e) => updateGate('maxMajors', Math.max(0, parseInt(e.target.value, 10) || 0))}
-              className="field"
-            />
+            {preset === 'standard' ? (
+              <>
+                <span className="label">Max Major Defects Permitted</span>
+                <p className="py-2 text-sm font-bold text-ink">No limit (Standard)</p>
+              </>
+            ) : (
+              <>
+                <label htmlFor="gate-max-majors" className="label">
+                  Max Major Defects Permitted
+                </label>
+                <input
+                  id="gate-max-majors"
+                  type="number"
+                  min="0"
+                  max="50"
+                  value={gate.maxMajors ?? 0}
+                  onChange={(e) => updateGate('maxMajors', Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  className="field"
+                />
+              </>
+            )}
             <p className="mt-1 text-xs text-ink-soft">High-impact issues with functional workarounds.</p>
           </div>
 
@@ -723,7 +723,7 @@ function CheckupSchedules() {
       setNotice('New automated check-up schedule activated.');
       await loadSchedules();
     } catch (err) {
-      setError(err instanceof RunnerError ? err.message : 'Failed to create schedule.');
+      setError(err instanceof RunnerError ? err.message : 'The schedule couldn’t be created. Try again.');
     } finally {
       setSaving(false);
     }
@@ -734,7 +734,7 @@ function CheckupSchedules() {
       await toggleSchedule(schedule.id, !schedule.enabled);
       await loadSchedules();
     } catch (err) {
-      setError(err instanceof RunnerError ? err.message : 'Failed to update schedule status.');
+      setError(err instanceof RunnerError ? err.message : 'The schedule couldn’t be updated. Try again.');
     }
   };
 
@@ -744,7 +744,7 @@ function CheckupSchedules() {
       await deleteSchedule(id);
       await loadSchedules();
     } catch (err) {
-      setError(err instanceof RunnerError ? err.message : 'Failed to delete schedule.');
+      setError(err instanceof RunnerError ? err.message : 'The schedule couldn’t be deleted. Try again.');
     }
   };
 
@@ -782,7 +782,7 @@ function CheckupSchedules() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="sm:col-span-2">
               <label htmlFor="sched-url" className="label">
-                Target Website URL
+                Site address
               </label>
               <input
                 id="sched-url"
@@ -864,7 +864,7 @@ function CheckupSchedules() {
                 className="field"
               >
                 <option value="full">Full check-up (standard breadth)</option>
-                <option value="quick">Quick smoke scan (faster)</option>
+                <option value="quick">Quick check (faster)</option>
               </select>
             </div>
           </div>
@@ -1000,7 +1000,7 @@ function AddSignIn({ host, onSaved }: { host: string; onSaved: () => void }) {
       aria-label={'Add a sign-in for ' + host}
     >
       <p className="text-sm text-ink-soft sm:col-span-2">
-        Use a test account, not a real person’s. It signs in once to check the details work, then keeps the password in
+        Use a test sign-in, not a real person’s. It signs in once to check the details work, then keeps the password in
         this computer’s keychain.
       </p>
       <label className="text-sm">

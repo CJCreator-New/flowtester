@@ -36,7 +36,7 @@ describe('Single-File Offline HTML Report (html-report.ts)', () => {
       {
         id: 'F-001',
         title: 'Missing Content-Security-Policy header',
-        severity: 'Major',
+        severity: 'Blocker',
         checker: 'security',
         where: { urlPath: '/', role: 'visitor', breakpoint: '1440px' },
         expectedVsActual: { expected: 'CSP header set', actual: 'No CSP header' },
@@ -110,7 +110,7 @@ describe('Single-File Offline HTML Report (html-report.ts)', () => {
   });
 
   it('leads with the same verdict as the screen, and no overall grade to contradict it', async () => {
-    // One Major finding: not ready, whatever the overall score says.
+    // One Blocker finding: not ready, whatever the overall score says.
     const content = await fs.readFile(await generateSingleFileHtmlReport(mockReport, { outputDir: tempDir }), 'utf8');
     expect(content).toContain('Not ready yet');
     expect(content).toContain('1 problem must be fixed first.');
@@ -124,6 +124,32 @@ describe('Single-File Offline HTML Report (html-report.ts)', () => {
     );
     expect(clean).toContain('Ready to release');
     expect(clean).toContain('No problems found.');
+  });
+
+  it('has a "What this did not check" section, empty-safe', async () => {
+    const clean = await fs.readFile(await generateSingleFileHtmlReport(mockReport, { outputDir: tempDir }), 'utf8');
+    expect(clean).toContain('What this did not check');
+    expect(clean).toContain('Everything in the plan ran, and every area was checked.');
+
+    const skipped: ReleaseReport = {
+      ...mockReport,
+      results: [
+        {
+          testCaseId: 'TC-9',
+          flowId: 'F-9',
+          role: 'visitor',
+          status: 'Skipped',
+          durationMs: 0,
+          findings: [],
+          stepEvidence: [],
+          skipReason: 'needs a test copy',
+        },
+      ] as ReleaseReport['results'],
+    };
+    const content = await fs.readFile(await generateSingleFileHtmlReport(skipped, { outputDir: tempDir }), 'utf8');
+    expect(content).toContain('What this did not check');
+    expect(content).toContain('TC-9');
+    expect(content).toContain('needs a test copy');
   });
 
   it('says "Not checked" for an aspect none of whose checks ran', async () => {

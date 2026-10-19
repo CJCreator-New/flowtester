@@ -32,7 +32,7 @@ reports), `runner` (HTTP + SSE server, serves the wizard, port 3001; also `check
 
 `docs/README.md` indexes everything. Start with `docs/ARCHITECTURE.md`; also `docs/TESTING.md`,
 `docs/CONFIGURATION.md`, `docs/API.md`, `docs/DEPLOYMENT.md`, `SECURITY.md`, `CONTRIBUTING.md`.
-Slash commands in `.claude/commands/`: `/check`, `/adr`, `/pr-ready`.
+Slash commands in `.claude/commands/`: `/check`, `/adr`, `/pr-ready`. The whole `.claude/` folder is local only: git-ignored, not part of a clone.
 
 ## Agents and /ship
 

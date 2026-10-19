@@ -14,7 +14,8 @@ const denial = (pattern: string): TestCase => ({
   steps: [{ action: 'navigate', value: '/report', name: 'Try to open /report' }],
   expectations: { origin: 'user', url: { pattern, negate: true } },
 });
-const at = (url: string) => ({ url: () => url, title: async () => 't', innerText: async () => '' }) as any;
+const at = (url: string) =>
+  ({ url: () => url, title: async () => 't', innerText: async () => '', evaluate: async () => 200 }) as any;
 const ctx = { role: 'Employee', breakpoint: '1440px' as const, baseUrl: 'http://app.test' };
 
 describe('url expectation negate', () => {

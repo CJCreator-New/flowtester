@@ -37,6 +37,9 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
   const [error, setError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const timer = useRef<number | undefined>(undefined);
+  // The poll failed: the comparison keeps running on the runner; Retry asks again.
+  const [pollFailed, setPollFailed] = useState(false);
+  const [pollTry, setPollTry] = useState(0);
 
   const running = starting || job?.status === 'running';
   const result = job?.status === 'done' ? (job.result ?? null) : null;
@@ -70,9 +73,11 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
       } catch (err) {
         if (cancelled) return;
         setError(
-          err instanceof RunnerError ? err.message : 'Lost track of the comparison. Open it again from the list below.'
+          err instanceof RunnerError
+            ? err.message
+            : 'Lost track of the comparison. Retry, or open it from the list below.'
         );
-        setJob(null);
+        setPollFailed(true);
         return;
       }
       timer.current = window.setTimeout(() => void tick(), POLL_MS);
@@ -82,7 +87,7 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
       cancelled = true;
       window.clearTimeout(timer.current);
     };
-  }, [runningId, refreshHistory]);
+  }, [runningId, refreshHistory, pollTry]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,7 +152,7 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
       <header>
         <FocusHeading className="text-3xl font-bold tracking-tight">Compare with another site</FocusHeading>
         <p className="mt-1 max-w-prose text-ink-soft">
-          See how your journey stacks up against a competitor’s or a site you admire: how many steps and form fields a
+          See how your journey stacks up against another site, or one you admire: how many steps and form fields a
           visitor meets, which helpful patterns each has, and what you could try. It only looks: nothing is typed, sent
           or changed on either site, and the other site’s robots.txt is respected. It takes about a minute.
         </p>
@@ -198,7 +203,7 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
               name="competitor-url"
               type="url"
               required
-              placeholder="https://competitor.com/signup"
+              placeholder="https://example.com/signup"
               value={refUrl}
               onChange={(e) => setRefUrl(e.target.value)}
               className="field"
@@ -217,6 +222,19 @@ export function BenchmarkScreen({ initialTargetUrl }: { initialTargetUrl?: strin
         </div>
 
         {error && <ErrorMessage>{error}</ErrorMessage>}
+        {pollFailed && runningId && (
+          <button
+            type="button"
+            className="btn-quiet mt-3"
+            onClick={() => {
+              setError(null);
+              setPollFailed(false);
+              setPollTry((n) => n + 1);
+            }}
+          >
+            Retry
+          </button>
+        )}
 
         <div className="pt-2">
           <button

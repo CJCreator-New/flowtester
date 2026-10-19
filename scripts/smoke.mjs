@@ -19,7 +19,6 @@ const env = {
   RUNNER_DATA_DIR: path.join(scratch, 'data'),
   RUNNER_OUTPUT_DIR: path.join(scratch, 'report'),
 };
-delete env.HUB_API_URL;
 const tool = spawn(process.execPath, [path.join(root, 'scripts/start.mjs'), '--no-open'], {
   cwd: root,
   env,

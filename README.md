@@ -95,6 +95,8 @@ Before starting, ensure you have:
 
 ### 1. Clone and Set Up
 
+You need **Node.js 22.9 or newer** and **pnpm 11** (the pnpm version is pinned in `package.json`).
+
 ```bash
 git clone https://github.com/CJCreator/qa-flow-tester.git
 cd "qa-flow-tester"
@@ -147,7 +149,7 @@ RUNNER_PORT=3001
 # RUNNER_BETA=
 ```
 
-Every setting is listed in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). The rest of the docs are indexed in [docs/README.md](docs/README.md).
+`pnpm start` reads `.env` from the repo root when it starts, so restart it after you change the file. Every setting is listed in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). The rest of the docs are indexed in [docs/README.md](docs/README.md).
 
 ---
 
@@ -265,13 +267,13 @@ The test app will start at: **`http://localhost:3050`**
 2. Use Release check-up, which it opens at `http://localhost:3001/`.
 3. The first time, paste an OpenRouter key at the top of the screen (the free tier works). It's checked as you paste it, and nothing else you type is lost. You can replace it later in **Settings**.
 4. Enter the site's address. A bare address on this computer or a private network (`localhost:3050`, `192.168.1.5`) gets `http://`; anything else gets `https://`. Once it's checked, the screen shows the address used and which kind of check-up it gets:
-   - **Test copy**: forms can be filled in and sent. That needs an address on this computer, a private network or a dev tunnel, or one you marked with **This is a test copy**, and **I own this site** ticked.
-   - **Live site**: only looked at, nothing is sent or changed.
+   - **Test copy**: forms can be filled in and sent. That needs an address on this computer, a private network or a dev tunnel, or one you chose **It’s a test copy I’m allowed to test fully** for.
+   - **Live site** (**Only look at it**, or **It’s my live site: only look at it**): only looked at, nothing is sent or changed.
 
    Both choices are remembered for the site. Optionally add specs, design notes or journeys to test, or change **Explore up to N pages** (default 200).
 
-5. Click **Scan the site**. The scan shows live progress with numbers: pages found, layouts, AI requests used and how many are left today, and about how long is left. **Stop scanning** asks first, then goes back with everything still filled in.
-6. Review the plan, change it if you like, and approve it. Nothing is tested before you approve (see [The plan review](#the-plan-review) below). Leaving the plan keeps it waiting: the new check-up screen offers it again.
+5. Click **Start the check-up**. The scan shows live progress with numbers: pages found, layouts, AI requests used and how many are left today, and about how long is left. **Stop scanning** asks first, then goes back with everything still filled in.
+6. Review the plan, change it if you like, and approve it with **Approve and test**. Nothing is tested before you approve (see [The plan review](#the-plan-review) below). Leaving the plan keeps it waiting: the new check-up screen offers it again.
 7. Watch the testing: the test count and time left, the page under test, the latest screenshot and what's been found so far. **Stop testing** keeps your plan, so you can approve it again.
 8. Read the report. The stamp, **Ready to release** or **Not ready yet**, is the verdict, with its reason; the six areas are graded A–F under it, and an area that wasn't checked says so. Problems are grouped **Must fix before release**, **Should fix** and **Suggestions**. Each has **Details for developers**: the screenshot, steps to reproduce, the page and element, console errors, **Copy bug report**, and **Copy Playwright test**. After you fix something, run the check-up again on the same address: the finding should be gone.
 9. **Test again** scans the site again and reuses the plan you approved: if nothing changed, testing starts at once; if something did, only what's new waits for your review. Every report is kept under **Past check-ups**.

@@ -128,6 +128,7 @@ describe('URL-first runs', () => {
       useAI: true,
       aiProvider: 'mock',
       skipReview: false,
+      maxPages: 10,
       breakpoints: ['1440px'],
     });
     expect(res.status).toBe(202);

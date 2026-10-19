@@ -1737,11 +1737,11 @@ function DocsSection({ plan, actions }: { plan: ReviewPlan; actions: PlanActions
   return (
     <Section
       id="plan-docs"
-      title="Specs and design notes"
+      title="Product context and design notes"
       intro="The AI plans with these. Change them, then re-plan so the plan uses them."
     >
       <label className="label" htmlFor="plan-product-context">
-        Specs, requirements or user stories
+        Product context, requirements or user stories
       </label>
       <textarea
         id="plan-product-context"

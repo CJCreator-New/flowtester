@@ -1,5 +1,7 @@
 import { normalizeRoute, normalizeSelector, type Finding } from '@qa/types';
 
+const SEVERITY_RANK = { Blocker: 0, Major: 1, Minor: 2, Suggestion: 3 } as const;
+
 /**
  * One problem, one finding: the same finding seen by several test points, widths or roles is
  * merged into the first one, which records how often and where else it was seen.
@@ -39,6 +41,9 @@ export function mergeDuplicateFindings(findings: Finding[]): Finding[] {
       continue;
     }
     first.occurrences = (first.occurrences || 1) + 1;
+    // The merged finding keeps the highest severity, and is confirmed if any member is.
+    if (SEVERITY_RANK[f.severity] < SEVERITY_RANK[first.severity]) first.severity = f.severity;
+    if (!f.needsConfirmation) first.needsConfirmation = false;
     const seenAt = first.seenAt!;
     const page = normUrlPath;
     if (!seenAt.pages.includes(page)) seenAt.pages.push(page);

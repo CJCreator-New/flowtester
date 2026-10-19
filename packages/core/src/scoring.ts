@@ -131,11 +131,18 @@ export function calculateSiteAspectGrades(findings: Finding[], options: ScoringO
       findingIds.push(f.id);
       const key = problemKey(f);
       if (!grouped.has(key)) {
-        grouped.set(key, { severity: f.severity, pages: new Set(), ids: [], opinion: f.checker === 'ai-review' });
+        grouped.set(key, {
+          severity: f.severity,
+          pages: new Set(),
+          ids: [],
+          opinion: f.checker === 'ai-review' || !!f.advisory,
+        });
       }
       const entry = grouped.get(key)!;
       entry.pages.add(f.where.urlPath);
       entry.ids.push(f.id);
+      // AI-advisory findings never feed the grade caps.
+      if (f.advisory || f.checker === 'ai-review') continue;
       if (f.severity === 'Blocker') {
         blockerCount++;
       } else if (f.severity === 'Major') {
@@ -162,19 +169,20 @@ export function calculateSiteAspectGrades(findings: Finding[], options: ScoringO
       aspectFindings.some(
         (f) =>
           !f.thirdParty &&
-          (f.title.includes('HTTP 5') ||
-            f.title.includes('500') ||
+          (f.is5xx === true ||
             f.title.toLowerCase().includes('uncaught exception') ||
             f.title.toLowerCase().includes('application crash'))
       );
 
     const finalScore = Math.max(0, Math.round(100 - totalDeduction));
-    const grade = scoreToGrade(finalScore, blockerCount, majorCount, hasFirstPartyCrash);
+    const checked = ran ? [...relevantCheckers].some((c) => ran.has(c)) || findingIds.length > 0 : true;
+    // An area nothing checked has no grade: it is "Not checked", never an A.
+    const grade = checked ? scoreToGrade(finalScore, blockerCount, majorCount, hasFirstPartyCrash) : null;
     aspects[aspect] = {
       grade,
-      score: finalScore,
+      score: checked ? finalScore : 0,
       findings: findingIds,
-      ...(ran ? { checked: [...relevantCheckers].some((c) => ran.has(c)) || findingIds.length > 0 } : {}),
+      ...(ran ? { checked } : {}),
     };
 
     if (aspect === 'Findable') {
@@ -207,11 +215,16 @@ export function calculateSiteAspectGrades(findings: Finding[], options: ScoringO
   // Calculate overall score & grade, over the aspects that were checked
   const counted = Object.values(aspects).filter((a) => a.checked !== false);
   const totalScore = counted.reduce((sum, a) => sum + a.score, 0);
-  const overallScore = counted.length > 0 ? Math.round(totalScore / counted.length) : 100;
-  const hasF = counted.some((a) => a.grade === 'F');
-  let overallGrade = scoreToGrade(overallScore);
-  if (hasF && (overallGrade === 'A' || overallGrade === 'B')) {
-    overallGrade = 'C'; // Failing an aspect caps overall grade at C
+  const overallScore = counted.length > 0 ? Math.round(totalScore / counted.length) : 0;
+  // The overall grade can never be better than the worst area grade, so it cannot contradict the verdict.
+  const rank: Record<AspectGrade, number> = { A: 4, B: 3, C: 2, D: 1, F: 0 };
+  const order: AspectGrade[] = ['F', 'D', 'C', 'B', 'A'];
+  let overallGrade: AspectGrade | null = null;
+  if (counted.length > 0) {
+    overallGrade = scoreToGrade(overallScore);
+    for (const a of counted) {
+      if (a.grade && rank[a.grade] < rank[overallGrade]) overallGrade = order[rank[a.grade]];
+    }
   }
 
   return {

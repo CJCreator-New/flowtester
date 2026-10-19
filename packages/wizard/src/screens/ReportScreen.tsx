@@ -174,8 +174,8 @@ export function Report({
   const tokens = Object.entries(report.aiUsage || {});
   const evaluatedGate = useMemo(() => {
     const gate = getStoredReleaseGates();
-    return releaseVerdict(report.findings || [], gate, report.grades);
-  }, [report.findings, report.grades]);
+    return releaseVerdict(report.findings || [], gate, report.grades, report.coverage);
+  }, [report.findings, report.grades, report.coverage]);
 
   useEffect(() => {
     const handleHash = () => {
@@ -226,7 +226,7 @@ export function Report({
         <span aria-hidden="true" className="text-rule">
           /
         </span>
-        <span className="font-mono text-xs text-ink-soft">run #{report.runId.slice(0, 8)}</span>
+        <span className="font-mono text-xs text-ink-soft">Check-up #{report.runId.slice(0, 8)}</span>
         {pageFilter && (
           <>
             <span aria-hidden="true" className="text-rule">
@@ -263,10 +263,17 @@ export function Report({
           <p className="mt-1 text-ink-soft">
             {summary.total === 0
               ? summary.headline
-              : `${mustFix} must fix · ${count(summary.total, 'problem', 'problems')} in all`}
+              : `${mustFix} must fix before release · ${count(summary.total, 'problem', 'problems')} in all`}
             {coverage.totalTestPoints > 0 &&
               ` · ${count(coverage.totalTestPoints, 'test', 'tests')} in ${formatDuration(report.durationMs)}`}
           </p>
+          {summary.ready && mustFix > 0 && (
+            <p className="mt-2 text-sm text-ink">
+              Ready to release does not mean nothing needs fixing. The Standard rule does not block release on{' '}
+              {count(mustFix, 'Major', 'Majors')} alone, but they lower an area grade, and they stay listed under Must
+              fix before release.
+            </p>
+          )}
           {summary.readOnly && (
             <p className="mt-2 text-sm text-ink">
               Only looked at: nothing was sent or changed, so forms weren’t tested.
@@ -291,6 +298,12 @@ export function Report({
                   <Link to={PATHS.settings} className="font-bold text-stamp hover:underline print:hidden">
                     Change the rule
                   </Link>
+                </p>
+              )}
+              {evaluatedGate.ready && !summary.ready && (
+                <p className="text-sm text-ink-soft">
+                  Your rule is met, but the stamp uses the Standard rule and says {summary.stamp}. The stamp does not
+                  change.
                 </p>
               )}
             </>
@@ -411,7 +424,7 @@ export function Report({
             </button>
           </div>
           <dl className="grid gap-x-4 gap-y-1 font-mono text-sm sm:grid-cols-[12rem_1fr]">
-            <dt className="text-ink-soft">Run</dt>
+            <dt className="text-ink-soft">Check-up</dt>
             <dd className="break-all text-ink">{report.runId}</dd>
             <dt className="text-ink-soft">Address</dt>
             <dd className="break-all text-ink">{report.targetUrl}</dd>
@@ -547,7 +560,7 @@ function DownloadBar({
         </button>
         <span className="flex flex-wrap items-center gap-3 sm:ml-auto">
           <button type="button" className="btn-link" aria-pressed={light} onClick={() => onLight(!light)}>
-            {light ? 'Dark view' : 'Light view'}
+            Light view
           </button>
           <button type="button" className="btn-link" onClick={() => window.print()}>
             Print
@@ -583,7 +596,7 @@ function ReportActionsBar({
           disabled={actions.starting}
           onClick={() => actions.onTestAgain(report)}
         >
-          {actions.starting ? <Spinner label="Starting…" /> : 'Test again'}
+          {actions.starting ? <Spinner label="Starting…" /> : 'New check-up of this site'}
         </button>
         <button type="button" className="btn-link" aria-expanded={deeper} onClick={() => setDeeper((d) => !d)}>
           Go deeper: test the signed-in pages
@@ -602,8 +615,8 @@ function ReportActionsBar({
           <div>
             <h2 className="text-lg font-bold">Test the pages behind a sign-in</h2>
             <p className="text-sm text-ink-soft">
-              A new check-up signs in with this account, then scans and plans the pages it can reach. Use a test
-              account, not a real person’s. Next time you can add a sign-in when you start the check-up, or from the
+              A new check-up signs in with these details, then scans and plans the pages it can reach. Use a test
+              sign-in, not a real person’s. Next time you can add a sign-in when you start the check-up, or from the
               plan.
             </p>
           </div>
@@ -702,7 +715,7 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
       <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {ASPECTS.map((aspect) => {
           const data = report.grades!.aspects[aspect];
-          const checked = data && data.checked !== false;
+          const checked = data && data.checked !== false && data.grade !== null;
           const sub = aspect === 'Findable' ? data?.subBreakdown : undefined;
           const problems = checked ? groupProblems(report.findings.filter((f) => data.findings.includes(f.id))) : null;
           const problemCount = problems
@@ -722,7 +735,7 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
                 </span>
                 {checked ? (
                   <span
-                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-control border-2 text-2xl font-bold ${gradeClasses(data.grade)}`}
+                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-control border-2 text-2xl font-bold ${gradeClasses(data.grade ?? 'F')}`}
                   >
                     <span className="sr-only">Grade </span>
                     {data.grade}
@@ -752,7 +765,7 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
                         ],
                       ] as const
                     ).map(([label, part, hint]) => (
-                      <div key={label} title={hint}>
+                      <div key={label}>
                         <dt className="text-ink-soft">{label}</dt>
                         <dd className="font-bold text-ink">
                           {part?.checked === false ? (
@@ -761,6 +774,7 @@ function AspectGrades({ report }: { report: ReleaseReport }) {
                             `${part?.score ?? 100}%`
                           )}
                         </dd>
+                        <dd className="text-xs text-ink-soft">{hint}</dd>
                       </div>
                     ))}
                   </dl>
@@ -803,7 +817,11 @@ function Improvements({ report }: { report: ReleaseReport }) {
                   {rec.category === 'quick-win' ? 'Quick win' : 'Bigger change'}
                 </span>
                 <span className="text-ink-soft">
-                  {rec.severity === 'Blocker' ? 'Blocks release · ' : rec.severity === 'Major' ? 'Must fix · ' : ''}
+                  {rec.severity === 'Blocker'
+                    ? 'Blocks release · '
+                    : rec.severity === 'Major'
+                      ? 'Must fix before release · '
+                      : ''}
                   {rec.aspect} · {rec.effort} effort · {rec.impact} impact
                   {rec.affectedPages.length > 0 && ` · ${count(rec.affectedPages.length, 'page', 'pages')}`}
                 </span>
@@ -1058,7 +1076,7 @@ function Problems({
               aria-expanded={showHidden}
               onClick={() => setShowHidden((s) => !s)}
             >
-              {showHidden ? 'Hide them' : 'Show them'}
+              Show them
             </button>
           </p>
           {showHidden && (
@@ -1167,7 +1185,7 @@ function PageCoverageSection({ report }: { report: ReleaseReport }) {
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
         <h3 id="coverage-title" className="text-xl font-bold">
-          Crawl coverage
+          Pages checked
         </h3>
         <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">
           Pages reached {coverage.reached} of {coverage.found}
@@ -1261,7 +1279,7 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
       setOverrideSelector('');
       setOverrideUrlPath('');
     } catch (err: unknown) {
-      setOverrideError(err instanceof Error ? err.message : 'Failed to record override');
+      setOverrideError(err instanceof Error ? err.message : 'The override couldn’t be saved. Try again.');
     } finally {
       setSavingOverride(false);
     }
@@ -1274,7 +1292,7 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
         <h3 id="sources-title" className="text-xl font-bold">
-          How the site matches its spec
+          How the site matches its requirements
         </h3>
         {line && <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">{line}</span>}
       </div>
@@ -1322,18 +1340,21 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
                         }}
                         className="rounded-md border border-rule px-2.5 py-1 text-xs font-medium text-accent hover:border-accent hover:bg-accent/5"
                       >
-                        Did this feature change or move? Record Spec Override
+                        Did this feature change or move? Record a requirement override
                       </button>
                     )}
                   </div>
 
                   {isEditing && (
                     <div className="mt-4 rounded-md border border-rule bg-page/50 p-3 space-y-3">
-                      <div className="font-medium text-ink">Record Spec Drift Override</div>
+                      <div className="font-medium text-ink">Record a requirement override</div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <div>
-                          <label className="block text-xs font-medium text-ink-soft mb-1">Status</label>
+                          <label htmlFor="override-status" className="block text-xs font-medium text-ink-soft mb-1">
+                            Status
+                          </label>
                           <select
+                            id="override-status"
                             value={overrideStatus}
                             onChange={(e) => setOverrideStatus(e.target.value as any)}
                             className="w-full rounded border border-rule bg-surface px-2 py-1 text-xs text-ink"
@@ -1344,10 +1365,11 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-ink-soft mb-1">
+                          <label htmlFor="override-url" className="block text-xs font-medium text-ink-soft mb-1">
                             New Route / URL (optional)
                           </label>
                           <input
+                            id="override-url"
                             type="text"
                             placeholder="/new-path"
                             value={overrideUrlPath}
@@ -1356,10 +1378,11 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-ink-soft mb-1">
+                          <label htmlFor="override-selector" className="block text-xs font-medium text-ink-soft mb-1">
                             New CSS Selector (optional)
                           </label>
                           <input
+                            id="override-selector"
                             type="text"
                             placeholder="button[data-testid='save']"
                             value={overrideSelector}
@@ -1369,8 +1392,11 @@ function SourcesSummary({ report }: { report: ReleaseReport }) {
                         </div>
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-ink-soft mb-1">Reason / Notes</label>
+                        <label htmlFor="override-reason" className="block text-xs font-medium text-ink-soft mb-1">
+                          Reason / Notes
+                        </label>
                         <input
+                          id="override-reason"
                           type="text"
                           placeholder="Why this requirement was moved or changed in the app"
                           value={overrideReason}
@@ -1430,6 +1456,7 @@ function ProblemItem({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedMd, setCopiedMd] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const first = group.findings[0];
   const id = `problem-${group.key.replace(/[^A-Za-z0-9_-]+/g, '_')}`;
   const kinds = [
@@ -1444,7 +1471,7 @@ function ProblemItem({
 
   const copyMarkdown = async () => {
     const md = [
-      `### ${group.title} (${group.bucket})`,
+      `### ${group.title}`,
       `**Category**: ${group.category}`,
       `**Pages**: ${group.pages.join(', ')}`,
       '',
@@ -1458,7 +1485,8 @@ function ProblemItem({
       setCopiedMd(true);
       setTimeout(() => setCopiedMd(false), 2500);
     } catch {
-      // fallback
+      setCopyFailed(true);
+      setTimeout(() => setCopyFailed(false), 4000);
     }
   };
 
@@ -1604,6 +1632,11 @@ function ProblemItem({
                 >
                   {copiedMd ? '✓ Copied Markdown' : 'Copy as Markdown'}
                 </button>
+                {copyFailed && (
+                  <p role="alert" className="mt-2 text-sm font-bold text-fail">
+                    The copy didn’t work. Try again.
+                  </p>
+                )}
               </div>
             )}
             {marking && (

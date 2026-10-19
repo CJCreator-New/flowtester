@@ -40,7 +40,11 @@ export interface PlanBuildContext {
   ai?: { provider?: AIProviderType; model?: string; apiKey?: string };
 }
 
-/** The default sanity test case used when no test cases are generated. */
+/** Why a plan has no tests: shown in Plan Review under "Nothing to test". */
+export const NO_TESTS_REASON =
+  'Nothing to test: the scan found no page or journey to check. Add a page or a journey, or choose another address.';
+
+/** A sanity test case for runs that have no reviewed plan. Never added to a plan the person reviews. */
 export function defaultTestCase(): TestCase {
   return {
     id: 'TC-DEFAULT-001',
@@ -80,6 +84,7 @@ export function testsFor(context: PlanBuildContext): {
   notRun: Array<{ id: string; flowId: string; name: string; role: string; reason: string }>;
   wontRun?: ReviewPlan['wontRun'];
   summary?: ReviewPlan['summary'];
+  noTests?: string;
 } {
   const { draft } = context;
   const readOnly = !!context.readOnly;
@@ -91,10 +96,11 @@ export function testsFor(context: PlanBuildContext): {
       testCap: context.testCap,
     });
     return {
-      specTestCases: expanded.testCases.length > 0 ? expanded.testCases : [defaultTestCase()],
+      specTestCases: expanded.testCases,
       notRun: expanded.notRun,
       wontRun: expanded.wontRun,
       summary: expanded.summary,
+      noTests: expanded.testCases.length > 0 ? undefined : NO_TESTS_REASON,
     };
   }
   const specTestCases = [...new TestPlanner().plan(draft, { readOnly }).testCases, ...buildPageSweep(draft)];
@@ -103,7 +109,7 @@ export function testsFor(context: PlanBuildContext): {
         .filter((f) => f.needsTestCopy && !f.outOfScope && !f.needsHelp?.length)
         .map((f) => ({ id: `TC-${f.id}`, flowId: f.id, name: f.name, role: f.role, reason: NEEDS_TEST_COPY }))
     : [];
-  return { specTestCases: specTestCases.length > 0 ? specTestCases : [defaultTestCase()], notRun };
+  return { specTestCases, notRun, noTests: specTestCases.length > 0 ? undefined : NO_TESTS_REASON };
 }
 
 /** The graded checks, each saying up front when it can't be graded this time. */
@@ -152,7 +158,7 @@ export function buildPlan(input: {
   const targetUrl = input.targetUrl || context.targetUrl;
   const discoveredAt = input.discoveredAt || draft.timestamp || new Date().toISOString();
   const rel = relative ?? ((file?: string) => (file ? `/api/evidence/runs/${context.runId}/${file}` : undefined));
-  const { specTestCases, wontRun, summary } = testsFor(context);
+  const { specTestCases, wontRun, summary, noTests } = testsFor(context);
 
   return {
     runId: context.runId,
@@ -193,6 +199,7 @@ export function buildPlan(input: {
       ? [...new Set<string>(draft.pages.flatMap((p) => (p.reachedBy?.length ? p.reachedBy : ['visitor'])))]
       : undefined,
     wontRun,
+    noTests,
     budget: draft.plan?.budget,
     summary,
     otherHosts: draft.plan?.otherHosts,

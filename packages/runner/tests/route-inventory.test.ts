@@ -206,6 +206,45 @@ describe('route inventory (T-203)', () => {
     await res.text();
   });
 
+  describe('CORS origins', () => {
+    function withOrigin(
+      origin: string,
+      method = 'GET'
+    ): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
+      const url = new URL(`${base}/api/runner/status`);
+      return new Promise((resolve, reject) => {
+        const req = http.request(
+          { host: url.hostname, port: url.port, path: url.pathname, method, headers: { origin } },
+          (res) => {
+            res.resume();
+            res.on('end', () => resolve({ status: res.statusCode || 0, headers: res.headers }));
+          }
+        );
+        req.on('error', reject);
+        req.end();
+      });
+    }
+
+    it('sends credentialed CORS headers for this server’s own origin', async () => {
+      const own = new URL(base).origin;
+      const res = await withOrigin(own);
+      expect(res.headers['access-control-allow-origin']).toBe(own);
+      expect(res.headers['access-control-allow-credentials']).toBe('true');
+    });
+
+    it('sends none for another localhost port', async () => {
+      const res = await withOrigin('http://localhost:9999');
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+      expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+    });
+
+    it('refuses a cross-origin write from another localhost port', async () => {
+      const res = await withOrigin('http://localhost:9999', 'POST');
+      expect(res.status).toBe(403);
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    });
+  });
+
   // The negative control: without it, a check that passed for the wrong reason (`fetch` failing, the server
   // answering the fallback everywhere) would look green.
   it('an unknown path answers exactly the generic 404', async () => {

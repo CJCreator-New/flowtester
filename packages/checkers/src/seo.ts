@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { Breakpoint, Finding } from '@qa/types';
+import { couldNotVerifyFinding } from './could-not-verify.js';
 import { SiteRootAuditor } from './site-root.js';
 import { AeoChecker } from './aeo.js';
 import { GeoChecker } from './geo.js';
@@ -58,7 +59,7 @@ export class SeoChecker {
   async checkPage(page: Page, context: SeoContext): Promise<Finding[]> {
     const findings: Finding[] = [];
     const details = await this.collectDetails(page);
-    if (!details) return findings;
+    if (!details) return [couldNotVerifyFinding('seo', 'search basics', context)];
 
     const tcId = context.testCaseId || 'GEN';
     const isPublicVisitor = !context.role || context.role === 'visitor' || context.role === 'anonymous';

@@ -6,7 +6,7 @@
   "type": "module",
   "license": "SEE LICENSE IN LICENSE",
   "scripts": {
-    "start": "node scripts/start.mjs",
+    "start": "node --env-file-if-exists=.env scripts/start.mjs",
     "clean": "node scripts/clean.mjs",
     "clean:dist": "node scripts/clean.mjs --dist",
     "tunnel": "node scripts/tunnel.mjs",
@@ -29,12 +29,6 @@
   },
   "engines": {
     "node": ">=22"
-  },
-  "pnpm": {
-    "overrides": {
-      "playwright": "1.63.0",
-      "playwright-core": "1.63.0"
-    }
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

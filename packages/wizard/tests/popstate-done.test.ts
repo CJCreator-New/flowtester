@@ -30,4 +30,11 @@ describe('popstate in the done phase', () => {
     expect(addressForPhase('testing', '/check/plan')).toBe('/check/testing');
     expect(addressForPhase('testing', '/reports')).toBeNull();
   });
+
+  it('does not snap forward on Back or Forward during a running check-up', () => {
+    expect(addressForPhase('awaiting-review', '/check/scan', true)).toBe('/check');
+    expect(addressForPhase('testing', '/check/plan', true)).toBe('/check');
+    // already on its own address: stays put
+    expect(addressForPhase('awaiting-review', '/check/plan', true)).toBe('/check/plan');
+  });
 });

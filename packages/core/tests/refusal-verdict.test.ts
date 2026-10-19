@@ -23,8 +23,8 @@ describe('Limits without a Source stay out of the verdict', () => {
     expect(v.toConfirm).toBeGreaterThan(0);
   });
 
-  it('a confirmed Major still breaks the verdict next to the guessed Limits', () => {
-    const real = finding({ id: 'F-R', severity: 'Major', title: 'Real problem' });
+  it('a confirmed Blocker still breaks the verdict next to the guessed Limits', () => {
+    const real = finding({ id: 'F-R', severity: 'Blocker', title: 'Real problem' });
     const v = releaseVerdict([guessedLimit('F-L1'), real]);
     expect(v.ready).toBe(false);
   });
@@ -36,7 +36,7 @@ describe('Limits without a Source stay out of the verdict', () => {
   });
 
   it('once accepted, the Limits finding counts again', () => {
-    const accepted = { ...guessedLimit('F-L1'), needsConfirmation: false, judgementAccepted: true };
+    const accepted = { ...guessedLimit('F-L1', 'Blocker'), needsConfirmation: false, judgementAccepted: true };
     expect(releaseVerdict([accepted]).ready).toBe(false);
   });
 });

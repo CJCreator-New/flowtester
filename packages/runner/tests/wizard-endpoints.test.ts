@@ -376,6 +376,28 @@ describe('Runner endpoints for the wizard', () => {
       expect(estimate).toMatchObject({ low: 4, high: 10, visualReview: 3, free: true, seenBefore: false });
     });
 
+    it('says the key was not recognised when a run starts with a rejected OpenRouter key', async () => {
+      const res = await post('/api/runner/run', {
+        targetUrl: `${siteUrl}/clean/`,
+        owner: true,
+        useAI: true,
+        aiProvider: 'openrouter',
+        apiKey: 'sk-or-v1-revoked',
+      });
+      expect(res.status).toBe(202);
+      const status = await waitForIdle(runnerUrl);
+      expect(status.lastErrorCode).toBe('ERR_NO_AI_KEY');
+      expect(status.lastRunError).toContain('The key was not recognised');
+      expect(JSON.stringify(status)).not.toContain('sk-or-v1-revoked');
+    }, 60000);
+
+    it('refuses a start for an address that is not http or https, on a private copy too', async () => {
+      for (const targetUrl of ['file:///etc/passwd', 'javascript:alert(1)', 'ftp://example.com/']) {
+        const res = await post('/api/runner/run', { targetUrl });
+        expect(res.status, targetUrl).toBe(400);
+      }
+    });
+
     it('keeps the screen sizes a check-up starts with', async () => {
       expect(await (await fetch(`${runnerUrl}/api/settings/defaults`)).json()).toEqual({
         screenSizes: ['375px', '768px', '1440px'],

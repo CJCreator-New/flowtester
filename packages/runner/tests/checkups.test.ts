@@ -244,6 +244,34 @@ describe('A check-up on the runner', () => {
     expect((await fetch(`${runnerUrl}/api/runs/${runId}`, { method: 'DELETE' })).status).toBe(409);
   });
 
+  it('keeps the plan when stop is pressed during review, and runs one approval once', async () => {
+    const stoppedInReview = await (await post('/api/runner/abort')).json();
+    expect(stoppedInReview).toMatchObject({ aborted: false });
+    expect((await get<ReviewPlan>('/api/runner/plan')).runId).toBe(runId);
+    expect((await status()).phase).toBe('awaiting-review');
+
+    // The same approval sent twice at once (a double click, a retry): one run, the same answer.
+    const approve = () =>
+      fetch(`${runnerUrl}/api/runner/plan/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'approve-twice' },
+        body: '{}',
+      });
+    const [first, second] = await Promise.all([approve(), approve()]);
+    expect([first.status, second.status]).toEqual([200, 200]);
+    const answers = [await first.json(), await second.json()];
+    expect(answers[0].runId).toBe(runId);
+    expect(answers[1].runId).toBe(runId);
+    // The approval lists the tests that run: the ones the review showed, not a new set.
+    const listed = answers.find((a) => a.tests)?.tests as Array<{ id: string; name: string }>;
+    expect(listed.length).toBeGreaterThan(0);
+    expect(answers.filter((a) => a.repeated).length).toBe(1);
+    expect((await status()).phase).toBe('testing');
+
+    // Stopping testing gives the plan back for the next test.
+    expect(await (await post('/api/runner/abort')).json()).toMatchObject({ aborted: true, planKept: true });
+  }, 240000);
+
   it('stopping testing keeps the plan, which can be approved again', async () => {
     expect((await post('/api/runner/plan/approve')).status).toBe(200);
     expect((await status()).phase).toBe('testing');
@@ -374,7 +402,8 @@ describe('A check-up on the runner', () => {
       expect(plan.sinceLastRun).toMatchObject({ newPages: 1 });
     } finally {
       stream.close();
-      await post('/api/runner/abort');
+      // A plan waiting for review is kept by a plain stop; discard throws it away.
+      await post('/api/runner/abort', { discard: true });
     }
   }, 240000);
 

@@ -1,5 +1,6 @@
 import { RunnerServer } from './server.js';
 import { defaultUiApps } from './ui-static.js';
+import { isLoopbackBindHost } from './bind-host.js';
 
 // Render says which port to listen on with PORT. It is only trusted there, so a PORT set in someone's shell can't move a local runner.
 const port = parseInt((process.env.RENDER && process.env.PORT) || process.env.RUNNER_PORT || '3001', 10);
@@ -26,6 +27,13 @@ const accessToken = process.env.RUNNER_ACCESS_TOKEN || undefined;
 const beta = process.env.RUNNER_BETA === '1';
 // Invalid or non-positive values fall back to the default inside the orchestrator.
 const stepTimeoutMs = process.env.RUNNER_STEP_TIMEOUT_MS ? Number(process.env.RUNNER_STEP_TIMEOUT_MS) : undefined;
+
+if (!isLoopbackBindHost(host) && !accessToken) {
+  console.error(
+    `[Release check-up] Refusing to start on ${host} without RUNNER_ACCESS_TOKEN: anyone who can reach this server could use it, including the saved AI key and sign-ins. Set RUNNER_ACCESS_TOKEN to a long random value, or set RUNNER_HOST=localhost.`
+  );
+  process.exit(1);
+}
 
 if (beta && !accessToken) {
   console.warn(

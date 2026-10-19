@@ -89,7 +89,7 @@ export function plainTitle(f: Pick<Finding, 'title'>): string {
 
 export function summarizeReport(report: ReleaseReport): ReportSummary {
   const findings = report?.findings ?? [];
-  const verdict = releaseVerdict(findings);
+  const verdict = releaseVerdict(findings, undefined, report?.grades, report?.coverage);
   const problems = groupIntoProblems(findings).filter((p) => !p.toConfirm);
   const total = verdict.total;
 

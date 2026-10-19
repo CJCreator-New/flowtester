@@ -16,6 +16,8 @@ dist/
 
 # Run output (approved .qa-baselines/ are committed)
 .qa-report/
+# The output folder the generated workflow writes (QA_OUTPUT_DIR in templates/qa-check.yml)
+qa-report/
 .qa-runner-report/
 .qa-tunnel-report/
 .qa-compare/

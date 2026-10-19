@@ -11,7 +11,12 @@ import type {
 } from '@qa/types';
 // The check-up API's shapes live in @qa/types (T-201): the runner and this client share one copy.
 import type { PlanPatchBody, RunnerStatusReply, RunStartBody } from '@qa/types';
-import { isSignInFailureReason, normalizePlanIntents, signInReasonText } from '@qa/types/src/browser.js';
+import {
+  DEFAULT_RELEASE_GATES,
+  isSignInFailureReason,
+  normalizePlanIntents,
+  signInReasonText,
+} from '@qa/types/src/browser.js';
 
 /**
  * Every call to the runner lives here, and every failure becomes a RunnerError whose message is a
@@ -340,15 +345,26 @@ export async function checkReachable(targetUrl: string): Promise<Reachability> {
       ...facts,
     };
   }
-  if (res.status === 401 || res.status === 403 || body.error) {
+  if (res.status === 401 || res.status === 403) {
     return {
       ok: false,
-      reason: body.error || 'Access to QA runner was refused.',
+      reason: body.error || 'Access to Release check-up was refused.',
       code: 'ERR_RUNNER_REFUSED',
       suggestion:
         res.status === 401
           ? 'Open the app using the link with ?access= key.'
           : 'Cross-origin request was refused by the runner.',
+      statusCode: res.status,
+      ...facts,
+    };
+  }
+  if (res.status >= 500 || body.error) {
+    // Anything else the runner said went wrong is reported as what failed, never as a refusal.
+    return {
+      ok: false,
+      reason: body.error || 'Release check-up hit an error while checking that address.',
+      code: body.code || 'ERR_PREFLIGHT_FAILED',
+      suggestion: 'Try again. If it keeps happening, look at the terminal where Release check-up is running.',
       statusCode: res.status,
       ...facts,
     };
@@ -427,17 +443,20 @@ export async function startRun(request: StartRunRequest): Promise<string> {
  * Stops the scan or test run. `planKept` when testing stopped: the plan waits for review again.
  * With `finish`, the work so far is kept: the scan plans what it found, testing makes a partial report.
  */
-export async function abortRun(finish = false): Promise<{ aborted: boolean; planKept?: boolean; finishing?: boolean }> {
+export async function abortRun(
+  finish = false
+): Promise<{ aborted: boolean; planKept?: boolean; finishing?: boolean; error?: string }> {
   try {
     const res = await call('/api/runner/abort', {
       method: 'POST',
       body: finish ? JSON.stringify({ finish: true }) : undefined,
     });
     if (res.ok) return await json<{ aborted: boolean; planKept?: boolean; finishing?: boolean }>(res);
-  } catch {
+    return { aborted: false, error: 'Release check-up couldn’t stop the check-up. Try again.' };
+  } catch (err) {
     // runner might be busy or unreachable
+    return { aborted: false, error: err instanceof RunnerError ? err.message : NOT_RESPONDING };
   }
-  return { aborted: false };
 }
 
 export async function getPlan(): Promise<ReviewPlan> {
@@ -839,12 +858,10 @@ export interface VisualBaselineItem {
 }
 
 export async function listVisualBaselines(): Promise<VisualBaselineItem[]> {
-  try {
-    const res = await call('/api/runner/baselines');
-    return res.ok ? json<VisualBaselineItem[]>(res) : [];
-  } catch {
-    return [];
-  }
+  // A failed read is an error to show with Retry, never an empty list.
+  const res = await call('/api/runner/baselines');
+  if (!res.ok) throw new RunnerError('The visual baselines couldn’t be loaded. Try again.');
+  return json<VisualBaselineItem[]>(res);
 }
 
 export async function acceptVisualBaseline(id: string, currentEvidencePath?: string): Promise<void> {
@@ -957,7 +974,7 @@ export function getStoredReleaseGates(): ReleaseGateCriteria {
     const saved = localStorage.getItem(GATES_STORAGE_KEY);
     if (saved) return JSON.parse(saved);
   } catch {}
-  return { maxBlockers: 0, maxMajors: 0, strictAccessibility: true };
+  return DEFAULT_RELEASE_GATES.standard;
 }
 
 export function saveStoredReleaseGates(gates: ReleaseGateCriteria): void {

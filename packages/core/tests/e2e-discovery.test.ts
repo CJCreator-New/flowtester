@@ -81,5 +81,6 @@ describe('DiscoveryAgent E2E Pipeline', () => {
     const invoiceRun = report.results.find((r) => r.testCaseId === invoiceCase?.id);
     expect(invoiceRun).toBeDefined();
     expect(invoiceRun?.status).toBe('Passed');
-  }, 45000);
+    // Discover, plan and run in a real browser: took over 45s on a shared CI runner.
+  }, 120000);
 });

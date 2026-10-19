@@ -5,6 +5,7 @@ import {
   plainFailure,
   reduceFeed,
   secondsLeft,
+  siteTypeName,
   timeLeft,
   translateReviewPlan,
   type FeedState,
@@ -124,10 +125,34 @@ describe('plainFailure', () => {
     ['OpenAI/OpenRouter API error (401): {"error":"bad"}', /turned the request down/],
     ['page.goto: Timeout 30000ms exceeded', /took too long/],
     ['TypeError: Cannot read properties of undefined', /Something went wrong/],
+    ['Process was aborted', /The check-up was stopped\./],
   ])('%s', (error, expected) => {
     const text = plainFailure(error, 'product');
     expect(text).toMatch(expected);
     expect(text).not.toContain(error);
+  });
+});
+
+describe('T-37a plain copy', () => {
+  it('says the check-up was stopped when the person stops it', () => {
+    expect(run([{ type: 'RUN_ABORTED' }]).current).toBe('The check-up was stopped.');
+    expect(run([{ type: 'RUN_ABORTED' }]).failure).toBe('The check-up was stopped.');
+  });
+
+  it('says a simpler plan is used when the site cannot be mapped, with no "basic check"', () => {
+    expect(run([{ type: 'DISCOVERY_COMPLETED', flowsFound: 0 }]).current).toBe(
+      'Couldn’t map out your site in detail, so a simpler plan will be used instead.'
+    );
+  });
+
+  it('reads the countdown once, with no trailing LEFT', () => {
+    expect(timeLeft(240)).toBe('about 4 minutes left');
+  });
+
+  it('shows a site type as a readable name and passes unknown ones through', () => {
+    expect(siteTypeName('SaaS')).toBe('Web app');
+    expect(siteTypeName('shop')).toBe('Online shop');
+    expect(siteTypeName('Kiosk')).toBe('Kiosk');
   });
 });
 
