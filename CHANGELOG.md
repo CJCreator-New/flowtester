@@ -5,6 +5,10 @@ All notable changes. Format follows [Keep a Changelog](https://keepachangelog.co
 
 ## [Unreleased]
 
+### Removed
+
+- Finished `.pipeline/e2e-url-credentials-crawl` records, unused `yaml` dependency from `@qa/core`, duplicate `.gitignore` lines; details in `docs/handoffs/codebase-cleanup-summary.md`
+
 ### Added
 
 - Intent on Plan Items (Works, Rejects, Limits, Denied); Rejects planned from form attributes by fixed rules (no AI key needed); Limits from the AI Planner or a Source; the refusal rule shared by the Check-up and the Playwright export (`expectRefused`); Rejects and Limits wait for a Test Copy or sign-in consent; Ambiguity Questions for Sensitive submits (ADR 0024)

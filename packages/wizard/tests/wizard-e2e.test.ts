@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Drives Release check-up in Chromium, served by the QA Tool itself as people run it: one server,
  * one address, one app. The site under test is the fixture app. Only the outside world is faked:
  * OpenRouter (key check + model list) and the AI model.
@@ -771,7 +771,7 @@ describe('Release check-up end to end, on the one server', () => {
     await page.getByLabel('Email or username').fill('manager@example.com');
     await page.getByLabel('Password').fill('manager-password');
     runRequests.length = 0;
-    await page.getByRole('button', { name: 'Scan the signed-in pages' }).click();
+    await page.getByRole('button', { name: 'Start with these sign-in details' }).click();
     await page.waitForURL(`${toolUrl}/check/scan`, { timeout: 30000 });
     expect(runRequests[0]).toMatchObject({
       targetUrl: fixtureUrl,
