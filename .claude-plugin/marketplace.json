@@ -1,0 +1,16 @@
+{
+  "name": "qa-flow-tester",
+  "owner": {
+    "name": "CJCreator"
+  },
+  "metadata": {
+    "description": "Plugins for working on qa-flow-tester and repositories like it"
+  },
+  "plugins": [
+    {
+      "name": "repo-orchestrator",
+      "source": "./plugins/repo-orchestrator",
+      "description": "Repository-aware engineering orchestrator with end-only testing and targeted remediation"
+    }
+  ]
+}
