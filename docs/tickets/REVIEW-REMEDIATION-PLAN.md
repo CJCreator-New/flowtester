@@ -31,10 +31,48 @@ where a built ticket left a gap in the code, the gap is a follow-up ticket here,
 | 5 | Performance | T-53 to T-59 | Speed after correctness. T-53 first, so every later change is measured. |
 | 6 | Resource growth | T-60 | Disk and memory bounds, after the lifecycle fixes that create most of the growth. |
 | 7 | Wizard UX | T-61, T-62 | Accessibility and copy, after the flows in T-36 and T-37 are settled. |
-| 8 | Docs and contracts | T-63 | Last, so docs describe the settled behaviour once. |
+| 8 | Docs and contracts, then the file split | T-63, then T-23 | Last: docs describe settled behaviour once, and the file split moves code nobody else edits. |
 
-Parallelism: within a phase, tickets touch different files and can run in parallel, except where a dependency says
-otherwise. T-56 (parallel test points) waits for T-49, because it changes the same loop.
+## Build order and file ownership
+
+Tickets are built in batches, numbered 1 to 19. The rules that keep them from conflicting:
+
+1. A batch starts only when every earlier batch is built.
+2. Tickets in one batch edit disjoint files (the table below is the check).
+3. A ticket that edits a file another ticket also edits sits in a later batch.
+4. Docs have one editor each (see the Docs rule below), so no two tickets edit the same doc.
+5. A ticket that adds a setting names it in its acceptance criteria. T-63 documents every setting; no other ticket edits `docs/CONFIGURATION.md` or `.env.example`.
+
+| Batch | Tickets | Files each ticket may edit |
+|---|---|---|
+| 1 | T-41 | `scripts/` (bootstrap), test setup, `docs/TESTING.md` |
+| 2 | T-42 | `packages/runner/src/server.ts` (benchmark handler, closed routes), `docs/API.md` |
+| 2 | T-43 | `packages/core/src/safe-net.ts`, `packages/core/src/discovery/deterministic-spider.ts`, `packages/core/src/orchestrator.ts` (checkLink only), `packages/checkers/src/seo.ts`, `packages/checkers/src/security-depth.ts`, new ADR 0030 |
+| 2 | T-44 | `packages/core/src/redact.ts`, `packages/checkers/src/security.ts` |
+| 2 | T-46 | `packages/runner/src/session/checkup-run.ts` (cleanup in finally), `packages/runner/src/session/run-secrets.ts` (startup sweep), `packages/runner/src/session/checkup-session.ts`, `packages/runner/src/session/plan-store.ts` |
+| 3 | T-45 | `redact.ts` (after T-44), `orchestrator.ts` (secret list, after T-43), `checkup-run.ts` (after T-46), `server.ts` status GET (after T-42), `packages/core/src/visual-capture.ts`, `packages/core/src/evidence.ts` |
+| 4 | T-47 | `packages/core/src/finding-groups.ts`, `packages/core/src/scoring.ts`, `packages/types/src/verdict.ts`, `packages/types/src/problems.ts`, `packages/runner/src/checkup.ts` (exit code) |
+| 4 | T-48 | `packages/core/src/plan/expand.ts`, `packages/checkers/src/refusal-rule.ts`, `packages/checkers/src/spec-conformance.ts`, `orchestrator.ts` (baseline capture, after T-45), ADR 0024 |
+| 5 | T-49 | `orchestrator.ts` (run wrapper, after T-48), `checkup-run.ts`, `server.ts` (signals, unhandled rejection), `packages/runner/src/cli.ts`, `packages/core/src/browser.ts` (context leak), `routes/plan.ts` (approval) |
+| 6 | T-50 | `packages/runner/src/scheduler.ts`, `packages/core/src/atomic-write.ts`, `server.ts` (scheduler handlers, after T-49), `checkup-run.ts` (save errors, after T-49), `plan-store.ts` (expiry, after T-46), `packages/runner/src/beta.ts` (folder removal) |
+| 7 | T-51 | `render.yaml`, `.github/workflows/deploy.yml`, `ci.yml`, `tests.yml`, `templates/qa-check.yml`, `docs/DEPLOYMENT.md` |
+| 8 | T-52 | `packages/runner/Dockerfile`, `browser.ts` (sandbox, after T-49), `server.ts` (`/healthz`, after T-50), `deploy.yml` (verify step only, after T-51), `DEPLOYMENT.md` (Docker lines only, after T-51), `orchestrator.ts` and `discovery-agent.ts` (URL log lines) |
+| 9 | T-53 | `orchestrator.ts` (timing, after T-52), `packages/core/src/discovery/discovery-agent.ts` (timing, after T-52), report types |
+| 10 | T-54 | `packages/core/src/navigate.ts`, `orchestrator.ts` (step wait and capture), `evidence.ts` (failure-only), `browser.ts` (`recordVideo`, after T-52), runner option in `checkup.ts` |
+| 11 | T-55 | `orchestrator.ts` (once-per-page), `packages/checkers/src/seo.ts` (link cache, after T-43) |
+| 12 | T-56 | `orchestrator.ts` (worker pool, after T-55) |
+| 13 | T-57 | `orchestrator.ts` (`shouldRetry`, after T-56), `packages/core/src/retry-runner.ts` |
+| 13 | T-58 | `server.ts` (progress endpoint, streams, status cache), `packages/runner/src/benchmarks.ts`, `packages/runner/src/session/report-store.ts`, `plan-store.ts` (index, after T-50), `routes/plan.ts` (validator, after T-49) |
+| 14 | T-59 | `packages/wizard/src/App.tsx`, `hooks/useRunnerConnection.ts`, `hooks/useRunnerStream.ts`, `screens/BenchmarkScreen.tsx` (poll), `packages/wizard/vite.config.ts`, lazy-route imports |
+| 15 | T-60 | `orchestrator.ts` (contexts, after T-57), `checkup-run.ts` (event publish, after T-50), `site-history.ts`, `site-memory.ts`, `discovery-agent.ts` (contexts, after T-53), `packages/core/src/competitive/safe-crawler.ts`, `server.ts` (dead constant, after T-58) |
+| 16 | T-61 | `packages/wizard/src/lib/api.ts`, `App.tsx` (after T-59), `PlanReviewScreen.tsx`, `components/plan/PlanDocument.tsx`, `ReportScreen.tsx`, `BenchmarkScreen.tsx`, `ConfirmDialog.tsx`, `PastCheckupsScreen.tsx`, `CommandPalette.tsx`, `LandingScreen.tsx` (focus only), `TopBar.tsx` (mobile menu) |
+| 17 | T-62 | the screens listed in T-62, after T-61 (same files, so it runs after) |
+| 18 | T-63 | every doc not owned above: `docs/CONFIGURATION.md`, `.env.example`, `README.md` (including line 236, moved from T-42), `CONTRIBUTING.md`, `CONTEXT.md`, ADRs (except 0024 and 0030), `config-docs` test |
+| 19 | T-23 | the file splits, last, after all code changes |
+
+**Docs rule.** `docs/TESTING.md`: T-41. `docs/API.md`: T-42. `docs/DEPLOYMENT.md`: T-51, then T-52 (Docker lines). ADR 0024: T-48. ADR 0030: T-43 creates it. Every other doc: T-63.
+
+The table gives each ticket's files. Tickets list only the files in their own row; a ticket that needs another file asks for a later batch.
 
 ## Decisions to take before the tickets that need them
 
@@ -93,7 +131,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-41 Test baseline that runs
 
-- **Phase:** 0 · **Priority:** P0 · **Size:** S · **Depends on:** none · **Status:** todo
+- **Phase:** 0 · **Batch:** 1 · **Priority:** P0 · **Size:** S · **Depends on:** none · **Status:** todo
 - **Goal:** `pnpm test` runs in a clean checkout on a machine that has run `pnpm bootstrap`, and its result is recorded.
 - **Evidence:** first full run, 75 of 234 files failed, 141 tests. Almost all are browser launch errors: the repo's
   Playwright expects `chromium_headless_shell-1243`, the environment had `-1194`. Some tests read generated folders
@@ -111,14 +149,14 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-42 Beta: comparison delete and closed routes
 
-- **Phase:** 1 · **Priority:** P0 · **Size:** S · **Depends on:** T-34 · **Status:** todo
+- **Phase:** 1 · **Batch:** 2 · **Priority:** P0 · **Size:** S · **Depends on:** T-34 (built), T-41 · **Status:** todo
 - **Goal:** in hosted beta, one visitor cannot delete or change another visitor's comparison, and every write the docs
   call "closed in beta" is closed.
 - **Evidence:** `packages/runner/src/server.ts:3441-3455` (`handleBenchmarkById`): `DELETE` calls `benchmarkStore().remove(id)`
   with no owner check. `closedInBeta` (`server.ts:1333-1340`) does not list the write routes `POST
   /api/runner/spec-override`, `POST /api/settings/defaults`, `POST /api/runs/<id>/triage` and `/accept-judgement`
-  (the API doc says some are closed; the code is the source). `README.md:236` says comparisons are closed; they are not.
-- **In scope:** `server.ts` `handleBenchmarkById`, `closedInBeta`; `docs/API.md` beta column; `README.md:236`.
+  (the API doc says some are closed; the code is the source). The README (T-63) says comparisons are closed; they are not.
+- **In scope:** `server.ts` `handleBenchmarkById`, `closedInBeta`; `docs/API.md` beta column.
 - **Acceptance criteria:**
   - [ ] In beta, `DELETE /api/runner/benchmark/<id>` from a session that does not own the job returns 404 and removes nothing.
   - [ ] In beta, the owner's delete of a finished job works; a running job returns 409.
@@ -129,7 +167,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-43 Address guard for every outbound request
 
-- **Phase:** 1 · **Priority:** P0 · **Size:** M · **Depends on:** T-41 · **Status:** todo
+- **Phase:** 1 · **Batch:** 2 · **Priority:** P0 · **Size:** M · **Depends on:** T-41 · **Status:** todo
 - **Goal:** every request the runner makes to a host, including requests made through Playwright's API client, goes
   through the same public-address check the browser already has.
 - **Evidence (verified):** a route guard that blocks `127.0.0.1` stops navigation but not `context.request` or
@@ -152,7 +190,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-44 Redaction matching
 
-- **Phase:** 1 · **Priority:** P1 · **Size:** M · **Depends on:** none · **Status:** todo
+- **Phase:** 1 · **Batch:** 2 · **Priority:** P1 · **Size:** M · **Depends on:** none · **Status:** todo
 - **Goal:** a secret is hidden in every place it can appear: URL fragments and path segments, escaped and form-encoded
   text, and short values.
 - **Evidence (verified by node test, SECURITY S3–S6):** `#access_token=` and `/reset/<token>` pass through
@@ -170,7 +208,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-45 Redact on write, one secret list, screenshots and GET
 
-- **Phase:** 1 · **Priority:** P1 · **Size:** M · **Depends on:** T-44 · **Status:** todo
+- **Phase:** 1 · **Batch:** 3 · **Priority:** P1 · **Size:** M · **Depends on:** T-42, T-43, T-44, T-46 · **Status:** todo
 - **Goal:** secrets never reach disk or the wizard, even when a run stops; live events and the report use the same full
   secret list; screenshot and video exposure is a stated, switchable decision.
 - **Evidence:** the text scrub runs once at end of run (`orchestrator.ts:1564`, `checkup-run.ts:578`), so a crash
@@ -190,12 +228,12 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-46 Sign-in sessions off disk
 
-- **Phase:** 1 · **Priority:** P1 · **Size:** S · **Depends on:** none · **Status:** todo
+- **Phase:** 1 · **Batch:** 2 · **Priority:** P1 · **Size:** S · **Depends on:** none · **Status:** todo
 - **Goal:** cookies and storage state for a signed-in role are deleted when the run ends, on every exit path.
 - **Evidence:** the UI path stores sessions under `<outputDir>/auth` (`checkup-session.ts:68`, `run-secrets.ts:72-77`).
   The only removal is plan clear (`plan-store.ts:185-192`). The CI path deletes its temp folder. Exposure is local disk,
   not HTTP (the file routes refuse `auth`).
-- **In scope:** `checkup-run.ts` finally block removes the run's auth folder; startup sweep removes leftover `auth`
+- **In scope:** `checkup-run.ts` finally block removes the run's auth folder; startup sweep (in `run-secrets.ts`, called from `checkup-session.ts`, never from `server.ts`) removes leftover `auth`
   folders older than the last run; plan reuse of a session is kept only while the plan is `awaiting-review`.
 - **Acceptance criteria:**
   - [ ] After a finished UI run, no file under the output folder contains a cookie value (test checks the folder).
@@ -205,7 +243,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-47 Verdict correctness
 
-- **Phase:** 2 · **Priority:** P0 · **Size:** M · **Depends on:** T-30 · **Status:** todo
+- **Phase:** 2 · **Batch:** 4 · **Priority:** P0 · **Size:** M · **Depends on:** T-30 (built) · **Status:** todo
 - **Goal:** one problem spanning many pages counts as one problem; a crash is only a 5xx; a run with nothing checked
   never reads "Ready to release".
 - **Evidence (read):**
@@ -230,7 +268,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-48 Rejects and refusal rule
 
-- **Phase:** 2 · **Priority:** P0 · **Size:** M · **Depends on:** T-33 · **Status:** todo
+- **Phase:** 2 · **Batch:** 4 · **Priority:** P0 · **Size:** M · **Depends on:** T-33 (built), T-45 · **Status:** todo
 - **Goal:** every Rejects item is judged; an alert that is not about the refused value does not pass a form that accepted it.
 - **Evidence (read):**
   - COR-2: `plan/expand.ts:140-143` makes a probe-only item with no submit click, and the baseline is captured only at
@@ -251,7 +289,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-49 Run lifecycle: browsers, stop, shutdown
 
-- **Phase:** 3 · **Priority:** P0 · **Size:** M · **Depends on:** T-35 · **Status:** todo
+- **Phase:** 3 · **Batch:** 5 · **Priority:** P0 · **Size:** M · **Depends on:** T-35 (built), T-48 · **Status:** todo
 - **Goal:** every run closes its browsers on every exit; a stop finishes tearing down before the slot is free; the
   runner shuts down cleanly and does not crash on an unhandled rejection.
 - **Evidence (read):**
@@ -279,7 +317,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-50 Durable state: scheduler, writes, waiting plans
 
-- **Phase:** 3 · **Priority:** P1 · **Size:** M · **Depends on:** T-49 · **Status:** todo
+- **Phase:** 3 · **Batch:** 6 · **Priority:** P1 · **Size:** M · **Depends on:** T-46, T-49 · **Status:** todo
 - **Goal:** schedules, plans and history survive a crash or power loss; a write that fails is shown, not hidden.
 - **Evidence (read):**
   - REL-4: `scheduler.ts:70` writes non-atomically; `loadSchedules` (`:63`) returns `[]` on any error; `tick` (`:127-138`)
@@ -304,7 +342,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-51 Deploy gate and publishing
 
-- **Phase:** 4 · **Priority:** P0 · **Size:** M · **Depends on:** T-41 · **Status:** todo
+- **Phase:** 4 · **Batch:** 7 · **Priority:** P0 · **Size:** M · **Depends on:** T-41 · **Status:** todo
 - **Goal:** nothing reaches a user-facing copy of the app, or a user's CI, unless the checks that matter passed on that
   commit.
 - **Evidence (read):**
@@ -328,7 +366,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-52 Container hardening and health
 
-- **Phase:** 4 · **Priority:** P1 · **Size:** M · **Depends on:** T-49, decisions 1 and 2 · **Status:** todo
+- **Phase:** 4 · **Batch:** 8 · **Priority:** P1 · **Size:** M · **Depends on:** T-49, T-51 · **Status:** todo
 - **Goal:** the hosted container runs as a non-root user, reports health from real checks, and does not log credentials.
 - **Evidence (read):**
   - DEP-3: `browser.ts:120-121` always passes `--no-sandbox`; the Dockerfile sets no `USER`.
@@ -344,12 +382,12 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
   - [ ] `/healthz` returns non-200 when the data folder is read-only (test).
   - [ ] A target URL with credentials is logged without them (test on the log helper).
   - [ ] The verify step fails within 10 minutes (the loop is bounded by time, not count).
-  - [ ] The sandbox setting matches decision 2 and is documented.
+  - [ ] The sandbox setting matches decision 2; its name is listed for T-63 to document.
 - **Tests:** `/healthz` test; log redaction test; workflow lint for the timeout.
 
 ### T-53 Performance: timing telemetry
 
-- **Phase:** 5 · **Priority:** P1 · **Size:** S · **Depends on:** none · **Status:** todo
+- **Phase:** 5 · **Batch:** 9 · **Priority:** P1 · **Size:** S · **Depends on:** T-52 · **Status:** todo
 - **Goal:** every phase of a run reports its time, so later performance changes are measured.
 - **Source:** PERFORMANCE_ANALYSIS Phase 0.
 - **In scope:** per-phase timing (discovery per crawl, planning, each test point with breakpoint, each checker, each
@@ -362,7 +400,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-54 Performance: fixed waits and failure-only evidence
 
-- **Phase:** 5 · **Priority:** P1 · **Size:** M · **Depends on:** T-53, decision 3, decision 5 · **Status:** todo
+- **Phase:** 5 · **Batch:** 10 · **Priority:** P1 · **Size:** M · **Depends on:** T-53, T-52 · **Status:** todo
 - **Goal:** a test point spends its time on the page, not on fixed waits; evidence is written for failures.
 - **Source:** PERFORMANCE round 1 Phases 1 and 3.
 - **Evidence:** `settlePage` waits the full 3 s when `networkidle` never fires (`navigate.ts:66-70`); 300 ms in
@@ -381,7 +419,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-55 Performance: once per page, cached link checks
 
-- **Phase:** 5 · **Priority:** P1 · **Size:** M · **Depends on:** T-53 · **Status:** todo
+- **Phase:** 5 · **Batch:** 11 · **Priority:** P1 · **Size:** M · **Depends on:** T-54, T-43 · **Status:** todo
 - **Goal:** width-independent checks run once per page per run; broken-link checks are cached and run in parallel.
 - **Source:** PERFORMANCE round 1 Phase 2.
 - **Evidence:** axe, performance probe and SEO link checks run at every test point (`orchestrator.ts:1056, 1102, 1122`);
@@ -396,7 +434,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-56 Performance: parallel test points
 
-- **Phase:** 5 · **Priority:** P2 · **Size:** L · **Depends on:** T-49, T-54 · **Status:** todo
+- **Phase:** 5 · **Batch:** 12 · **Priority:** P2 · **Size:** L · **Depends on:** T-55, T-49 · **Status:** todo
 - **Goal:** test points in different roles run side by side, with the same results as serial.
 - **Source:** PERFORMANCE round 1 Phase 4.
 - **In scope:** a bounded worker pool in `orchestrator.ts` (default 2); per-worker state for everything listed in
@@ -410,7 +448,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-57 Performance: retry policy
 
-- **Phase:** 5 · **Priority:** P2 · **Size:** S · **Depends on:** decision 4 · **Status:** todo
+- **Phase:** 5 · **Batch:** 13 · **Priority:** P2 · **Size:** S · **Depends on:** T-56; decision 4 · **Status:** todo
 - **Goal:** a real failure is reported once; a transient failure is retried.
 - **Source:** PERFORMANCE round 1 Phase 5a.
 - **In scope:** `orchestrator.ts` `shouldRetry` (`:984`): retry on navigation timeout and browser crash only;
@@ -423,7 +461,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-58 Response latency: runner endpoints
 
-- **Phase:** 5 · **Priority:** P2 · **Size:** M · **Depends on:** T-53 · **Status:** todo
+- **Phase:** 5 · **Batch:** 13 · **Priority:** P2 · **Size:** M · **Depends on:** T-49, T-50 · **Status:** todo
 - **Goal:** list and poll endpoints do not read every saved file, and evidence and text responses are small.
 - **Source:** PERFORMANCE round 2 LAT-1 to LAT-8, LAT-14 (checked and fine items excluded).
 - **Evidence:** benchmark poll returns the full job (`BenchmarkScreen.tsx:83`, `server.ts:3441-3455`); benchmark and
@@ -443,7 +481,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-59 Response latency: wizard polling and bundle
 
-- **Phase:** 5 · **Priority:** P2 · **Size:** M · **Depends on:** T-58 · **Status:** todo
+- **Phase:** 5 · **Batch:** 14 · **Priority:** P2 · **Size:** M · **Depends on:** T-58 · **Status:** todo
 - **Goal:** an idle wizard makes few requests, and the first load ships only the first screen.
 - **Source:** PERFORMANCE round 2 LAT-9 to LAT-13.
 - **Evidence:** `App.tsx:219` polls every 5 s during a run; `useRunnerConnection.ts:4` every 3 s; `useRunnerStream.ts:6`
@@ -461,7 +499,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-60 Resource growth: retention and bounds
 
-- **Phase:** 6 · **Priority:** P2 · **Size:** M · **Depends on:** T-49, T-50, T-54 · **Status:** todo
+- **Phase:** 6 · **Batch:** 15 · **Priority:** P2 · **Size:** M · **Depends on:** T-54, T-57, T-58, T-50 · **Status:** todo
 - **Goal:** every folder and log has a bound, and each run event is recorded once.
 - **Evidence (read):** GROW-1 is owned by T-54 (failure-only capture). GROW-3 per-visitor folders (`server.ts:1385-1387`). GROW-4 waiting plans (T-50 covers
   expiry). GROW-5 `site-history.json` grows per run (`site-history.ts:108-118`). GROW-6 each event published twice
@@ -478,7 +516,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-61 Wizard: errors, focus and accessibility
 
-- **Phase:** 7 · **Priority:** P1 · **Size:** M · **Depends on:** T-36 · **Status:** todo
+- **Phase:** 7 · **Batch:** 16 · **Priority:** P1 · **Size:** M · **Depends on:** T-59, T-36 (built) · **Status:** todo
 - **Goal:** users see plain sentences, focus is never lost, and dialogs behave as dialogs.
 - **Evidence (read):** UX-1 raw technical text (`api.ts:6-8`; `App.tsx:464, 602, 708`; `BenchmarkScreen.tsx:251`;
   `PlanDocument.tsx:1441`; `ReportScreen.tsx:553, 1575, 1618`). UX-2 focus after dialog and delete (`ConfirmDialog.tsx:24-34,
@@ -498,7 +536,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-62 Wizard: copy and small UX
 
-- **Phase:** 7 · **Priority:** P2 · **Size:** M · **Depends on:** T-61, T-37a, T-37b · **Status:** todo
+- **Phase:** 7 · **Batch:** 17 · **Priority:** P2 · **Size:** M · **Depends on:** T-61, T-37b (built) · **Status:** todo
 - **Goal:** UI text follows the glossary and small states are correct.
 - **Evidence (read):** UX-4 avoid-list terms (`App.tsx:608, 611-612, 768`; `ScanningScreen.tsx:125, 137, 268`;
   `NewCheckupScreen.tsx:298, 881`; `ReportScreen.tsx:618`; `TopBar.tsx:270`; `DeveloperDetails.tsx:92, 163`;
@@ -522,16 +560,16 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ### T-63 Docs and contracts residual
 
-- **Phase:** 8 · **Priority:** P2 · **Size:** M · **Depends on:** T-38, and the decisions above · **Status:** todo
+- **Phase:** 8 · **Batch:** 18 · **Priority:** P2 · **Size:** M · **Depends on:** T-60, T-62, T-38 (built) · **Status:** todo
 - **Goal:** the docs describe the code after the phases above; ADRs state their status.
 - **Evidence (read):** `docs/CONFIGURATION.md` (`QA_DELAY_MS` 0 becomes 100 ms in `checkup.ts:195`; `PUBLIC_URL` use;
   missing `SMOKE_PORT`, `SKIP_BROWSER_CHECK`, `CI`; per-provider key order in `key-resolver.ts:100-125`; `QA_MAX_PAGES=0`).
   `README.md:88-89, 98, 178` (Node and pnpm versions; `vercel.json`
-  contents). API routes and the beta list are T-42. `CONTRIBUTING.md:12, 23` (Node 22.9 vs engines `>=22`; local-only backlog file). `CONTEXT.md`
+  contents). `README.md:236` (comparisons are closed in beta, after T-42) is in scope here. API routes and the beta list are T-42. `CONTRIBUTING.md:12, 23` (Node 22.9 vs engines `>=22`; local-only backlog file). `CONTEXT.md`
   lines 191–223 (retired Report Hub terms), line 41 ("Spec" for Product Context, used in code). ADRs: 0018 ("Secure" used as
   an area label, `scoring.ts:103`), 0008 (`HUB_API_URL` not implemented), 0005 (Fastify hub retired), 0002 (keychain
   tier missing), 0021 (CI writes an on-disk session), 0013 and 0015 cited but missing.
-- **In scope:** fix each item in the docs; fix code only where the doc is right (`QA_DELAY_MS` 0 handling, `QA_MAX_PAGES=0`);
+- **In scope:** every setting named by T-45 to T-54 goes into `docs/CONFIGURATION.md` and `.env.example`; fix each item in the docs; fix code only where the doc is right (`QA_DELAY_MS` 0 handling, `QA_MAX_PAGES=0`);
   mark retired ADRs `superseded`; write or un-cite 0013 and 0015.
 - **Acceptance criteria:**
   - [ ] T-38's `process.env` test also covers `scripts/` (T-38's test reads `packages/*/src` only).
@@ -543,35 +581,36 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ## Ticket summary
 
-| id | title | phase | priority | size | depends on | status |
-|---|---|---|---|---|---|---|
-| T-41 | Test baseline that runs | 0 | P0 | S | - | todo |
-| T-42 | Beta: comparison delete and closed routes | 1 | P0 | S | T-34 | todo |
-| T-43 | Address guard for every outbound request | 1 | P0 | M | T-41 | todo |
-| T-44 | Redaction matching | 1 | P1 | M | - | todo |
-| T-45 | Redact on write, one secret list, GET | 1 | P1 | M | T-44 | todo |
-| T-46 | Sign-in sessions off disk | 1 | P1 | S | - | todo |
-| T-47 | Verdict correctness | 2 | P0 | M | T-30 | todo |
-| T-48 | Rejects and refusal rule | 2 | P0 | M | T-33 | todo |
-| T-49 | Run lifecycle: browsers, stop, shutdown | 3 | P0 | M | T-35 | todo |
-| T-50 | Durable state: scheduler, writes, waiting plans | 3 | P1 | M | T-49 | todo |
-| T-51 | Deploy gate and publishing | 4 | P0 | M | T-41 | todo |
-| T-52 | Container hardening and health | 4 | P1 | M | T-49 | todo |
-| T-53 | Performance: timing telemetry | 5 | P1 | S | - | todo |
-| T-54 | Performance: fixed waits, failure-only evidence | 5 | P1 | M | T-53 | todo |
-| T-55 | Performance: once per page, cached links | 5 | P1 | M | T-53 | todo |
-| T-56 | Performance: parallel test points | 5 | P2 | L | T-49, T-54 | todo |
-| T-57 | Performance: retry policy | 5 | P2 | S | decision 4 | todo |
-| T-58 | Response latency: runner endpoints | 5 | P2 | M | T-53 | todo |
-| T-59 | Response latency: wizard polling and bundle | 5 | P2 | M | T-58 | todo |
-| T-60 | Resource growth: retention and bounds | 6 | P2 | M | T-49, T-50, T-54 | todo |
-| T-61 | Wizard: errors, focus and accessibility | 7 | P1 | M | T-36 | todo |
-| T-62 | Wizard: copy and small UX | 7 | P2 | M | T-61, T-37a, T-37b | todo |
-| T-63 | Docs and contracts residual | 8 | P2 | M | T-38 | todo |
+| id | title | phase | batch | priority | size | depends on | status |
+|---|---|---|---|---|---|---|---|
+| T-41 | Test baseline that runs | 0 | 1 | P0 | S | none | todo |
+| T-42 | Beta: comparison delete and closed routes | 1 | 2 | P0 | S | T-34 (built), T-41 | todo |
+| T-43 | Address guard for every outbound request | 1 | 2 | P0 | M | T-41 | todo |
+| T-44 | Redaction matching | 1 | 2 | P1 | M | none | todo |
+| T-45 | Redact on write, one secret list, screenshots and GET | 1 | 3 | P1 | M | T-42, T-43, T-44, T-46 | todo |
+| T-46 | Sign-in sessions off disk | 1 | 2 | P1 | S | none | todo |
+| T-47 | Verdict correctness | 2 | 4 | P0 | M | T-30 (built) | todo |
+| T-48 | Rejects and refusal rule | 2 | 4 | P0 | M | T-33 (built), T-45 | todo |
+| T-49 | Run lifecycle: browsers, stop, shutdown | 3 | 5 | P0 | M | T-35 (built), T-48 | todo |
+| T-50 | Durable state: scheduler, writes, waiting plans | 3 | 6 | P1 | M | T-46, T-49 | todo |
+| T-51 | Deploy gate and publishing | 4 | 7 | P0 | M | T-41 | todo |
+| T-52 | Container hardening and health | 4 | 8 | P1 | M | T-49, T-51 | todo |
+| T-53 | Performance: timing telemetry | 5 | 9 | P1 | S | T-52 | todo |
+| T-54 | Performance: fixed waits and failure-only evidence | 5 | 10 | P1 | M | T-53, T-52 | todo |
+| T-55 | Performance: once per page, cached link checks | 5 | 11 | P1 | M | T-54, T-43 | todo |
+| T-56 | Performance: parallel test points | 5 | 12 | P2 | L | T-55, T-49 | todo |
+| T-57 | Performance: retry policy | 5 | 13 | P2 | S | T-56; decision 4 | todo |
+| T-58 | Response latency: runner endpoints | 5 | 13 | P2 | M | T-49, T-50 | todo |
+| T-59 | Response latency: wizard polling and bundle | 5 | 14 | P2 | M | T-58 | todo |
+| T-60 | Resource growth: retention and bounds | 6 | 15 | P2 | M | T-54, T-57, T-58, T-50 | todo |
+| T-61 | Wizard: errors, focus and accessibility | 7 | 16 | P1 | M | T-59, T-36 (built) | todo |
+| T-62 | Wizard: copy and small UX | 7 | 17 | P2 | M | T-61, T-37b (built) | todo |
+| T-63 | Docs and contracts residual | 8 | 18 | P2 | M | T-60, T-62, T-38 (built) | todo |
+| T-23 | Split large files by area | 8 | 19 | P3 | L | T-63 | todo (see tracker) |
 
 ## Not in this plan
 
-- T-23 (split large files). Pure moves of `server.ts`, `orchestrator.ts` and `App.tsx`, which phases 1 to 6 change heavily. Run it after phase 6; before then it conflicts with almost every ticket above.
+- T-23 (split large files) is not in the ticket list below. It is batch 19 in the build order, after everything else.
 - Items the reviews marked "checked and fine" (listed in the source reviews).
 - The Demo readiness tickets T-30 to T-40 (built). Their residual gaps are the follow-ups named in the mapping table.
 - Human items: `docs/tickets/HUMAN_TODO.md`. Docker build, a live Render check, and the decisions above.
