@@ -1,0 +1,579 @@
+# Review remediation plan
+
+Source: every review run on this repo, combined into one plan. Sources (kept as evidence):
+[APP_REVIEW.md](../APP_REVIEW.md) (correctness, reliability, growth, deployment, wizard UX, docs drift),
+[SECURITY_REVIEW.md](../SECURITY_REVIEW.md) (S1–S12), [PERFORMANCE_ANALYSIS.md](../PERFORMANCE_ANALYSIS.md)
+(performance rounds 1 and 2). Tickets T-41 to T-63 close the open items. This plan does not reopen T-30 to T-40;
+where a built ticket left a gap in the code, the gap is a follow-up ticket here, and the built ticket is named.
+
+## Rules for this plan
+
+- Build only, then verify once. Tickets end `built`. Tests are written, not run, during build. Tests run in one
+  `/verify-all` pass after every ticket here is `built`, the same rule as the Demo readiness plan. Exception: T-41
+  runs first and records the baseline, because a verification pass needs a working test environment.
+- Each ticket updates the tests its change affects and adds tests for new behaviour.
+- Edits use the Edit tool on unique strings. Nothing rewrites a shared file with Write.
+- Ids: review findings keep their source prefix so they can be traced. `SEC` (security), `COR` (correctness),
+  `REL` (reliability), `GROW` (resource growth), `DEP` (deployment), `UX` (wizard), `DOC` (docs), `LAT` (response
+  latency), `PERF` (performance rounds).
+- A ticket is done when its acceptance criteria are checked off and its tests exist. Severity is the reviewer's
+  rating; verified findings come first in each phase.
+
+## Phases
+
+| Phase | Theme | Tickets | Why this order |
+|---|---|---|---|
+| 0 | Test baseline | T-41 | A verification pass needs a test environment that works. |
+| 1 | Security and data exposure | T-42, T-43, T-44, T-45, T-46 | Hosted beta exposes these to strangers. Fix before anything else ships. |
+| 2 | Release verdict | T-47, T-48 | These decide "Ready to release" and must be right before the demo. |
+| 3 | Run lifecycle and durable state | T-49, T-50 | Leaked browsers, stop races and lost schedules affect every run. |
+| 4 | Deploy and hosting | T-51, T-52 | The deploy gate and container hardening decide what users run. |
+| 5 | Performance | T-53 to T-59 | Speed after correctness. T-53 first, so every later change is measured. |
+| 6 | Resource growth | T-60 | Disk and memory bounds, after the lifecycle fixes that create most of the growth. |
+| 7 | Wizard UX | T-61, T-62 | Accessibility and copy, after the flows in T-36 and T-37 are settled. |
+| 8 | Docs and contracts | T-63 | Last, so docs describe the settled behaviour once. |
+
+Parallelism: within a phase, tickets touch different files and can run in parallel, except where a dependency says
+otherwise. T-56 (parallel test points) waits for T-49, because it changes the same loop.
+
+## Decisions to take before the tickets that need them
+
+1. **Hosted beta trust boundary (T-43, T-52):** keep the public beta, or restrict targets to hosts the visitor
+   proves they own? The SSRF fix works either way; the proof rule changes the product.
+2. **Chromium sandbox (T-52):** run as a non-root user with the sandbox on, or keep `--no-sandbox` and isolate
+   the browser per host? Needs the hosting platform's answer.
+3. **Screenshots and video (T-45, T-54):** mask sign-in fields, or offer a switch that turns off step screenshots
+   and video for sensitive runs?
+4. **Retry policy (T-57):** retry only transient failures (recommended), or keep a whole-point retry?
+5. **Default screen sizes (T-54):** three, or two for a quick check?
+6. **Persistent disk (T-51):** pay for a disk on Render, or document that beta data is temporary?
+
+## Mapping: review findings to tickets
+
+| Source | Finding | Ticket | Built ticket it refines |
+|---|---|---|---|
+| SECURITY S1, S2 | API requests skip the address guard; sitemap host unchecked | T-43 | none |
+| SECURITY S3–S6 | Redaction matching gaps | T-44 | none |
+| SECURITY S7, S8, S9 | Screenshots, end-of-run scrub, role-only event redaction | T-45 | none |
+| SECURITY S10 | Sign-in sessions left on disk | T-46 | none |
+| SECURITY (API doc) | Beta comparison delete has no owner check | T-42 | T-34 (closedInBeta) |
+| SECURITY S11, S12 | GET changes state; text formats list | T-45 | none |
+| CORRECTNESS C1 | Per-page problem keys | T-47 | T-30 (spread rule) |
+| CORRECTNESS C4 | Crash grade reads title | T-47 | T-30 (crash grade) |
+| CORRECTNESS C5 | Nothing checked reads Ready | T-47 | T-30 (zero checks = null) |
+| CORRECTNESS C2, C3, C6 | Probe-only Rejects; refusal baseline; native text | T-48 | T-32, T-33 |
+| CORRECTNESS C7, C8, C9 | Journey cap; element dedupe by route; gate reference | T-47 | none |
+| RELIABILITY REL-1, REL-2 | Browser leak on exit; stop frees slot early | T-49 | T-35 (start race) |
+| RELIABILITY REL-3, REL-8 | No graceful shutdown; unhandled rejection | T-49 | none |
+| RELIABILITY REL-4, REL-5 | Scheduler lost updates; missed runs | T-50 | T-35 (scheduler start) |
+| RELIABILITY REL-6, REL-7 | Non-durable writes; swallowed save errors | T-50 | none |
+| RELIABILITY REL-9, REL-10 | Approval race; rare-path leaks | T-49 | T-35 (approval) |
+| GROWTH GROW-1, GROW-2 | Step files kept on passing points; browser leak on errors | T-60, T-49 | none |
+| GROWTH GROW-3 | Beta per-visitor folders never deleted | T-60 | none |
+| GROWTH GROW-4, GROW-5 | Waiting plans never expire; site-history growth | T-60 | none |
+| GROWTH GROW-6 to GROW-9 | Double event log; rare-throw contexts; answers; dead constant | T-60 | none |
+| DEPLOYMENT DEP-1, DEP-4 | Render deploys without checks; gate is partial | T-51 | T-39 (ref) |
+| DEPLOYMENT DEP-2 | No persistent disk | T-51 | none |
+| DEPLOYMENT DEP-3 | Sandbox off; no USER | T-52 | none |
+| DEPLOYMENT DEP-5 | Template floats on main | T-51 | T-39 (ref in workflow) |
+| DEPLOYMENT DEP-6 | Target URLs logged with credentials | T-52 | none |
+| DEPLOYMENT DEP-7, DEP-8, DEP-9 | Image pinning, healthz, verify timeout | T-52 | none |
+| PERFORMANCE round 1 | Phases 0–5 | T-53 to T-57 | none |
+| PERFORMANCE round 2 (LAT-1 to LAT-14) | Response latency | T-58, T-59 | none |
+| WIZARD UX-1 | Raw technical text | T-61 | T-36 |
+| WIZARD UX-2, UX-3, UX-10, UX-11, UX-12 | Focus, dialog trap, invisible focus, shortcuts, Escape | T-61 | T-36 |
+| WIZARD UX-4 | Avoid-list terms | T-62 | T-37a, T-37b |
+| WIZARD UX-5 to UX-9, UX-13 to UX-20 | Gutter, landmarks, colour, labels, stale state | T-62 | T-36 |
+| DOCS (API, ADR, CONTEXT, README) | Drift not covered by T-38 | T-63 | T-38 |
+
+## Tickets
+
+### T-41 Test baseline that runs
+
+- **Phase:** 0 · **Priority:** P0 · **Size:** S · **Depends on:** none · **Status:** todo
+- **Goal:** `pnpm test` runs in a clean checkout on a machine that has run `pnpm bootstrap`, and its result is recorded.
+- **Evidence:** first full run, 75 of 234 files failed, 141 tests. Almost all are browser launch errors: the repo's
+  Playwright expects `chromium_headless_shell-1243`, the environment had `-1194`. Some tests read generated folders
+  (`.tmp-visual-compat/`, `.tmp-e2e-qa-report/`) that a fresh checkout does not have.
+- **In scope:** `scripts/` bootstrap step that installs the browser version Playwright expects; test setup that creates
+  the generated baseline folders before a test uses them; `docs/TESTING.md` section on the browser requirement.
+- **Out of scope:** changing the Playwright version.
+- **Acceptance criteria:**
+  - [ ] After `pnpm bootstrap` on a fresh checkout, `pnpm exec playwright --version` matches the browser build in use.
+  - [ ] No test fails with "Executable doesn't exist" on a bootstrapped machine.
+  - [ ] Tests that use `.tmp-*` folders create them first and pass with the folders absent.
+  - [ ] The baseline (files passed, failed, skipped, with the command) is written into `docs/TESTING.md`.
+- **Tests:** the bootstrap script has a check; the baseline is recorded by running the full suite once (this is the one
+  verification run before the Phase 1 tickets start).
+
+### T-42 Beta: comparison delete and closed routes
+
+- **Phase:** 1 · **Priority:** P0 · **Size:** S · **Depends on:** T-34 · **Status:** todo
+- **Goal:** in hosted beta, one visitor cannot delete or change another visitor's comparison, and every write the docs
+  call "closed in beta" is closed.
+- **Evidence:** `packages/runner/src/server.ts:3441-3455` (`handleBenchmarkById`): `DELETE` calls `benchmarkStore().remove(id)`
+  with no owner check. `closedInBeta` (`server.ts:1333-1340`) does not list the write routes `POST
+  /api/runner/spec-override`, `POST /api/settings/defaults`, `POST /api/runs/<id>/triage` and `/accept-judgement`
+  (the API doc says some are closed; the code is the source). `README.md:236` says comparisons are closed; they are not.
+- **In scope:** `server.ts` `handleBenchmarkById`, `closedInBeta`; `docs/API.md` beta column; `README.md:236`.
+- **Acceptance criteria:**
+  - [ ] In beta, `DELETE /api/runner/benchmark/<id>` from a session that does not own the job returns 404 and removes nothing.
+  - [ ] In beta, the owner's delete of a finished job works; a running job returns 409.
+  - [ ] Every route in `closedInBeta` matches the list in `docs/API.md`, and a test compares the two lists.
+  - [ ] `docs/API.md` lists `POST /api/runner/spec-override` and `GET /api/runner/spec-overrides`.
+- **Tests:** extend `packages/runner/tests/` beta tests with two sessions; add a test that fails when the doc and the
+  closed list differ.
+
+### T-43 Address guard for every outbound request
+
+- **Phase:** 1 · **Priority:** P0 · **Size:** M · **Depends on:** T-41 · **Status:** todo
+- **Goal:** every request the runner makes to a host, including requests made through Playwright's API client, goes
+  through the same public-address check the browser already has.
+- **Evidence (verified):** a route guard that blocks `127.0.0.1` stops navigation but not `context.request` or
+  `page.request` (repro in SECURITY_REVIEW S1). `robots.txt` `Sitemap:` lines are fetched with no host check
+  (`discovery/deterministic-spider.ts:406-430`). Navigation Check requests use `page.request.get` with 10 redirects
+  (`orchestrator.ts:204`). SEO link checks use `requestContext.fetch` (`checkers/src/seo.ts:397, 556`). Security checks
+  use `request.fetch` (`checkers/src/security-depth.ts:48`).
+- **In scope:** a shared outbound helper built on `safe-net.ts` `safeGet` (pinned address, each redirect checked);
+  replace the call sites above; `discovery/deterministic-spider.ts` sitemap fetch restricted to the target's host unless
+  the person allows it. ADR needed (see below).
+- **Acceptance criteria:**
+  - [ ] The repro from SECURITY_REVIEW S1 shows 0 server hits for `context.request`, `page.request`, HEAD and a redirected GET.
+  - [ ] A `Sitemap:` line naming another host is ignored, with a logged reason.
+  - [ ] A same-site link that redirects to `127.0.0.1` or `169.254.169.254` is not followed.
+  - [ ] Navigation Check to an external link still works for public hosts (existing link-check tests pass).
+  - [ ] No call site in `packages/checkers` or `packages/core` calls `request.fetch`, `page.request` or Node `fetch`
+        directly on a page-derived URL (a test greps the source).
+- **Tests:** unit tests for the helper with a fake resolver; the fixture-based redirect test; the source-grep test.
+- **ADR needed:** ADR 0030, "Every outbound request uses the pinned, redirect-checked resolver."
+
+### T-44 Redaction matching
+
+- **Phase:** 1 · **Priority:** P1 · **Size:** M · **Depends on:** none · **Status:** todo
+- **Goal:** a secret is hidden in every place it can appear: URL fragments and path segments, escaped and form-encoded
+  text, and short values.
+- **Evidence (verified by node test, SECURITY S3–S6):** `#access_token=` and `/reset/<token>` pass through
+  (`packages/core/src/redact.ts:10`). `code`, `reset_token`, `X-Amz-Signature` are missing from `SECRET_PARAM_NAMES`
+  (`packages/checkers/src/security.ts:5-6`). A password with `& " < ' ! * ( )` survives in HTML-escaped, JSON-escaped and
+  form-encoded text (`redact.ts:31-34`). Values under 3 characters are never redacted (`redact.ts:24`).
+- **In scope:** `redact.ts` (fragment and path forms, escaped variants, the form-encoding variant that
+  `URLSearchParams` produces); `security.ts` parameter list with one source of truth; the length rule (decision in
+  the ticket: redact any non-empty role credential, and keep the 3-character rule only for free text).
+- **Acceptance criteria:**
+  - [ ] A table test covers each form: `?p=`, `#access_token=`, `/reset/<token>`, `?code=`, `?X-Amz-Signature=`, and each escaped form of a password containing `&"<'!*()\`.
+  - [ ] A two-character role password is hidden in every output file and event.
+  - [ ] `SECRET_PARAM_NAMES` is defined once and imported by `redact.ts` and the security checker.
+- **Tests:** a new `packages/core/tests/redact-forms.test.ts` table; extend `redaction.test.ts`.
+
+### T-45 Redact on write, one secret list, screenshots and GET
+
+- **Phase:** 1 · **Priority:** P1 · **Size:** M · **Depends on:** T-44 · **Status:** todo
+- **Goal:** secrets never reach disk or the wizard, even when a run stops; live events and the report use the same full
+  secret list; screenshot and video exposure is a stated, switchable decision.
+- **Evidence:** the text scrub runs once at end of run (`orchestrator.ts:1564`, `checkup-run.ts:578`), so a crash
+  leaves plaintext (SEC S8). The orchestrator's redactor is built from roles only (`orchestrator.ts:350-352`); headers and
+  tunnel auth are added only in the file pass (SEC S9). Screenshots and video are not scrubbed (`evidence.ts:100`,
+  `browser.ts:194-200`, SEC S7). `GET /api/runner/status` begins a session (`server.ts:979`, SEC S11).
+- **In scope:** one function that builds the full secret list (roles, headers, tunnel auth, session cookies) used by the
+  orchestrator, checkup-run and routes; redact text evidence on write; `status` GET is read-only; a run option to skip
+  step screenshots and video (default unchanged), documented in `docs/CONFIGURATION.md`; mask sign-in fields in
+  screenshots (decision 3).
+- **Acceptance criteria:**
+  - [ ] A stopped run leaves no plaintext secret in the evidence folder (test stops mid-step).
+  - [ ] A custom header value that appears in a finding does not reach the SSE stream or `report.json`.
+  - [ ] `GET /api/runner/status` makes no write (test checks the run state before and after).
+  - [ ] With the new option on, no step screenshot or video file is written.
+  - [ ] `pnpm build` passes (exported types change).
+- **Tests:** redaction tests for the stop case and the header case; a route test for read-only status.
+
+### T-46 Sign-in sessions off disk
+
+- **Phase:** 1 · **Priority:** P1 · **Size:** S · **Depends on:** none · **Status:** todo
+- **Goal:** cookies and storage state for a signed-in role are deleted when the run ends, on every exit path.
+- **Evidence:** the UI path stores sessions under `<outputDir>/auth` (`checkup-session.ts:68`, `run-secrets.ts:72-77`).
+  The only removal is plan clear (`plan-store.ts:185-192`). The CI path deletes its temp folder. Exposure is local disk,
+  not HTTP (the file routes refuse `auth`).
+- **In scope:** `checkup-run.ts` finally block removes the run's auth folder; startup sweep removes leftover `auth`
+  folders older than the last run; plan reuse of a session is kept only while the plan is `awaiting-review`.
+- **Acceptance criteria:**
+  - [ ] After a finished UI run, no file under the output folder contains a cookie value (test checks the folder).
+  - [ ] After a stopped run and after a failed run, the same holds.
+  - [ ] A plan still waiting for review keeps its session; approving after restart still asks for sign-in if the session is gone.
+- **Tests:** extend `consent-enforcement.test.ts` and `headers-propagation.test.ts` (the latter already checks cleanup for CI).
+
+### T-47 Verdict correctness
+
+- **Phase:** 2 · **Priority:** P0 · **Size:** M · **Depends on:** T-30 · **Status:** todo
+- **Goal:** one problem spanning many pages counts as one problem; a crash is only a 5xx; a run with nothing checked
+  never reads "Ready to release".
+- **Evidence (read):**
+  - COR-1: `packages/core/src/finding-groups.ts:20-22, 32` keys page findings by page, and no checker sets `issueKey`.
+    `problems.ts:148-149`, `verdict.ts:97-103`, `scoring.ts:132` then count per page, so the spread rule (`scoring.ts:157`)
+    never applies. Ten pages with one Minor give Findable 50 (grade D, "Not ready yet"); one problem across ten pages
+    should give 93 (grade A, "Ready to release"). Also `scoring.ts:146-150` counts a Major per page.
+  - COR-4: `scoring.ts:172-174` still matches `title.includes('uncaught exception')` and `'application crash'`. T-30's
+    acceptance criterion says the crash grade comes from the structured field.
+  - COR-5: `verdict.ts:127, 161` ignore coverage. `releaseVerdict([], undefined, undefined)` is ready.
+    `enforceAllAreas` (`verdict.ts:33, 39`) is set and never read. `checkup.ts:369` exits 0 for an empty run.
+- **In scope:** `finding-groups.ts` key (the problem key is the checker, the title and the element, without the page,
+  with the affected pages kept as a set); `scoring.ts` crash grade from `is5xx` only; `verdict.ts` uses coverage and
+  `enforceAllAreas`; `checkup.ts` exit code when nothing was checked.
+- **Acceptance criteria:**
+  - [ ] Ten pages with the same Minor produce one problem with ten pages; Standard gives 93 and grade A.
+  - [ ] Two pages with the same Major give one Major problem; the area grade is not capped by a count of pages.
+  - [ ] A step titled "Trigger uncaught exception" does not produce a crash grade; a real 5xx does.
+  - [ ] An empty run (no checkers) is "Not ready yet" with "No checks ran" and exits non-zero.
+  - [ ] `enforceAllAreas` is read by `releaseVerdict`, and the test for each gate covers it.
+  - [ ] The CLI exit code, the stamp and the report agree on every fixture (existing T-30 criterion, re-tested).
+- **Tests:** `packages/core/tests/scoring.test.ts`, `packages/types` verdict tests, `packages/runner/tests` CLI test.
+
+### T-48 Rejects and refusal rule
+
+- **Phase:** 2 · **Priority:** P0 · **Size:** M · **Depends on:** T-33 · **Status:** todo
+- **Goal:** every Rejects item is judged; an alert that is not about the refused value does not pass a form that accepted it.
+- **Evidence (read):**
+  - COR-2: `plan/expand.ts:140-143` makes a probe-only item with no submit click, and the baseline is captured only at
+    the submit click (`orchestrator.ts:829-831`). `spec-conformance.ts:142` then skips the refusal block, so the
+    `:invalid` probe never runs.
+  - COR-3: `refusal-rule.ts:82-92` (`:invalid`, `aria-invalid`, `role="alert"`) take no baseline, while `:93-100` does.
+    A permanent alert, or a success toast with `role="alert"`, passes as refused.
+  - COR-6: `refusal-rule.ts:85` records `validationMessage` first, and `note()` keeps only it, so the Source's wording
+    is compared with the browser's native text (`spec-conformance.ts:198-206`).
+- **In scope:** `expand.ts` probe-only items capture the baseline; `refusal-rule.ts` takes the baseline for every signal
+  and keeps the Source text and the alert text; ADR 0024 wording on `role="alert"`.
+- **Acceptance criteria:**
+  - [ ] A probe-only Rejects item produces a finding or a pass; it is never silent.
+  - [ ] A form that accepts `min-1` with a permanent `role="alert"` on the page is a Blocker, not refused.
+  - [ ] A novalidate form that shows the Source's sentence in an alert is not a "different wording" Major.
+- **Tests:** `packages/checkers/tests/refusal-rule.test.ts`, `packages/core/tests/refusal-run.test.ts`; fixture pages for each case.
+- **ADR needed:** amend ADR 0024 (alert text is a signal only when it appears after the submit).
+
+### T-49 Run lifecycle: browsers, stop, shutdown
+
+- **Phase:** 3 · **Priority:** P0 · **Size:** M · **Depends on:** T-35 · **Status:** todo
+- **Goal:** every run closes its browsers on every exit; a stop finishes tearing down before the slot is free; the
+  runner shuts down cleanly and does not crash on an unhandled rejection.
+- **Evidence (read):**
+  - REL-1 and GROW-2: `orchestrator.ts:573` runs the test loop with no `try/finally`. An abort is rethrown at `:1344`,
+    skipping `browserManager.close()` at `:1414`. The pre-flight throw at `:482` also skips it. Each run has a new manager.
+  - REL-2: `checkup-run.ts:1108, 1124-1125` free the slot without awaiting the old run (`server.ts:3002-3003`).
+    After the orchestrator returns, `executeTesting` has no `current()` check before `setPhase('done')` at `:585-586`.
+  - REL-3: no `SIGTERM`/`SIGINT` handler; `RunnerServer.stop()` (`server.ts:1249`) is never called. The Dockerfile uses
+    exec-form `CMD`. Playwright installs its own SIGTERM listener while a browser is open (platform).
+  - REL-8: `server.ts:1199-1204` calls `writeHead(500)` after headers may be sent; no `unhandledRejection` handler.
+  - REL-9, REL-10: approval race (`routes/plan.ts:1175, 1183`); context leak in `browser.ts:221-224`; `plan-store.ts`
+    ignores `readOnly`.
+- **In scope:** `orchestrator.ts` `run()` wrapped so `browserManager.close()` always runs; `checkup-run.ts` stop awaits
+  the run's promise before the slot frees; the post-run `current()` check; `cli.ts` and `server.ts` signal handlers that
+  call `stop()`, flush state and exit; `unhandledRejection` logged and the request answered only if headers are unsent;
+  approval serialised with `replacePlan`.
+- **Acceptance criteria:**
+  - [ ] A run stopped in the middle of a step closes every browser (process count is zero after the run returns).
+  - [ ] A pre-flight failure closes every browser.
+  - [ ] A stop followed at once by a new start: the new start waits for the old run's teardown, or returns 409, never overlaps.
+  - [ ] `SIGTERM` during a run stops it, writes the state, removes the auth folder, and exits within 10 s.
+  - [ ] A thrown error after headers are sent does not crash the process (test forces it).
+  - [ ] Two approves with one key run once (existing T-35 criterion, re-tested after the change).
+- **Tests:** `packages/core/tests/` abort tests; `packages/runner/tests/checkups.test.ts` stop tests; a signal test.
+
+### T-50 Durable state: scheduler, writes, waiting plans
+
+- **Phase:** 3 · **Priority:** P1 · **Size:** M · **Depends on:** T-49 · **Status:** todo
+- **Goal:** schedules, plans and history survive a crash or power loss; a write that fails is shown, not hidden.
+- **Evidence (read):**
+  - REL-4: `scheduler.ts:70` writes non-atomically; `loadSchedules` (`:63`) returns `[]` on any error; `tick` (`:127-138`)
+    and the HTTP handlers (`server.ts:1110-1127, 3482`) have no lock, so a toggle can revert a tick's `nextRunAt` (a
+    schedule fires twice) and a delete can be undone.
+  - REL-5: `tick` advances `nextRunAt` before `runSchedule` (`:124-125`). A busy run records the occurrence as failed
+    (`:130`) and never retries.
+  - REL-6: `atomic-write.ts:21-22` has no `fsync` of file or directory.
+  - REL-7: `checkup-run.ts:492, 509, 1122` swallow save errors with `.catch(() => {})`.
+  - GROW-4, GROW-3: waiting plans never expire (`plan-store.ts:55-63`); per-visitor folders are never removed
+    (`server.ts:1385-1387`, beta).
+- **In scope:** `scheduler.ts` (one writer, a lock or a queue shared with HTTP handlers, a backup on a parse error and no
+  silent `[]`); a due schedule retries once when busy; `atomic-write.ts` `fsync`; save errors surfaced to the wizard;
+  waiting plans expire after a set time (default 30 days, configurable); beta session folders removed on expiry.
+- **Acceptance criteria:**
+  - [ ] Toggling a schedule during a tick leaves the toggled state and one run (test with a forced interleave).
+  - [ ] A truncated `schedules.json` is kept as `.corrupt` and reported, never overwritten with `[]`.
+  - [ ] A due schedule that finds a busy run retries on the next tick and is recorded once.
+  - [ ] A failed plan save returns an error to the wizard with the sentence "Couldn't save the plan. Try again."
+  - [ ] Waiting plans older than the limit are removed on start, and listed as expired (count in the log).
+- **Tests:** `packages/runner/tests/scheduler*.test.ts`, `atomic-write` tests, plan-store tests.
+
+### T-51 Deploy gate and publishing
+
+- **Phase:** 4 · **Priority:** P0 · **Size:** M · **Depends on:** T-41 · **Status:** todo
+- **Goal:** nothing reaches a user-facing copy of the app, or a user's CI, unless the checks that matter passed on that
+  commit.
+- **Evidence (read):**
+  - DEP-1: `render.yaml:15` sets `autoDeploy: true`, so Render builds every push to `main` without waiting for Actions
+    (`deploy.yml:1-2` and `docs/DEPLOYMENT.md:20` say otherwise).
+  - DEP-2: no `disks:` block; data at `/data` (`Dockerfile:38-39`) is lost on redeploy or spin-down on the free plan.
+  - DEP-4: `tests.yml:54` excludes `wizard-e2e` and `auth-crawl-*`; `ci.yml:56, 68` skip tests on push; publish does
+    not `needs` `audit` or `secret-scan`; `ci.yml:43` makes typecheck non-blocking.
+  - DEP-5: `.github/workflows/qa-check.yml` checks out `ref: main` and receives `QA_AI_API_KEY`.
+- **In scope:** `render.yaml` (checks gate, or `autoDeploy` off and a deploy triggered from the publish job); `deploy.yml`
+  `needs` on audit and secret-scan; `ci.yml` typecheck blocking; `templates/qa-check.yml` pinned to `TOOL_REF` as the
+  wizard generates it (T-39 set the generator, not the template); `docs/DEPLOYMENT.md` persistent-storage statement.
+  Decision 6 for the disk.
+- **Acceptance criteria:**
+  - [ ] A commit with a failing unit test does not reach Render (the deploy runs after the checks, or waits for them).
+  - [ ] `deploy.yml` publish job needs audit and secret-scan; a test in the workflow lint fails if removed.
+  - [ ] Typecheck failure fails the PR check.
+  - [ ] The template's checkout uses a pinned ref, not `main`, and a test asserts it.
+  - [ ] Persistent storage is either attached (`disks:`) or the limit is stated in DEPLOYMENT.md's known risks.
+- **Tests:** a workflow lint test (`actionlint` in CI, already present or added); the template test.
+
+### T-52 Container hardening and health
+
+- **Phase:** 4 · **Priority:** P1 · **Size:** M · **Depends on:** T-49, decisions 1 and 2 · **Status:** todo
+- **Goal:** the hosted container runs as a non-root user, reports health from real checks, and does not log credentials.
+- **Evidence (read):**
+  - DEP-3: `browser.ts:120-121` always passes `--no-sandbox`; the Dockerfile sets no `USER`.
+  - DEP-7: `Dockerfile:3` pins the base image by tag; no `HEALTHCHECK`; Node version from the base image.
+  - DEP-8: `server.ts:841-845` answers `/healthz` before any check.
+  - DEP-9: `deploy.yml:122` verify loop can overrun the 15-minute job timeout.
+  - DEP-6: `orchestrator.ts:377`, `discovery-agent.ts:503` log `targetUrl` with `user:pass@` (`checkup-run.ts:260-275`).
+- **In scope:** Dockerfile (`USER`, digest pin, `HEALTHCHECK`, `.nvmrc` Node check); `/healthz` checks data folder
+  writable and browser launchable (cached, so cheap); browser sandbox per decision 2; URL credentials stripped before any
+  log line; verify loop bounded below the job timeout.
+- **Acceptance criteria:**
+  - [ ] The image runs as a non-root user (`docker run` test, human item if no Docker in CI).
+  - [ ] `/healthz` returns non-200 when the data folder is read-only (test).
+  - [ ] A target URL with credentials is logged without them (test on the log helper).
+  - [ ] The verify step fails within 10 minutes (the loop is bounded by time, not count).
+  - [ ] The sandbox setting matches decision 2 and is documented.
+- **Tests:** `/healthz` test; log redaction test; workflow lint for the timeout.
+
+### T-53 Performance: timing telemetry
+
+- **Phase:** 5 · **Priority:** P1 · **Size:** S · **Depends on:** none · **Status:** todo
+- **Goal:** every phase of a run reports its time, so later performance changes are measured.
+- **Source:** PERFORMANCE_ANALYSIS Phase 0.
+- **In scope:** per-phase timing (discovery per crawl, planning, each test point with breakpoint, each checker, each
+  navigation settle) emitted into the report as `timing` and into `debug-log`.
+- **Acceptance criteria:**
+  - [ ] A run on `fixtures/test-app` writes a `timing` section with every phase listed above.
+  - [ ] Timing is off unless `QA_DEBUG` or a report flag is set, and the report has no timing when off.
+  - [ ] The timing section is covered by the redaction table (no URL credentials).
+- **Tests:** `packages/core/tests/` timing test on the fixture.
+
+### T-54 Performance: fixed waits and failure-only evidence
+
+- **Phase:** 5 · **Priority:** P1 · **Size:** M · **Depends on:** T-53, decision 3, decision 5 · **Status:** todo
+- **Goal:** a test point spends its time on the page, not on fixed waits; evidence is written for failures.
+- **Source:** PERFORMANCE round 1 Phases 1 and 3.
+- **Evidence:** `settlePage` waits the full 3 s when `networkidle` never fires (`navigate.ts:66-70`); 300 ms in
+  `looksLikeLogin` (`navigate.ts:114`); 300 ms after each step (`orchestrator.ts:892`); full-page screenshot and DOM dump
+  on every step (`orchestrator.ts:920`, `evidence.ts:100`); video on for every point (`browser.ts:194`, the runner never
+  passes `recordVideo`).
+- **In scope:** settle on `domcontentloaded` plus a short settle with a configurable cap; remove the unconditional step
+  wait; screenshot and DOM dump on failure (and a viewport screenshot on pass if decision 3 says so); `recordVideo` a
+  runner option, off in CI.
+- **Acceptance criteria:**
+  - [ ] Fixture run time drops by at least the fixed waits saved (timing from T-53 compared before and after).
+  - [ ] Findings on the fixture are identical (diff of `findings.json` after dropping timing fields).
+  - [ ] A failing step still has its screenshot and DOM dump.
+  - [ ] A passing point writes no step screenshot unless decision 3 says so.
+- **Tests:** existing evidence and navigation tests; a comparison test on the fixture.
+
+### T-55 Performance: once per page, cached link checks
+
+- **Phase:** 5 · **Priority:** P1 · **Size:** M · **Depends on:** T-53 · **Status:** todo
+- **Goal:** width-independent checks run once per page per run; broken-link checks are cached and run in parallel.
+- **Source:** PERFORMANCE round 1 Phase 2.
+- **Evidence:** axe, performance probe and SEO link checks run at every test point (`orchestrator.ts:1056, 1102, 1122`);
+  `checkBrokenLinks` is serial and uncached (`checkers/src/seo.ts:556`).
+- **In scope:** extend the `keyboardChecked` pattern to the link check and the width-independent parts of SEO and
+  security; run-wide link cache keyed by URL; a parallel limit of 4; the screen-size default per decision 5.
+- **Acceptance criteria:**
+  - [ ] A page visited at three sizes produces one link-check pass per run (test counts requests).
+  - [ ] The same URL linked from two pages is requested once.
+  - [ ] Findings on the fixture match the baseline.
+- **Tests:** SEO checker tests; orchestrator test for the once-per-page rule.
+
+### T-56 Performance: parallel test points
+
+- **Phase:** 5 · **Priority:** P2 · **Size:** L · **Depends on:** T-49, T-54 · **Status:** todo
+- **Goal:** test points in different roles run side by side, with the same results as serial.
+- **Source:** PERFORMANCE round 1 Phase 4.
+- **In scope:** a bounded worker pool in `orchestrator.ts` (default 2); per-worker state for everything listed in
+  PERFORMANCE Phase 4a; test-copy flows that write data keep their order; read-only runs parallelise.
+- **Acceptance criteria:**
+  - [ ] Findings and report counts on the fixture are identical with parallelism 1 and 2.
+  - [ ] Two roles do not share a session (test checks cookie jars).
+  - [ ] A test-copy flow with a write step is never reordered.
+  - [ ] The run time with parallelism 2 is less than 70% of serial on the fixture (recorded in the ticket).
+- **Tests:** orchestrator concurrency tests; the parity test.
+
+### T-57 Performance: retry policy
+
+- **Phase:** 5 · **Priority:** P2 · **Size:** S · **Depends on:** decision 4 · **Status:** todo
+- **Goal:** a real failure is reported once; a transient failure is retried.
+- **Source:** PERFORMANCE round 1 Phase 5a.
+- **In scope:** `orchestrator.ts` `shouldRetry` (`:984`): retry on navigation timeout and browser crash only;
+  `retry-runner.ts` telemetry unchanged.
+- **Acceptance criteria:**
+  - [ ] A failed assertion runs once and is reported as Failed (test).
+  - [ ] A navigation timeout is retried once and can show FLAKY_PASSED.
+  - [ ] Decision 4 is recorded in `docs/adr` or the ticket.
+- **Tests:** `packages/core/tests/flaky-retry.test.ts` updated.
+
+### T-58 Response latency: runner endpoints
+
+- **Phase:** 5 · **Priority:** P2 · **Size:** M · **Depends on:** T-53 · **Status:** todo
+- **Goal:** list and poll endpoints do not read every saved file, and evidence and text responses are small.
+- **Source:** PERFORMANCE round 2 LAT-1 to LAT-8, LAT-14 (checked and fine items excluded).
+- **Evidence:** benchmark poll returns the full job (`BenchmarkScreen.tsx:83`, `server.ts:3441-3455`); benchmark and
+  run lists parse every file (`benchmarks.ts:46-56`, `report-store.ts:83-93`, `plan-store.ts:214-230`); evidence is read
+  whole (`server.ts:1181, 2227, 2303, 3204`); no compression; status awaits plan load (`server.ts:979`); plan validator
+  rebuilt per edit (`routes/plan.ts:266`).
+- **In scope:** a progress endpoint for comparisons; an index file for benchmarks, runs and parked plans; `createReadStream`
+  with `Range` and cache headers for evidence; gzip for text responses over 1 KB; cached "no plan" in status; validator
+  built once per plan load.
+- **Acceptance criteria:**
+  - [ ] A comparison poll response is under 1 KB.
+  - [ ] Listing 100 saved runs reads the index, not 100 files (test counts reads).
+  - [ ] A video supports `Range` and returns 206 (test).
+  - [ ] A JSON response over 1 KB has `Content-Encoding: gzip` when the client accepts it.
+  - [ ] An idle status poll makes no file read (test counts reads).
+- **Tests:** runner route tests; a read counter in the store tests.
+
+### T-59 Response latency: wizard polling and bundle
+
+- **Phase:** 5 · **Priority:** P2 · **Size:** M · **Depends on:** T-58 · **Status:** todo
+- **Goal:** an idle wizard makes few requests, and the first load ships only the first screen.
+- **Source:** PERFORMANCE round 2 LAT-9 to LAT-13.
+- **Evidence:** `App.tsx:219` polls every 5 s during a run; `useRunnerConnection.ts:4` every 3 s; `useRunnerStream.ts:6`
+  reconnects every 3 s with no backoff; replay sends up to 200 events (`server.ts:939-943`); one `App-*.js` of about 398 KB
+  (`vite.config.ts` has no `manualChunks` or lazy routes).
+- **In scope:** poll only while a run or a waiting plan is visible, back off when idle; stream reconnect with backoff
+  (2, 4, 8, capped at 30 s); reconnect snapshot instead of full replay; `React.lazy` for Report, Plan Review and Benchmark
+  screens; `manualChunks` for vendor code; `pnpm build` lists chunk sizes.
+- **Acceptance criteria:**
+  - [ ] An idle wizard makes at most one request per 30 s (test with fake timers).
+  - [ ] The stream reconnect waits 2, 4, 8 s, then 30 s (test).
+  - [ ] First-load JavaScript is smaller than before (build output recorded in the ticket).
+  - [ ] Each lazy screen still loads and shows its heading (existing wizard tests).
+- **Tests:** wizard hook tests; `wizard-e2e` run at verification.
+
+### T-60 Resource growth: retention and bounds
+
+- **Phase:** 6 · **Priority:** P2 · **Size:** M · **Depends on:** T-49, T-50, T-54 · **Status:** todo
+- **Goal:** every folder and log has a bound, and each run event is recorded once.
+- **Evidence (read):** GROW-1 passing step files are kept (`evidence.ts:93-112`; only videos are removed,
+  `orchestrator.ts:1378-1393`). GROW-3 per-visitor folders (`server.ts:1385-1387`). GROW-4 waiting plans (T-50 covers
+  expiry). GROW-5 `site-history.json` grows per run (`site-history.ts:108-118`). GROW-6 each event published twice
+  (`checkup-run.ts:397-400` and `server.ts:752-774`). GROW-7 contexts closed on rare throws (`orchestrator.ts:739-759`,
+  `discovery-agent.ts:561-571`, `safe-crawler.ts:172-182`). GROW-8 answers accumulate (`site-memory.ts:306`). GROW-9
+  dead constant `MAX_RUN_EVENTS = 5000` (`server.ts:269`).
+- **In scope:** remove step files of passing points (T-54 decides the default); per-visitor folder retention in beta
+  (ten runs, folders removed on session expiry); a cap or a summary for `site-history.json` (keep grades, cap findings per
+  run); publish each event once; `finally` for the three contexts; prune stale answers on save; delete the dead constant.
+- **Acceptance criteria:**
+  - [ ] A run of 60 test points leaves no step file for a passing point.
+  - [ ] An event appears once in the replay log.
+  - [ ] `site-history.json` after 50 runs is under a set size (documented in the ticket).
+  - [ ] The three contexts are closed when the step throws (test).
+- **Tests:** orchestrator and history tests.
+
+### T-61 Wizard: errors, focus and accessibility
+
+- **Phase:** 7 · **Priority:** P1 · **Size:** M · **Depends on:** T-36 · **Status:** todo
+- **Goal:** users see plain sentences, focus is never lost, and dialogs behave as dialogs.
+- **Evidence (read):** UX-1 raw technical text (`api.ts:6-8`; `App.tsx:464, 602, 708`; `BenchmarkScreen.tsx:251`;
+  `PlanDocument.tsx:1441`; `ReportScreen.tsx:553, 1575, 1618`). UX-2 focus after dialog and delete (`ConfirmDialog.tsx:24-34,
+  93-101`; `PastCheckupsScreen.tsx:69-73`). UX-3 command palette not modal (`CommandPalette.tsx:277-291`). UX-10 invisible
+  focus (`LandingScreen.tsx:422`). UX-11 single-key shortcuts without an off switch (`PlanDocument.tsx:1944-1983`).
+  UX-12 mobile menu Escape (`TopBar.tsx:235-242`).
+- **In scope:** map runner and fetch errors to sentences in one function; return focus to the opener on dialog close and
+  after delete; a focus trap and focus return for the palette; keep the global focus ring; a setting to turn off the
+  shortcuts; Escape closes the mobile menu.
+- **Acceptance criteria:**
+  - [ ] No `RunnerError` or raw `err.message` is rendered without going through the sentence map (grep test).
+  - [ ] After Stop or Delete is confirmed, focus lands on the next logical control (test with Testing Library).
+  - [ ] Tab stays inside the command palette while it is open.
+  - [ ] Focus outline is visible on every focusable element (CSS test or visual check, human item if not automated).
+  - [ ] Shortcut keys do nothing when the setting is off.
+- **Tests:** wizard component tests; the grep test.
+
+### T-62 Wizard: copy and small UX
+
+- **Phase:** 7 · **Priority:** P2 · **Size:** M · **Depends on:** T-61, T-37a, T-37b · **Status:** todo
+- **Goal:** UI text follows the glossary and small states are correct.
+- **Evidence (read):** UX-4 avoid-list terms (`App.tsx:608, 611-612, 768`; `ScanningScreen.tsx:125, 137, 268`;
+  `NewCheckupScreen.tsx:298, 881`; `ReportScreen.tsx:618`; `TopBar.tsx:270`; `DeveloperDetails.tsx:92, 163`;
+  `SettingsScreen.tsx:914-915`; `VisualBaselinesScreen.tsx:186, 453`). UX-5 phone gutter (`LandingScreen.tsx:259`). UX-6
+  nested main (`App.tsx:892`, `LandingScreen.tsx:288`). UX-7 colour-only meaning (`SiteMap.tsx:378-385`,
+  `TopBar.tsx:66-70`). UX-8 unlabelled slider (`VisualBaselinesScreen.tsx:422-429`). UX-9 label in name
+  (`PastCheckupsScreen.tsx:146`, `NewCheckupScreen.tsx:994-1000`). UX-13 stale address check
+  (`NewCheckupScreen.tsx:139-145, 264-266`). UX-14 silent history loss (`BenchmarkScreen.tsx:47, 50-57`).
+  UX-15 success message never shows (`ReportScreen.tsx:479, 494-502`). UX-16 late domain-proof response
+  (`NewCheckupScreen.tsx:1178-1192`). UX-17 numeric inputs clamp each key (`NewCheckupScreen.tsx:724-729, 742-746`).
+  UX-18 max pages commit on blur only (`:491-495`). UX-19 lost edit (`PlanReviewScreen.tsx:256` vs `258-270`).
+  UX-20 disabled controls with no reason (`BenchmarkScreen.tsx:242`, `ReportScreen.tsx:650`, `KeyField.tsx:136`).
+- **In scope:** the glossary terms in UI text per `CONTEXT.md` (or the glossary changed if the code term is right, decided
+  in T-37a/b); the rest as listed.
+- **Acceptance criteria:**
+  - [ ] A grep of `packages/wizard/src` for every avoid-list term finds none in user-visible strings (test with an allow list).
+  - [ ] Phone width (375 px) has a 16 px gutter on every screen (test or visual check).
+  - [ ] Each disabled control has a reason in text next to it.
+  - [ ] Clearing a number field is possible; Enter on Max pages uses the typed value.
+  - [ ] A stale address check cannot start a run against the old address (test).
+- **Tests:** wizard copy test; component tests per item.
+
+### T-63 Docs and contracts residual
+
+- **Phase:** 8 · **Priority:** P2 · **Size:** M · **Depends on:** T-38, and the decisions above · **Status:** todo
+- **Goal:** the docs describe the code after the phases above; ADRs state their status.
+- **Evidence (read):** `docs/CONFIGURATION.md` (`QA_DELAY_MS` 0 becomes 100 ms in `checkup.ts:195`; `PUBLIC_URL` use;
+  missing `SMOKE_PORT`, `SKIP_BROWSER_CHECK`, `CI`; per-provider key order in `key-resolver.ts:100-125`; `QA_MAX_PAGES=0`).
+  `docs/API.md` (missing routes; beta list, see T-42). `README.md:88-89, 98, 178, 236` (Node and pnpm versions; `vercel.json`
+  contents; comparisons). `CONTRIBUTING.md:12, 23` (Node 22.9 vs engines `>=22`; local-only backlog file). `CONTEXT.md`
+  lines 191–223 (retired Report Hub terms), line 41 ("Spec" for Product Context, used in code). ADRs: 0018 ("Secure" used as
+  an area label, `scoring.ts:103`), 0008 (`HUB_API_URL` not implemented), 0005 (Fastify hub retired), 0002 (keychain
+  tier missing), 0021 (CI writes an on-disk session), 0013 and 0015 cited but missing.
+- **In scope:** fix each item in the docs; fix code only where the doc is right (`QA_DELAY_MS` 0 handling, `QA_MAX_PAGES=0`);
+  mark retired ADRs `superseded`; write or un-cite 0013 and 0015.
+- **Acceptance criteria:**
+  - [ ] A test lists every `process.env.*` read in code and checks `.env.example` and `CONFIGURATION.md` (T-38 test, extended).
+  - [ ] Every ADR cited in `docs/` and code exists.
+  - [ ] Every ADR with a retired feature has a status line.
+  - [ ] `CONTEXT.md` has no retired term in the glossary section that the code uses.
+  - [ ] `README.md` and `CONTRIBUTING.md` give the same Node and pnpm versions as `package.json`.
+- **Tests:** the config-docs test (exists, extend); an ADR link check.
+
+## Ticket summary
+
+| id | title | phase | priority | size | depends on | status |
+|---|---|---|---|---|---|---|
+| T-41 | Test baseline that runs | 0 | P0 | S | - | todo |
+| T-42 | Beta: comparison delete and closed routes | 1 | P0 | S | T-34 | todo |
+| T-43 | Address guard for every outbound request | 1 | P0 | M | T-41 | todo |
+| T-44 | Redaction matching | 1 | P1 | M | - | todo |
+| T-45 | Redact on write, one secret list, GET | 1 | P1 | M | T-44 | todo |
+| T-46 | Sign-in sessions off disk | 1 | P1 | S | - | todo |
+| T-47 | Verdict correctness | 2 | P0 | M | T-30 | todo |
+| T-48 | Rejects and refusal rule | 2 | P0 | M | T-33 | todo |
+| T-49 | Run lifecycle: browsers, stop, shutdown | 3 | P0 | M | T-35 | todo |
+| T-50 | Durable state: scheduler, writes, waiting plans | 3 | P1 | M | T-49 | todo |
+| T-51 | Deploy gate and publishing | 4 | P0 | M | T-41 | todo |
+| T-52 | Container hardening and health | 4 | P1 | M | T-49 | todo |
+| T-53 | Performance: timing telemetry | 5 | P1 | S | - | todo |
+| T-54 | Performance: fixed waits, failure-only evidence | 5 | P1 | M | T-53 | todo |
+| T-55 | Performance: once per page, cached links | 5 | P1 | M | T-53 | todo |
+| T-56 | Performance: parallel test points | 5 | P2 | L | T-49, T-54 | todo |
+| T-57 | Performance: retry policy | 5 | P2 | S | decision 4 | todo |
+| T-58 | Response latency: runner endpoints | 5 | P2 | M | T-53 | todo |
+| T-59 | Response latency: wizard polling and bundle | 5 | P2 | M | T-58 | todo |
+| T-60 | Resource growth: retention and bounds | 6 | P2 | M | T-49, T-50, T-54 | todo |
+| T-61 | Wizard: errors, focus and accessibility | 7 | P1 | M | T-36 | todo |
+| T-62 | Wizard: copy and small UX | 7 | P2 | M | T-61, T-37a, T-37b | todo |
+| T-63 | Docs and contracts residual | 8 | P2 | M | T-38 | todo |
+
+## Not in this plan
+
+- Items the reviews marked "checked and fine" (listed in the source reviews).
+- The Demo readiness tickets T-30 to T-40 (built). Their residual gaps are the follow-ups named in the mapping table.
+- Human items: `docs/tickets/HUMAN_TODO.md`. Docker build, a live Render check, and the decisions above.
