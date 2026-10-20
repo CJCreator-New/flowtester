@@ -39,13 +39,13 @@ Phases 0–8, in the order the plan sets. The plan's mapping table names the bui
 | [T-51](REVIEW-REMEDIATION-PLAN.md#t-51-deploy-gate-and-publishing) | Deploy gate and publishing | DEP-1, 2, 4, 5 | P0 | M | 4 | todo | T-41 |
 | [T-52](REVIEW-REMEDIATION-PLAN.md#t-52-container-hardening-and-health) | Container hardening and health | DEP-3, 6, 7, 8, 9 | P1 | M | 4 | todo | T-49 |
 | [T-53](REVIEW-REMEDIATION-PLAN.md#t-53-performance-timing-telemetry) | Performance: timing telemetry | PERF phase 0 | P1 | S | 5 | todo | - |
-| [T-54](REVIEW-REMEDIATION-PLAN.md#t-54-performance-fixed-waits-and-failure-only-evidence) | Performance: fixed waits, failure-only evidence | PERF phases 1, 3 | P1 | M | 5 | todo | T-53 |
+| [T-54](REVIEW-REMEDIATION-PLAN.md#t-54-performance-fixed-waits-and-failure-only-evidence) | Performance: fixed waits, failure-only evidence | PERF phases 1, 3; GROW-1 | P1 | M | 5 | todo | T-53 |
 | [T-55](REVIEW-REMEDIATION-PLAN.md#t-55-performance-once-per-page-cached-link-checks) | Performance: once per page, cached links | PERF phase 2 | P1 | M | 5 | todo | T-53 |
 | [T-56](REVIEW-REMEDIATION-PLAN.md#t-56-performance-parallel-test-points) | Performance: parallel test points | PERF phase 4 | P2 | L | 5 | todo | T-49, T-54 |
 | [T-57](REVIEW-REMEDIATION-PLAN.md#t-57-performance-retry-policy) | Performance: retry policy | PERF phase 5a | P2 | S | 5 | todo | decision 4 |
 | [T-58](REVIEW-REMEDIATION-PLAN.md#t-58-response-latency-runner-endpoints) | Response latency: runner endpoints | LAT-1..8, 14 | P2 | M | 5 | todo | T-53 |
 | [T-59](REVIEW-REMEDIATION-PLAN.md#t-59-response-latency-wizard-polling-and-bundle) | Response latency: wizard polling and bundle | LAT-9..13 | P2 | M | 5 | todo | T-58 |
-| [T-60](REVIEW-REMEDIATION-PLAN.md#t-60-resource-growth-retention-and-bounds) | Resource growth: retention and bounds | GROW-1, 5..9 | P2 | M | 6 | todo | T-49, T-50, T-54 |
+| [T-60](REVIEW-REMEDIATION-PLAN.md#t-60-resource-growth-retention-and-bounds) | Resource growth: retention and bounds | GROW-3 (cap), 5..9 | P2 | M | 6 | todo | T-49, T-50, T-54 |
 | [T-61](REVIEW-REMEDIATION-PLAN.md#t-61-wizard-errors-focus-and-accessibility) | Wizard: errors, focus and accessibility | UX-1, 2, 3, 10, 11, 12 | P1 | M | 7 | todo | T-36 |
-| [T-62](REVIEW-REMEDIATION-PLAN.md#t-62-wizard-copy-and-small-ux) | Wizard: copy and small UX | UX-4..9, 13..20 | P2 | M | 7 | todo | T-61, T-37a, T-37b |
+| [T-62](REVIEW-REMEDIATION-PLAN.md#t-62-wizard-copy-and-small-ux) | Wizard: copy and small UX | UX-4..9, 13, 15..20 | P2 | M | 7 | todo | T-61, T-37a, T-37b |
 | [T-63](REVIEW-REMEDIATION-PLAN.md#t-63-docs-and-contracts-residual) | Docs and contracts residual | DOC | P2 | M | 8 | todo | T-38 |

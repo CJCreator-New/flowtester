@@ -68,8 +68,9 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 | RELIABILITY REL-4, REL-5 | Scheduler lost updates; missed runs | T-50 | T-35 (scheduler start) |
 | RELIABILITY REL-6, REL-7 | Non-durable writes; swallowed save errors | T-50 | none |
 | RELIABILITY REL-9, REL-10 | Approval race; rare-path leaks | T-49 | T-35 (approval) |
-| GROWTH GROW-1, GROW-2 | Step files kept on passing points; browser leak on errors | T-60, T-49 | none |
-| GROWTH GROW-3 | Beta per-visitor folders never deleted | T-60 | none |
+| GROWTH GROW-1 | Step files kept on passing points | T-54 | none |
+| GROWTH GROW-2 | Browser leak on errors | T-49 | none |
+| GROWTH GROW-3 | Beta per-visitor folders never deleted (removal T-50; ten-run cap T-60) | T-50, T-60 | none |
 | GROWTH GROW-4, GROW-5 | Waiting plans never expire; site-history growth | T-60 | none |
 | GROWTH GROW-6 to GROW-9 | Double event log; rare-throw contexts; answers; dead constant | T-60 | none |
 | DEPLOYMENT DEP-1, DEP-4 | Render deploys without checks; gate is partial | T-51 | T-39 (ref) |
@@ -80,11 +81,13 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 | DEPLOYMENT DEP-7, DEP-8, DEP-9 | Image pinning, healthz, verify timeout | T-52 | none |
 | PERFORMANCE round 1 | Phases 0–5 | T-53 to T-57 | none |
 | PERFORMANCE round 2 (LAT-1 to LAT-14) | Response latency | T-58, T-59 | none |
-| WIZARD UX-1 | Raw technical text | T-61 | T-36 |
+| WIZARD UX-1 | Raw technical text (surfaces T-36 did not reach) | T-61 | T-36 |
+| WIZARD UX-14 | Silent history loss | T-36 (built: retry on failed poll) | T-36 |
 | WIZARD UX-2, UX-3, UX-10, UX-11, UX-12 | Focus, dialog trap, invisible focus, shortcuts, Escape | T-61 | T-36 |
 | WIZARD UX-4 | Avoid-list terms | T-62 | T-37a, T-37b |
 | WIZARD UX-5 to UX-9, UX-13 to UX-20 | Gutter, landmarks, colour, labels, stale state | T-62 | T-36 |
-| DOCS (API, ADR, CONTEXT, README) | Drift not covered by T-38 | T-63 | T-38 |
+| DOCS (ADR, CONTEXT, CONFIGURATION, README versions) | Drift not covered by T-38 | T-63 | T-38 |
+| DOCS (API beta list, missing routes, README comparisons) | Drift in API and comparisons docs | T-42 | T-34 |
 
 ## Tickets
 
@@ -175,14 +178,13 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
   tunnel auth are added only in the file pass (SEC S9). Screenshots and video are not scrubbed (`evidence.ts:100`,
   `browser.ts:194-200`, SEC S7). `GET /api/runner/status` begins a session (`server.ts:979`, SEC S11).
 - **In scope:** one function that builds the full secret list (roles, headers, tunnel auth, session cookies) used by the
-  orchestrator, checkup-run and routes; redact text evidence on write; `status` GET is read-only; a run option to skip
-  step screenshots and video (default unchanged), documented in `docs/CONFIGURATION.md`; mask sign-in fields in
-  screenshots (decision 3).
+  orchestrator, checkup-run and routes; redact text evidence on write; the text-format list gains `.csv .xml .yml .yaml .svg .har` (SEC-12); `GET /api/runner/status`
+  makes no write (the `begin()` call moves off the read path; caching is T-58); mask sign-in fields in screenshots (decision 3).
+  Capture policy (failure-only screenshots, the video option) is owned by T-54.
 - **Acceptance criteria:**
   - [ ] A stopped run leaves no plaintext secret in the evidence folder (test stops mid-step).
   - [ ] A custom header value that appears in a finding does not reach the SSE stream or `report.json`.
   - [ ] `GET /api/runner/status` makes no write (test checks the run state before and after).
-  - [ ] With the new option on, no step screenshot or video file is written.
   - [ ] `pnpm build` passes (exported types change).
 - **Tests:** redaction tests for the stop case and the header case; a route test for read-only status.
 
@@ -224,7 +226,6 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
   - [ ] A step titled "Trigger uncaught exception" does not produce a crash grade; a real 5xx does.
   - [ ] An empty run (no checkers) is "Not ready yet" with "No checks ran" and exits non-zero.
   - [ ] `enforceAllAreas` is read by `releaseVerdict`, and the test for each gate covers it.
-  - [ ] The CLI exit code, the stamp and the report agree on every fixture (existing T-30 criterion, re-tested).
 - **Tests:** `packages/core/tests/scoring.test.ts`, `packages/types` verdict tests, `packages/runner/tests` CLI test.
 
 ### T-48 Rejects and refusal rule
@@ -273,7 +274,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
   - [ ] A stop followed at once by a new start: the new start waits for the old run's teardown, or returns 409, never overlaps.
   - [ ] `SIGTERM` during a run stops it, writes the state, removes the auth folder, and exits within 10 s.
   - [ ] A thrown error after headers are sent does not crash the process (test forces it).
-  - [ ] Two approves with one key run once (existing T-35 criterion, re-tested after the change).
+  - [ ] A run started with `replacePlan` during an approval save does not clear the approved run's auth folder or drop its results (REL-9).
 - **Tests:** `packages/core/tests/` abort tests; `packages/runner/tests/checkups.test.ts` stop tests; a signal test.
 
 ### T-50 Durable state: scheduler, writes, waiting plans
@@ -321,7 +322,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
   - [ ] A commit with a failing unit test does not reach Render (the deploy runs after the checks, or waits for them).
   - [ ] `deploy.yml` publish job needs audit and secret-scan; a test in the workflow lint fails if removed.
   - [ ] Typecheck failure fails the PR check.
-  - [ ] The template's checkout uses a pinned ref, not `main`, and a test asserts it.
+  - [ ] The template's checkout ref equals the wizard's `TOOL_REF` (T-39, decision 2), and a test asserts it.
   - [ ] Persistent storage is either attached (`disks:`) or the limit is stated in DEPLOYMENT.md's known risks.
 - **Tests:** a workflow lint test (`actionlint` in CI, already present or added); the template test.
 
@@ -430,7 +431,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
   whole (`server.ts:1181, 2227, 2303, 3204`); no compression; status awaits plan load (`server.ts:979`); plan validator
   rebuilt per edit (`routes/plan.ts:266`).
 - **In scope:** a progress endpoint for comparisons; an index file for benchmarks, runs and parked plans; `createReadStream`
-  with `Range` and cache headers for evidence; gzip for text responses over 1 KB; cached "no plan" in status; validator
+  with `Range` and cache headers for evidence; gzip for text responses over 1 KB; cached "no plan" read in status (the write-side fix is T-45); validator
   built once per plan load.
 - **Acceptance criteria:**
   - [ ] A comparison poll response is under 1 KB.
@@ -462,17 +463,14 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 - **Phase:** 6 · **Priority:** P2 · **Size:** M · **Depends on:** T-49, T-50, T-54 · **Status:** todo
 - **Goal:** every folder and log has a bound, and each run event is recorded once.
-- **Evidence (read):** GROW-1 passing step files are kept (`evidence.ts:93-112`; only videos are removed,
-  `orchestrator.ts:1378-1393`). GROW-3 per-visitor folders (`server.ts:1385-1387`). GROW-4 waiting plans (T-50 covers
+- **Evidence (read):** GROW-1 is owned by T-54 (failure-only capture). GROW-3 per-visitor folders (`server.ts:1385-1387`). GROW-4 waiting plans (T-50 covers
   expiry). GROW-5 `site-history.json` grows per run (`site-history.ts:108-118`). GROW-6 each event published twice
   (`checkup-run.ts:397-400` and `server.ts:752-774`). GROW-7 contexts closed on rare throws (`orchestrator.ts:739-759`,
   `discovery-agent.ts:561-571`, `safe-crawler.ts:172-182`). GROW-8 answers accumulate (`site-memory.ts:306`). GROW-9
   dead constant `MAX_RUN_EVENTS = 5000` (`server.ts:269`).
-- **In scope:** remove step files of passing points (T-54 decides the default); per-visitor folder retention in beta
-  (ten runs, folders removed on session expiry); a cap or a summary for `site-history.json` (keep grades, cap findings per
+- **In scope:** per-visitor folder kept to ten runs (removal on expiry is T-50); a cap or a summary for `site-history.json` (keep grades, cap findings per
   run); publish each event once; `finally` for the three contexts; prune stale answers on save; delete the dead constant.
 - **Acceptance criteria:**
-  - [ ] A run of 60 test points leaves no step file for a passing point.
   - [ ] An event appears once in the replay log.
   - [ ] `site-history.json` after 50 runs is under a set size (documented in the ticket).
   - [ ] The three contexts are closed when the step throws (test).
@@ -487,7 +485,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
   93-101`; `PastCheckupsScreen.tsx:69-73`). UX-3 command palette not modal (`CommandPalette.tsx:277-291`). UX-10 invisible
   focus (`LandingScreen.tsx:422`). UX-11 single-key shortcuts without an off switch (`PlanDocument.tsx:1944-1983`).
   UX-12 mobile menu Escape (`TopBar.tsx:235-242`).
-- **In scope:** map runner and fetch errors to sentences in one function; return focus to the opener on dialog close and
+- **In scope:** extend the error sentence map that T-36 added to `api.ts` to the surfaces T-36 did not reach (`PlanReviewScreen.tsx`, `PlanDocument.tsx`, `ReportScreen.tsx`, `BenchmarkScreen.tsx`); return focus to the opener on dialog close and
   after delete; a focus trap and focus return for the palette; keep the global focus ring; a setting to turn off the
   shortcuts; Escape closes the mobile menu.
 - **Acceptance criteria:**
@@ -508,13 +506,12 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
   nested main (`App.tsx:892`, `LandingScreen.tsx:288`). UX-7 colour-only meaning (`SiteMap.tsx:378-385`,
   `TopBar.tsx:66-70`). UX-8 unlabelled slider (`VisualBaselinesScreen.tsx:422-429`). UX-9 label in name
   (`PastCheckupsScreen.tsx:146`, `NewCheckupScreen.tsx:994-1000`). UX-13 stale address check
-  (`NewCheckupScreen.tsx:139-145, 264-266`). UX-14 silent history loss (`BenchmarkScreen.tsx:47, 50-57`).
-  UX-15 success message never shows (`ReportScreen.tsx:479, 494-502`). UX-16 late domain-proof response
+  (`NewCheckupScreen.tsx:139-145, 264-266`). UX-15 success message never shows (`ReportScreen.tsx:479, 494-502`). UX-16 late domain-proof response
   (`NewCheckupScreen.tsx:1178-1192`). UX-17 numeric inputs clamp each key (`NewCheckupScreen.tsx:724-729, 742-746`).
   UX-18 max pages commit on blur only (`:491-495`). UX-19 lost edit (`PlanReviewScreen.tsx:256` vs `258-270`).
   UX-20 disabled controls with no reason (`BenchmarkScreen.tsx:242`, `ReportScreen.tsx:650`, `KeyField.tsx:136`).
 - **In scope:** the glossary terms in UI text per `CONTEXT.md` (or the glossary changed if the code term is right, decided
-  in T-37a/b); the rest as listed.
+  in T-37a/b); the rest as listed. Already owned by T-37b (built; do not redo): "Specs", "Test again", "account", "competitor", "Failed to", "Jump to Specs". The silent history loss is T-36's retry (built).
 - **Acceptance criteria:**
   - [ ] A grep of `packages/wizard/src` for every avoid-list term finds none in user-visible strings (test with an allow list).
   - [ ] Phone width (375 px) has a 16 px gutter on every screen (test or visual check).
@@ -529,15 +526,15 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 - **Goal:** the docs describe the code after the phases above; ADRs state their status.
 - **Evidence (read):** `docs/CONFIGURATION.md` (`QA_DELAY_MS` 0 becomes 100 ms in `checkup.ts:195`; `PUBLIC_URL` use;
   missing `SMOKE_PORT`, `SKIP_BROWSER_CHECK`, `CI`; per-provider key order in `key-resolver.ts:100-125`; `QA_MAX_PAGES=0`).
-  `docs/API.md` (missing routes; beta list, see T-42). `README.md:88-89, 98, 178, 236` (Node and pnpm versions; `vercel.json`
-  contents; comparisons). `CONTRIBUTING.md:12, 23` (Node 22.9 vs engines `>=22`; local-only backlog file). `CONTEXT.md`
+  `README.md:88-89, 98, 178` (Node and pnpm versions; `vercel.json`
+  contents). API routes and the beta list are T-42. `CONTRIBUTING.md:12, 23` (Node 22.9 vs engines `>=22`; local-only backlog file). `CONTEXT.md`
   lines 191–223 (retired Report Hub terms), line 41 ("Spec" for Product Context, used in code). ADRs: 0018 ("Secure" used as
   an area label, `scoring.ts:103`), 0008 (`HUB_API_URL` not implemented), 0005 (Fastify hub retired), 0002 (keychain
   tier missing), 0021 (CI writes an on-disk session), 0013 and 0015 cited but missing.
 - **In scope:** fix each item in the docs; fix code only where the doc is right (`QA_DELAY_MS` 0 handling, `QA_MAX_PAGES=0`);
   mark retired ADRs `superseded`; write or un-cite 0013 and 0015.
 - **Acceptance criteria:**
-  - [ ] A test lists every `process.env.*` read in code and checks `.env.example` and `CONFIGURATION.md` (T-38 test, extended).
+  - [ ] T-38's `process.env` test also covers `scripts/` (T-38's test reads `packages/*/src` only).
   - [ ] Every ADR cited in `docs/` and code exists.
   - [ ] Every ADR with a retired feature has a status line.
   - [ ] `CONTEXT.md` has no retired term in the glossary section that the code uses.
@@ -574,6 +571,7 @@ otherwise. T-56 (parallel test points) waits for T-49, because it changes the sa
 
 ## Not in this plan
 
+- T-23 (split large files). Pure moves of `server.ts`, `orchestrator.ts` and `App.tsx`, which phases 1 to 6 change heavily. Run it after phase 6; before then it conflicts with almost every ticket above.
 - Items the reviews marked "checked and fine" (listed in the source reviews).
 - The Demo readiness tickets T-30 to T-40 (built). Their residual gaps are the follow-ups named in the mapping table.
 - Human items: `docs/tickets/HUMAN_TODO.md`. Docker build, a live Render check, and the decisions above.
