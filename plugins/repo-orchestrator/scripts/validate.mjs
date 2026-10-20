@@ -7,8 +7,17 @@ import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const PLUGIN = join(ROOT, 'plugins/repo-orchestrator');
+const PLUGIN = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+// The marketplace is the nearest ancestor folder holding .claude-plugin/marketplace.json,
+// so the plugin works at any depth in a repo (plugins/<name>/ here, <name>/ elsewhere).
+function findRoot(start) {
+  for (let dir = start; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, '.claude-plugin/marketplace.json'))) return dir;
+    if (dirname(dir) === dir) return start;
+  }
+}
+const ROOT = findRoot(dirname(PLUGIN));
 const errors = [];
 const fail = (msg) => errors.push(msg);
 const rel = (p) => relative(ROOT, p);
@@ -55,7 +64,7 @@ if (marketplace) {
   const entry = (marketplace.plugins ?? []).find((p) => p.name === manifest?.name);
   if (!entry) fail('marketplace.json: plugin not listed');
   else if (resolve(ROOT, entry.source) !== PLUGIN)
-    fail(`marketplace.json: source for ${manifest.name} must point to plugins/repo-orchestrator`);
+    fail(`marketplace.json: source for ${manifest.name} must point to ${rel(PLUGIN)}`);
   if (!marketplace.name || !marketplace.owner?.name) fail('marketplace.json: name and owner.name are required');
 }
 
