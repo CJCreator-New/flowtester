@@ -23,7 +23,7 @@ where a built ticket left a gap in the code, the gap is a follow-up ticket here,
 
 | Phase | Theme | Tickets | Why this order |
 |---|---|---|---|
-| 0 | Test baseline | T-41 | A verification pass needs a test environment that works. |
+| 0 | Test baseline | T-41, T-64 | A verification pass needs a test environment that works and a suite that passes before any change. |
 | 1 | Security and data exposure | T-42, T-43, T-44, T-45, T-46 | Hosted beta exposes these to strangers. Fix before anything else ships. |
 | 2 | Release verdict | T-47, T-48 | These decide "Ready to release" and must be right before the demo. |
 | 3 | Run lifecycle and durable state | T-49, T-50 | Leaked browsers, stop races and lost schedules affect every run. |
@@ -37,7 +37,7 @@ where a built ticket left a gap in the code, the gap is a follow-up ticket here,
 
 Tickets are built in batches, numbered 1 to 19. The rules that keep them from conflicting:
 
-1. A batch starts only when every earlier batch is built.
+1. A batch starts only when every earlier batch is built. Batch 1b (T-64) must pass before batch 2 starts, so later failures are new.
 2. Tickets in one batch edit disjoint files (the table below is the check).
 3. A ticket that edits a file another ticket also edits sits in a later batch.
 4. Docs have one editor each (see the Docs rule below), so no two tickets edit the same doc.
@@ -46,6 +46,7 @@ Tickets are built in batches, numbered 1 to 19. The rules that keep them from co
 | Batch | Tickets | Files each ticket may edit |
 |---|---|---|
 | 1 | T-41 | `scripts/` (bootstrap), test setup, `docs/TESTING.md` |
+| 1b | T-64 | the files each failing test points to (set during triage, recorded in T-64 before any edit); alone in its batch |
 | 2 | T-42 | `packages/runner/src/server.ts` (benchmark handler, closed routes), `docs/API.md` |
 | 2 | T-43 | `packages/core/src/safe-net.ts`, `packages/core/src/discovery/deterministic-spider.ts`, `packages/core/src/orchestrator.ts` (checkLink only), `packages/checkers/src/seo.ts`, `packages/checkers/src/security-depth.ts`, new ADR 0030 |
 | 2 | T-44 | `packages/core/src/redact.ts`, `packages/checkers/src/security.ts` |
@@ -133,19 +134,37 @@ The table gives each ticket's files. Tickets list only the files in their own ro
 
 - **Phase:** 0 · **Batch:** 1 · **Priority:** P0 · **Size:** S · **Depends on:** none · **Status:** todo
 - **Goal:** `pnpm test` runs in a clean checkout on a machine that has run `pnpm bootstrap`, and its result is recorded.
-- **Evidence:** first full run, 75 of 234 files failed, 141 tests. Almost all are browser launch errors: the repo's
-  Playwright expects `chromium_headless_shell-1243`, the environment had `-1194`. Some tests read generated folders
-  (`.tmp-visual-compat/`, `.tmp-e2e-qa-report/`) that a fresh checkout does not have.
-- **In scope:** `scripts/` bootstrap step that installs the browser version Playwright expects; test setup that creates
-  the generated baseline folders before a test uses them; `docs/TESTING.md` section on the browser requirement.
-- **Out of scope:** changing the Playwright version.
+- **Evidence (measured):**
+  - Run 1 (environment as found): 75 of 234 files failed, 141 of 1736 tests. Almost all were browser launch errors: the repo's Playwright expects `chromium_headless_shell-1243`; the sandbox had `-1194`.
+  - Run 2 (browser paths linked to the installed build, outside the repo): 9 of 234 files failed, 20 of 1736 tests; 1716 passed, 120 skipped. These 20 are not environment problems. They are listed in T-64.
+  - `pnpm build` passes.
+- **In scope:** `scripts/` bootstrap step that installs the browser build Playwright expects; test setup that creates the generated `.tmp-*` baseline folders before a test uses them; `docs/TESTING.md` section on the browser requirement and on the baseline counts above.
+- **Out of scope:** changing the Playwright version; fixing the 20 failing tests (T-64).
 - **Acceptance criteria:**
-  - [ ] After `pnpm bootstrap` on a fresh checkout, `pnpm exec playwright --version` matches the browser build in use.
+  - [ ] After `pnpm bootstrap` on a fresh checkout, the browser build in use matches the one Playwright expects.
   - [ ] No test fails with "Executable doesn't exist" on a bootstrapped machine.
   - [ ] Tests that use `.tmp-*` folders create them first and pass with the folders absent.
-  - [ ] The baseline (files passed, failed, skipped, with the command) is written into `docs/TESTING.md`.
-- **Tests:** the bootstrap script has a check; the baseline is recorded by running the full suite once (this is the one
-  verification run before the Phase 1 tickets start).
+  - [ ] `docs/TESTING.md` records the baseline: 234 files, 1736 tests,### T-64 Clear the baseline failures
+
+- **Phase:** 0 · **Batch:** 1b · **Priority:** P0 · **Size:** M · **Depends on:** T-41 · **Status:** todo
+- **Goal:** the full suite passes on the baseline, so every later batch can tell its own failures from old ones.
+- **Evidence (measured, run 2 of T-41):** 9 files, 20 tests.
+  - Wizard end-to-end (`packages/wizard/tests/wizard-e2e.test.ts`, 9 tests): the landing and first-visit tests find a "Keyboard shortcuts" button where the test expects none (`expected 1 to be +0`), and a first-visit assertion is `true` where `false` is expected. Built tickets T-36 and T-37 changed these screens; T-61 will change the shortcuts again. The rest (Go deeper, reuse approved plan, Past check-ups, Settings key, test run fails, scan and plan, report) need their first error read in triage.
+  - Invoice flow, two tests: `url-first.test.ts` ("tests localhost fully when the owner box is ticked") finds no `POST /api/invoices` sent; `e2e-orchestrator.test.ts` expects the invoice test to Pass and gets Failed. The fixture now sends CSP and nosniff headers (T-40 note). Check this first.
+  - Auth and crawl, three tests (`auth-crawl-e2e.test.ts`): custom headers on every request, and session expiry. Plus `discovery-agent-headers.test.ts` (headers reach sign-in, visitor and role crawls) and `e2e-discovery.test.ts`.
+  - Runner, three more: `checkups.test.ts` (report kept in the run's own folder), `runner-server.test.ts` (POST run, SSE, finished report), `credentials-crawl.test.ts` (acts after sign-in, never on a Sensitive Action).
+  - One verdict assertion in the report flow expects "Ready to release" and gets "Not ready yet". Check it against T-47's per-page problem keys (COR-1) before deciding which side is wrong.
+- **In scope:** for each failing test, record in this ticket whether it is a stale expectation or a real defect, then fix it on that basis. A stale expectation is changed to the behaviour the built tickets chose, with the reason in the test. A real defect is fixed in the file the failure points to. Nothing is skipped, deleted or marked as todo to pass.
+- **Out of scope:** new features; the remediation tickets (they own the behaviour, not these tests).
+- **Acceptance criteria:**
+  - [ ] Each of the 20 tests is listed here with its verdict (stale or real), its first error, and the file changed.
+  - [ ] `pnpm test` passes on a bootstrapped machine, or the remaining failure is named here with its owner.
+  - [ ] No test is skipped, deleted, or weakened to pass; any changed assertion says why in the test.
+  - [ ] The invoice flow failure is explained (fixture change or code change), and the explanation is in this ticket.
+- **Tests:** the 20 named tests; `pnpm test` in full.
+
+ and the 20 failures named in T-64.
+- **Tests:** the bootstrap script has a check; the baseline is recorded by one full run after T-64 is built.
 
 ### T-42 Beta: comparison delete and closed routes
 
@@ -584,6 +603,7 @@ The table gives each ticket's files. Tickets list only the files in their own ro
 | id | title | phase | batch | priority | size | depends on | status |
 |---|---|---|---|---|---|---|---|
 | T-41 | Test baseline that runs | 0 | 1 | P0 | S | none | todo |
+| T-64 | Clear the baseline failures | 0 | 1b | P0 | M | T-41 | todo |
 | T-42 | Beta: comparison delete and closed routes | 1 | 2 | P0 | S | T-34 (built), T-41 | todo |
 | T-43 | Address guard for every outbound request | 1 | 2 | P0 | M | T-41 | todo |
 | T-44 | Redaction matching | 1 | 2 | P1 | M | none | todo |

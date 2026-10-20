@@ -22,11 +22,12 @@ Build only; tests run once, in `/verify-all`, after every row here is `built`.
 
 ## Review remediation (plan: [REVIEW-REMEDIATION-PLAN.md](REVIEW-REMEDIATION-PLAN.md))
 
-Build batches 1–19, in the order the plan sets (see *Build order and file ownership* in the plan). The `wave` column is the batch. Tickets in one batch edit disjoint files; a batch starts only when the earlier ones are built. The plan's mapping table names the built ticket (T-30 to T-40) that each follow-up refines. Build only; tests run once, in `/verify-all`, after every row here is `built`. Batch 1 (T-41) is the one exception: it records the baseline first.
+Build batches 1–19, in the order the plan sets (see *Build order and file ownership* in the plan). The `wave` column is the batch. Tickets in one batch edit disjoint files; a batch starts only when the earlier ones are built. The plan's mapping table names the built ticket (T-30 to T-40) that each follow-up refines. Build only; tests run once, in `/verify-all`, after every row here is `built`. Batches 1 and 1b (T-41, T-64) come first: they record the baseline and clear its failures.
 
 | id | title | gaps | priority | size | wave | status | depends on |
 |---|---|---|---|---|---|---|---|
 | [T-41](REVIEW-REMEDIATION-PLAN.md#t-41-test-baseline-that-runs) | Test baseline that runs | test env | P0 | S | 1 | todo | - |
+| [T-64](REVIEW-REMEDIATION-PLAN.md#t-64-clear-the-baseline-failures) | Clear the baseline failures | 20 tests, 9 files | P0 | M | 1b | todo | T-41 |
 | [T-42](REVIEW-REMEDIATION-PLAN.md#t-42-beta-comparison-delete-and-closed-routes) | Beta: comparison delete and closed routes | SEC, DOC | P0 | S | 2 | todo | T-34, T-41 |
 | [T-43](REVIEW-REMEDIATION-PLAN.md#t-43-address-guard-for-every-outbound-request) | Address guard for every outbound request | SEC-1, SEC-2 | P0 | M | 2 | todo | T-41 |
 | [T-44](REVIEW-REMEDIATION-PLAN.md#t-44-redaction-matching) | Redaction matching | SEC-3..6 | P1 | M | 2 | todo | - |
