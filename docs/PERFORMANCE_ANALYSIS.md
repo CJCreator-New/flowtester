@@ -145,3 +145,76 @@ Ordered by expected gain for the least risk. Each item has a check that proves i
 1. Keep three screen sizes as the default, or two for a quick check (Phase 2c)?
 2. Is retrying a failed test point worth doubling its cost (Phase 5a)?
 3. Which AI provider and plan do most check-ups use? That sets the planner concurrency default (Phase 5c).
+
+## Round 2: slow responses (runner HTTP, SSE and wizard)
+
+Scope: how long the runner takes to answer the wizard and the wizard's own waiting. Same method: read the code,
+estimate, confirm in Phase 0. Sizes are per response unless noted. Nothing here is measured yet.
+
+### Findings
+
+| # | Where | What is slow | Why it scales |
+| - | ----- | ------------ | ------------- |
+| R1 | `packages/wizard/src/screens/BenchmarkScreen.tsx:7`, `:83` | Comparison polls every 1.5 s, and each poll returns the whole job | Each response carries the full `result`, not a progress summary |
+| R2 | `packages/runner/src/benchmarks.ts:46-56` | Benchmark list parses every saved job file (results included), then drops the results | Cost grows with comparison history, on every list call |
+| R3 | `packages/runner/src/session/report-store.ts:83-93` | Past check-ups list reads `summary.json` of every run folder | No index; a directory scan plus one file read per run |
+| R4 | `packages/runner/src/session/report-store.ts:154` | Report fetch parses the whole `report.json` each time | Only the latest report is cached in memory |
+| R5 | `packages/runner/src/server.ts:1181`, `:2227`, `:2303`, `:3204` | Evidence files (screenshots, videos) are read fully into memory and sent without streaming, `Range` or caching headers | A video of a test point can be several MB; the browser cannot seek, and the whole file is held in memory per request |
+| R6 | `packages/runner/src/server.ts` (no compression anywhere) | No gzip on JSON, HTML or text responses | `report.html` embeds up to 6 MB of base64 screenshots (`packages/core/src/html-report.ts:621`); plan and report JSON go uncompressed |
+| R7 | `packages/runner/src/server.ts:979`, `packages/runner/src/session/plan-store.ts:161-175` | Status is polled every 3 s and 5 s; each poll awaits `plan.current()`, which reads the plan file from disk when none is cached | Cheap when there is no plan; a file read per poll otherwise |
+| R8 | `packages/runner/src/session/plan-store.ts:214-230` | New check-up screen parses every parked plan file in full | Cost grows with the number of parked plans, and each file holds every page |
+| R9 | `packages/wizard/src/App.tsx:219`, `hooks/useRunnerConnection.ts:4` (3 s), `hooks/useRunnerStream.ts:6` | Fixed-interval polling with no backoff; the stream reconnects every 3 s on failure | Constant background load on the runner, even when idle or down |
+| R10 | `packages/runner/src/server.ts:939-943`, `session/run-events.ts` (cap 200) | A reconnecting page gets up to 200 replayed events, each with its full payload | Every reload or reconnect mid-run re-sends the run so far |
+| R11 | `packages/wizard/src/**` (single `App-*.js`, about 398 KB minified), `vite.config.ts` (no `manualChunks`, no lazy routes) | Report, plan review and benchmark code ship in the first load | Every screen pays for every other screen's code on the first visit |
+| R12 | `packages/core/src/preflight.ts:187` | A fixed 4 s wait before the second try of the address check | Every first attempt that fails pays 4 s, even on a transient error |
+| R13 | `packages/core/src/ai/openrouter.ts:184-190`, `runner/src/server.ts:2610`, `:2728`, `:3059` | Saving the key or changing the model runs key validation, then the model list, one after the other, with no cache | Two sequential network round-trips on every AI settings change |
+| R14 | `packages/runner/src/routes/plan.ts:266` | Every plan edit builds a `PlanValidator` over all pages | Cost grows with the number of pages in the plan |
+
+Checked and fine: no synchronous file I/O on request paths (the one `existsSync` is in export code,
+`plan/playwright-export.ts:422`); the SSE event log is capped (`MAX_RUN_EVENTS = 200`); plan toggles are
+batched behind a 300 ms debounce (`PlanReviewScreen.tsx:194`); the AI visual review is not in the test loop.
+
+### Phase 6. Make responses small and cheap (plan)
+
+- **6a. Progress without the result (R1).** Add `GET /api/runner/benchmark/:id/progress` returning status and
+  counts only. Poll that while running, and fetch the full job once at the end. Poll every 3 s instead of 1.5 s.
+  - **Check:** a comparison run shows the same progress; the poll response is a few hundred bytes.
+- **6b. Index saved records (R2, R3, R8).** Keep a small `index.json` (or per-folder summary sidecar) for
+  benchmarks, runs and parked plans, updated on write. List calls read the index, not every file.
+  - **Check:** list latency with 100 saved runs, before and after.
+- **6c. Stream evidence (R5).** Serve files with `createReadStream`, honour `Range` for video, and send
+  `Cache-Control: private, max-age=…` and an `ETag`. Evidence is immutable once written.
+  - **Check:** a video seeks in the browser; a second request returns 304.
+- **6d. Compress text (R6).** Gzip or brotli for `application/json`, `text/*` and `application/javascript`
+  responses over about 1 KB. Leave images alone. Keep the 6 MB image budget but lower it for the in-app report
+  (serve screenshots as links there, embed only in the exported file).
+  - **Check:** `Content-Encoding` present; report view transfer size down.
+- **6e. Stop re-reading the plan (R7).** Cache the "no plan" result for the status poll and clear it on
+  save/clear, so an idle poll does no disk work.
+  - **Check:** idle status poll causes no `readFile` (count in debug log).
+- **6f. Back off the wizard's polling (R9).** Poll every 3 s only while a run or a waiting plan is visible; back
+  off to 10–30 s when idle; reconnect the stream with exponential backoff (2 s, 4 s, 8 s, capped at 30 s).
+  - **Check:** idle wizard makes at most one request per 30 s.
+- **6g. Lighter reconnect replay (R10).** On reconnect, send a snapshot (current phase, counts, latest step) and only
+  events after the client's last id. Keep the 200-event log for old clients.
+  - **Check:** reconnect mid-run sends a few KB, not the whole log.
+- **6h. Split the wizard bundle (R11).** Lazy-load `ReportScreen`, `PlanReviewScreen` and `BenchmarkScreen`
+  (`React.lazy` plus `Suspense`), and add `manualChunks` for vendor code. Report the gzip size per chunk in
+  `pnpm build`.
+  - **Check:** first-load JS size drops; each screen still loads; build output lists chunk sizes.
+- **6i. Fast first retry (R12).** Retry the address check after 500 ms, and only on a network error. Keep the
+  4 s wait for a server that answers 5xx.
+  - **Check:** a transient network error recovers in about 1 s; the fixture still passes preflight.
+- **6j. Cache the model list (R13).** Cache `GET /models` for 10 minutes per key (in memory, never on disk), and
+  run key validation and the list in parallel when the cache is cold.
+  - **Check:** second settings change makes no OpenRouter call.
+- **6k. Validate only what changed (R14).** Build the `PlanValidator` once per plan load and reuse it for each
+  edit, or validate only the flows in the PATCH.
+  - **Check:** plan edit time on a 200-page plan stays flat.
+
+### Open items for round 2
+
+1. Confirm whether the report files (`report.html`, `issues.html`, `report.json`) are written before or after the
+   wizard receives `RUN_COMPLETED`. The finishing step in `server.ts` (around line 2400-2440) is awaited; if it
+   runs before completion is announced, a large report delays "done" by the time it takes to render.
+2. Measure R1 and R5 first with a real comparison and a real video. They may matter more than the estimates here.
