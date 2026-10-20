@@ -105,7 +105,8 @@ claude plugin validate .                       # marketplace manifest
 - **One entry point.** The skill holds the stage order and hard rules. Detail that does not change
   per run lives in two reference files, so the skill stays short.
 - **Specialists are narrow.** Each agent has the fewest tools its job needs. Researchers and the security
-  reviewer are read-only. Only implementers and remediators edit.
+  reviewer are read-only by instruction, not by enforcement: their `Bash` access is not restricted, so
+  they are trusted not to write. Only implementers and remediators are meant to edit.
 - **Ownership before parallelism.** The plan assigns one owner per file. Overlapping files serialize.
   Shared contracts go first.
 - **End-only testing is enforced, not just requested.** The instruction says so, and the hook blocks
