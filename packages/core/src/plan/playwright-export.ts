@@ -98,7 +98,9 @@ function proseSelector(selector: string): boolean {
 class Unmappable extends Error {}
 
 function mapStep(step: TestCaseStep, role: string, target: string): string[] {
-  const label = `// ${comment(step.name)}`;
+  const label = step.selectorReason
+    ? `// ${comment(step.name)} (reason for CSS: ${comment(step.selectorReason)})`
+    : `// ${comment(step.name)}`;
   const needSelector = (): string => {
     if (!step.selector) throw new Unmappable(`The step "${comment(step.name)}" has no selector in the Plan.`);
     if (proseSelector(step.selector))
@@ -139,6 +141,9 @@ function mapStep(step: TestCaseStep, role: string, target: string): string[] {
       return [label, `await expectLinkOk(request, ${q(where.url)});`];
     }
     case 'wait':
+      // Web-first: wait for the named element, never a fixed delay.
+      if (step.selector && !proseSelector(step.selector))
+        return [label, `await expect(await sel(page, ${q(step.selector)})).toBeVisible();`];
       return [label, `await page.waitForLoadState('load');`];
     case 'check-link':
       if (!step.value) throw new Unmappable(`The step "${comment(step.name)}" has no address in the Plan.`);
@@ -342,13 +347,24 @@ function refusalHelperLines(): string[] {
 const HELPERS = [
   `import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';`,
   ``,
-  `// Finds an element the way the Plan names it: a bare id is a data-testid, anything else a selector.`,
-  `// A visible match is preferred; otherwise the first match.`,
+  `// Turns the Plan's selector into a Playwright locator: role, text and test ID forms use getByRole,`,
+  `// getByText and getByTestId; anything else is CSS and stays page.locator.`,
+  `export function locatorFor(page: Page, selector: string): Locator {`,
+  `  const role = /^role=([\\w-]+)\\[name="(.*)"\\]$/.exec(selector);`,
+  `  if (role) return page.getByRole(role[1] as Parameters<Page['getByRole']>[0], { name: role[2] });`,
+  `  const text = /^text="(.*)"$/.exec(selector);`,
+  `  if (text) return page.getByText(text[1], { exact: true });`,
+  `  const id = /^\\[data-testid="([^"]*)"\\]$/.exec(selector) ?? (/^[\\w-]+$/.test(selector) ? [selector, selector] : null);`,
+  `  if (id) return page.getByTestId(id[1]);`,
+  `  return page.locator(selector);`,
+  `}`,
+  ``,
+  `// Finds an element the way the Plan names it. A visible match is preferred; otherwise the first match.`,
   `export async function sel(page: Page, selector: string): Promise<Locator> {`,
-  `  const base = /^[\\w-]+$/.test(selector) ? '[data-testid="' + selector + '"]' : selector;`,
-  `  const visible = page.locator(base + ' >> visible=true');`,
+  `  const base = locatorFor(page, selector);`,
+  `  const visible = base.filter({ visible: true });`,
   `  if ((await visible.count()) > 0) return visible.first();`,
-  `  return page.locator(base).first();`,
+  `  return base.first();`,
   `}`,
   ``,
   `function escapeRegExp(text: string): string {`,

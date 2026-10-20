@@ -5,6 +5,14 @@ export interface RetryTelemetryEntry {
   retryCount: number;
   status: 'FLAKY_PASSED' | 'FAILED';
   errorMessage?: string;
+  /** Attempts that passed, of `attempts` made (early stop: the rerun loop ends at the first pass). */
+  passes?: number;
+  /** Attempts made, first run included. */
+  attempts?: number;
+  /** passes / attempts, 0 to 1. */
+  passRate?: number;
+  /** Best guess from the evidence only; 'unknown' when nothing points one way. */
+  likelyCause?: 'timing' | 'state-leakage' | 'network' | 'unknown';
 }
 
 export interface DesignTokens {

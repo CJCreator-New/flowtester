@@ -299,3 +299,15 @@ _Avoid_: Step score, complexity index
 **UX Gap Analysis**:
 An AI-driven strategic synthesis identifying friction disparities, conversion drop-off risks, and prioritized UX improvements relative to benchmarked competitors.
 _Avoid_: Teardown report, critique, competitor notes
+
+**Smoke Check-up**:
+The quick preset that only reads a few known paths of a deployed App, health first. GET only; no sign-in, no forms, no AI.
+_Avoid_: Canary, uptime monitor, smoke test
+
+**Active check consent**:
+The owner's explicit, per-run say-so (plus a Test Copy) for any check that sends something an owner could mistake for an attack. Never remembered. See ADR 0030.
+_Avoid_: Pentest mode, attack mode
+
+**WCAG criterion status**:
+Per WCAG criterion, one of "violated", "no violation found by automation", "needs human judgment". Never "passes" or "compliant".
+_Avoid_: Accessibility score, compliance percentage

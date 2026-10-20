@@ -116,6 +116,30 @@ describe('playwright export', () => {
     expect(file(files, 'support/helpers.ts')).toContain('maxRedirects: 10');
   });
 
+  it('translates role, text and test id selectors to web-first locators and keeps no fixed waits', () => {
+    const files = planToPlaywrightProject(
+      planOf([
+        tc({
+          steps: [
+            { action: 'click', selector: 'role=button[name="Save"]', name: 'Save' },
+            { action: 'click', selector: '#odd', selectorReason: 'no stable role, text or test id found', name: 'Odd' },
+            { action: 'wait', selector: 'text="Done"', name: 'Wait for done' },
+            { action: 'wait', name: 'Wait' },
+          ],
+        }),
+      ])
+    );
+    const text = all(files);
+    const helpers = file(files, 'support/helpers.ts');
+    expect(helpers).toContain('page.getByRole(');
+    expect(helpers).toContain('page.getByText(');
+    expect(helpers).toContain('page.getByTestId(');
+    expect(text).toContain('(reason for CSS: no stable role, text or test id found)');
+    expect(text).toContain('await expect(await sel(page, "text=\\"Done\\"")).toBeVisible();');
+    expect(text).toContain('expect(');
+    expect(text).not.toMatch(/waitForTimeout|sleep\(|setTimeout/);
+  });
+
   it('export marks a step it cannot map as test.fixme with a reason', () => {
     const files = planToPlaywrightProject(
       planOf([

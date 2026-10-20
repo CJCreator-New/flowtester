@@ -57,6 +57,10 @@ Custom headers (`QA_CUSTOM_HEADERS`, `customHeaders` API field, or `--header` fl
 
 On a shared machine (`RUNNER_BETA=1`) the tool only fills in and sends forms on a Test Copy that is marked by the owner, resolves only to public addresses, and passes a Verified Domain proof: the file `https://<exact address>/.well-known/qa-verify.txt` holds one line, `qa-verify=<token>`. The token is random per session and address, kept in memory, and the file is fetched again at the start of every run and when a waiting plan is approved. The proof needs https, follows no redirect, is capped at 4 KB, and the route never returns the fetched file (ADR 0014). A proof shows control of one address at one moment, not that the site is fine. Dev tunnel names, `localhost`, private ranges and the `x-test-copy` header do not make a Test Copy there. Residual: the browser resolves third-party hosts itself, so a name with a TTL of 0 that turns private on a host other than the target can slip through a short gap; those runs only send GET to non-test sites. Own computer and GitHub Actions use are unchanged.
 
+## Passive and active checks
+
+Checks that read what the App already sends, or make a normal GET or visit, are passive. Checks that send something an owner could mistake for an attack (forged tokens, injection payloads, ID enumeration, mass assignment, login floods, foreign Origin, crafted headers) are active. Active checks need a Test Copy and Active check consent, per run, never remembered, ignored on a shared machine. None is built yet; each needs its own ticket (ADR 0030).
+
 ## Rules for contributors
 
 1. A change that loosens a safety filter, the read-only default, the host check, or redaction needs an ADR and a test.

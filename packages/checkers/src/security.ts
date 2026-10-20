@@ -29,6 +29,8 @@ const PASSWORD_IN_ADDRESS = 'The sign-in form sends passwords in the page addres
 const PASSWORD_IN_ADDRESS_FIX =
   'Send the form with method="post". A password in the address is kept in browser history, server and proxy logs, and analytics, and can leak to other sites through the Referer header.';
 
+const CSRF_TOKEN_NAME = /csrf|xsrf|_token|authenticity_token|__RequestVerificationToken/;
+
 const STACK_TRACE_PATTERN =
   /(?:at [a-zA-Z0-9_$./\\-]+\s*\([^)]+:[0-9]+:[0-9]+\)|node:internal\/|Traceback \(most recent call last\):|Exception in thread "[^"]+"|System\.[a-zA-Z0-9]+Exception:|SQLSTATE\[[0-9A-Z]+\])/i;
 
@@ -269,6 +271,9 @@ export class SecurityChecker {
       // Cookies check skipped if browser context not accessible
     }
 
+    // 4b. CSRF token on state-changing forms (heuristic, passive DOM read)
+    findings.push(...(await this.checkCsrf(page, context)));
+
     // 5. Missing Security Headers
     if (context.responseHeaders) {
       const headerFindings = this.checkHeaders(context.responseHeaders, {
@@ -279,6 +284,60 @@ export class SecurityChecker {
     }
 
     return findings;
+  }
+
+  /**
+   * Forms that send data (post/put/delete) and show no CSRF token: no hidden input named like a token
+   * and no csrf meta tag. A cookie with SameSite Lax or Strict on the page suppresses it. Heuristic and
+   * read-only (never submits). Sign-in forms are skipped. Token-in-header apps give false hits, so the
+   * severity is Minor and the wording is "not found". Only field and cookie names are read, never values.
+   */
+  async checkCsrf(page: Page, context: SecurityContext & { urlPath: string }): Promise<Finding[]> {
+    const raw: unknown = await page
+      .evaluate((tokenPattern) => {
+        const token = new RegExp(tokenPattern, 'i');
+        if (Array.from(document.querySelectorAll('meta[name]')).some((m) => token.test(m.getAttribute('name') || '')))
+          return [];
+        const out: string[] = [];
+        for (const f of Array.from(document.querySelectorAll('form'))) {
+          const method = (f.getAttribute('method') || '').trim().toLowerCase();
+          if (method !== 'post' && method !== 'put' && method !== 'delete') continue;
+          if (f.querySelector('input[type="password"]')) continue;
+          const hasToken = Array.from(f.querySelectorAll('input[type="hidden"]')).some((i) =>
+            token.test(i.getAttribute('name') || '')
+          );
+          if (hasToken) continue;
+          const action = (f.getAttribute('action') || '').trim();
+          let path = '(this page)';
+          if (action) {
+            try {
+              path = new URL(action, 'http://placeholder').pathname;
+            } catch {
+              path = '(this page)';
+            }
+          }
+          out.push(path);
+        }
+        return out;
+      }, CSRF_TOKEN_NAME.source)
+      .catch(() => []);
+    if (!Array.isArray(raw) || raw.length === 0) return [];
+    const cookies = await page
+      .context()
+      .cookies(page.url())
+      .catch(() => []);
+    if (cookies.some((c) => /^(?:lax|strict)$/i.test(c.sameSite ?? ''))) return [];
+    return raw.slice(0, 3).map((action, i) =>
+      this.finding(`F-SEC-${context.testCaseId || 'GEN'}-CSRF-${i + 1}`, context, context.urlPath, {
+        title: 'No CSRF token found on this form',
+        severity: 'Minor',
+        expected: 'A form that changes data carries a CSRF token, or the session cookie uses SameSite=Lax or Strict',
+        actual: `A form sending to ${String(action)} has no hidden token field and the page has no csrf meta tag; no cookie with SameSite=Lax or Strict was seen. This is a read-only guess: tokens sent in a header are not visible here`,
+        steps: [`Open ${context.urlPath}`, 'Inspect the form for a hidden token field'],
+        resolution:
+          'Add a per-session CSRF token to the form (or set SameSite=Lax or Strict on the session cookie). If your app sends the token in a request header, this finding can be dismissed.',
+      })
+    );
   }
 
   /** Check response headers for fundamental security standards. */
@@ -403,6 +462,22 @@ export class SecurityChecker {
           ],
           resolution:
             'Specify an explicit, trusted origin in Access-Control-Allow-Origin instead of wildcard "*", or disable Access-Control-Allow-Credentials.',
+        })
+      );
+    }
+
+    // 1b. Wildcard without credentials: any site may read this response. Only the header the App
+    // already sent is read; no foreign Origin is ever sent to provoke a different answer.
+    if (allowOrigin === '*' && allowCredentials !== 'true') {
+      findings.push(
+        this.finding(`F-SEC-${context.testCaseId || 'GEN'}-CORS-ANY`, context, context.urlPath, {
+          title: 'CORS allows any origin to read this response',
+          severity: 'Minor',
+          expected: 'Access-Control-Allow-Origin names the exact sites that need it, unless the response is public',
+          actual: 'Access-Control-Allow-Origin is "*" in a normal response (no credentials allowed)',
+          steps: [`Request ${context.urlPath}`, 'Inspect the Access-Control-Allow-Origin header'],
+          resolution:
+            'Fine for public data. If this response is not public, name the exact origins that need it instead of "*".',
         })
       );
     }

@@ -1,11 +1,16 @@
 import type { RetryTelemetryEntry } from '@qa/types';
+import { categoriseFlakyCause } from './flaky-cause.js';
+import { redactUrl } from './redact.js';
 
 export interface RetryRunnerOptions {
+  /** Reruns after the first failure (default 1). Stops at the first pass. */
   maxRetries?: number;
   flowId: string;
   testCaseId: string;
   /** Return false for an error that must not be retried, such as the user stopping the run. */
   shouldRetry?: (error: Error) => boolean;
+  /** Whether a write was sent during the test; used only to name the likely cause. */
+  sentAny?: () => boolean;
 }
 
 export interface RetryExecutionResult<T> {
@@ -19,7 +24,9 @@ export interface RetryExecutionResult<T> {
 export class RetryRunner {
   /**
    * Executes a flow with Clean Whole-Flow Retry semantics.
-   * If an attempt fails, it discards and re-runs the action factory.
+   * If an attempt fails, it discards and re-runs the action factory in a pristine context, up to
+   * `maxRetries` times, and stops at the first pass. The pass rate is passes / attempts made.
+   * A flaky test stays passed (Flaky Passed); nothing here hides a test or lengthens a timeout.
    */
   static async runWithCleanRetry<T>(
     actionFactory: (attempt: number) => Promise<T>,
@@ -28,6 +35,24 @@ export class RetryRunner {
     const maxRetries = options.maxRetries ?? 1;
     let attempts = 0;
     let firstError: Error | undefined;
+    const errors: string[] = [];
+
+    const telemetryFor = (
+      status: RetryTelemetryEntry['status'],
+      passes: number,
+      message: string | undefined
+    ): RetryTelemetryEntry => ({
+      flowId: options.flowId,
+      testCaseId: options.testCaseId,
+      failedStepIndex: 0,
+      retryCount: attempts - 1,
+      status,
+      errorMessage: message === undefined ? undefined : redactUrl(message),
+      passes,
+      attempts,
+      passRate: attempts > 0 ? passes / attempts : 0,
+      likelyCause: categoriseFlakyCause({ errors, sentAny: options.sentAny?.() }),
+    });
 
     while (attempts <= maxRetries) {
       attempts++;
@@ -39,44 +64,26 @@ export class RetryRunner {
             outcome: 'PASSED',
             attempts,
           };
-        } else {
-          const telemetry: RetryTelemetryEntry = {
-            flowId: options.flowId,
-            testCaseId: options.testCaseId,
-            failedStepIndex: 0,
-            retryCount: attempts - 1,
-            status: 'FLAKY_PASSED',
-            errorMessage: firstError?.message,
-          };
-
-          return {
-            result,
-            outcome: 'FLAKY_PASSED',
-            attempts,
-            telemetry,
-          };
         }
+        return {
+          result,
+          outcome: 'FLAKY_PASSED',
+          attempts,
+          telemetry: telemetryFor('FLAKY_PASSED', 1, firstError?.message),
+        };
       } catch (err: unknown) {
         const error = err instanceof Error ? err : new Error(String(err));
         if (!firstError) {
           firstError = error;
         }
+        errors.push(error.message);
 
         if (attempts > maxRetries || options.shouldRetry?.(error) === false) {
-          const telemetry: RetryTelemetryEntry = {
-            flowId: options.flowId,
-            testCaseId: options.testCaseId,
-            failedStepIndex: 0,
-            retryCount: attempts - 1,
-            status: 'FAILED',
-            errorMessage: error.message,
-          };
-
           return {
             outcome: 'FAILED',
             attempts,
             error,
-            telemetry,
+            telemetry: telemetryFor('FAILED', 0, error.message),
           };
         }
       }

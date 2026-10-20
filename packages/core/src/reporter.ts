@@ -185,8 +185,33 @@ export class ReportGenerator {
     lines.push(``);
     if (coverage.flakyFlows) {
       lines.push(
-        `> ⚠️ ${coverage.flakyFlows} ${coverage.flakyFlows === 1 ? 'test' : 'tests'} failed at first and passed on a clean second attempt. ${coverage.flakyFlows === 1 ? 'It is' : 'They are'} counted as passed, but may be unreliable.`
+        `> ⚠️ ${coverage.flakyFlows} ${coverage.flakyFlows === 1 ? 'test' : 'tests'} failed at first and passed on a clean attempt. ${coverage.flakyFlows === 1 ? 'It is' : 'They are'} counted as passed, but may be unreliable.`
       );
+      for (const r of report.results) {
+        const t = r.retry;
+        if (t?.status !== 'FLAKY_PASSED' || t.attempts === undefined) continue;
+        const cause = t.likelyCause && t.likelyCause !== 'unknown' ? `; likely cause: ${t.likelyCause}` : '';
+        const rate = t.passRate !== undefined ? `; pass rate ${Math.round(t.passRate * 100)}%` : '';
+        const evidence = t.errorMessage ? `; first failure: ${t.errorMessage.split('\n')[0].trim().slice(0, 200)}` : '';
+        lines.push(`> - ${r.testCaseId}: ${t.passes ?? 1} of ${t.attempts} passed${cause}${rate}${evidence}`);
+      }
+      lines.push(``);
+    }
+
+    // WCAG criteria the automated checks looked at. Per criterion, never one score: automation
+    // cannot show a page meets WCAG, so a criterion with nothing found is not called a pass.
+    if (report.wcagCoverage && report.wcagCoverage.length > 0) {
+      const label = { violated: 'Violated', 'needs-human-judgment': 'Needs human judgment', 'none-found': 'No violation found by automation' } as const;
+      lines.push(`## WCAG criteria checked`);
+      lines.push(``);
+      lines.push(`| Criterion | Status | Pages |`);
+      lines.push(`| :--- | :--- | :---: |`);
+      for (const e of report.wcagCoverage) lines.push(`| ${e.criterion} | ${label[e.status]} | ${e.pages ?? 1} |`);
+      lines.push(``);
+      lines.push(`Automated checks cannot show that a page meets WCAG. Criteria marked "Needs human judgment" need a person to look.`);
+      if (report.wcagUnmappedTags && report.wcagUnmappedTags.length > 0) {
+        lines.push(`Tags that matched no known criterion (their findings are still listed): ${report.wcagUnmappedTags.join(', ')}.`);
+      }
       lines.push(``);
     }
 

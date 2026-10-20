@@ -16,9 +16,17 @@ import type {
   RoleNotTested,
   StorageStateData,
   DocSource,
+  WcagCoverageEntry,
 } from '@qa/types';
 import { normalizeRoute, signInReasonText } from '@qa/types';
-import { BrowserManager, BREAKPOINT_VIEWPORTS, locateElement, type BrowserEngine } from './browser.js';
+import {
+  BrowserManager,
+  BREAKPOINT_VIEWPORTS,
+  locateElement,
+  getBrowserPolicy,
+  type BrowserEngine,
+} from './browser.js';
+import { runAccessChecks, contextFetcher, type AccessFetcher } from './access-control.js';
 import { EvidenceCollector } from './evidence.js';
 import { captureVisualShot, readBaselineMode, writeVisualBaseline } from './visual-capture.js';
 import { PreFlightChecker, SignInFailedError, type PreFlightResult } from './preflight.js';
@@ -283,6 +291,8 @@ export interface RunOptions {
   enableSecurity?: boolean;
   /** Record a video per test point; kept only when the point fails. Default true. */
   recordVideo?: boolean;
+  /** Reruns of a failing test, each in a clean context, stopping at the first pass. Default 3. Link tests never rerun. */
+  flakyReruns?: number;
   /** Overwrite visual baselines with this run's screenshots instead of comparing against them. */
   updateBaselines?: boolean;
   onEvent?: (event: OrchestratorEvent) => void;
@@ -543,6 +553,21 @@ export class FlowTestOrchestrator {
     const breakpoints: Breakpoint[] = options.breakpoints || ['1440px'];
     const results: TestPointResult[] = [];
     const allFindings: Finding[] = [];
+    // WCAG coverage per criterion, merged across pages by worst status (never one percentage).
+    const wcagRank = { 'none-found': 0, 'needs-human-judgment': 1, violated: 2 } as const;
+    const wcagByCriterion = new Map<string, WcagCoverageEntry>();
+    const wcagUnmapped = new Set<string>();
+    const onCoverage = (entries: WcagCoverageEntry[], unmapped: string[]) => {
+      for (const e of entries) {
+        const cur = wcagByCriterion.get(e.criterion);
+        if (!cur) wcagByCriterion.set(e.criterion, { ...e });
+        else {
+          cur.pages = (cur.pages ?? 0) + (e.pages ?? 1);
+          if (wcagRank[e.status] > wcagRank[cur.status]) cur.status = e.status;
+        }
+      }
+      for (const t of unmapped) wcagUnmapped.add(t);
+    };
 
     // Running step counter across all test cases x breakpoints (not reset per test case),
     // so UI consumers of STEP_STARTED/STEP_COMPLETED see one continuously advancing sequence
@@ -981,7 +1006,8 @@ export class FlowTestOrchestrator {
             flowId: testCase.flowId,
             testCaseId: testCase.id,
             // A link check is one request, never repeated at a site we don't own.
-            maxRetries: testCase.kind === 'link' ? 0 : 1,
+            maxRetries: testCase.kind === 'link' ? 0 : Math.max(0, Math.floor(options.flakyReruns ?? 3)),
+            sentAny: () => sendGuard?.hasSentAny() === true,
             // Once a form was sent, a second try would send it twice: decline the retry.
             shouldRetry: (err) => !isAbortError(err) && !sendGuard?.hasSentAny(),
           });
@@ -1060,6 +1086,7 @@ export class FlowTestOrchestrator {
                 urlPath: new URL(page.url(), options.targetUrl).pathname,
                 enableAxe: options.enableA11y ?? true,
                 entryPath: new URL(options.targetUrl).pathname,
+                onCoverage,
               });
 
           // 3b. Security (passive): passwords in page addresses. Page-level checks (security, speed,
@@ -1213,6 +1240,7 @@ export class FlowTestOrchestrator {
               role: testCase.role,
               breakpoint: bp,
               urlPath,
+              onCoverage,
             };
             if (!keyboardChecked.has(urlPath)) {
               keyboardChecked.add(urlPath);
@@ -1411,6 +1439,47 @@ export class FlowTestOrchestrator {
       }
     }
 
+    // Access checks (ADR 0030): plain GETs only. A failure here never fails the run.
+    const accessPages = options.siteMap?.pages ?? [];
+    const accessRoles = Object.keys(roleStorageStates).filter((r) => !notTestedRoles.has(r));
+    if (accessPages.length > 0 && accessRoles.length > 0 && !options.finishSignal?.aborted) {
+      const accessContexts: BrowserContext[] = [];
+      try {
+        const base = {
+          engine: options.browserEngine ?? ('chromium' as BrowserEngine),
+          headless: options.headless ?? true,
+          baseUrl: options.targetUrl,
+          customHeaders: options.customHeaders,
+          userAgent: options.userAgent,
+          tunnelAuth: options.tunnelAuth,
+          headerHosts: options.headerHosts,
+        };
+        const signedOutContext = await this.browserManager.createContext(base);
+        accessContexts.push(signedOutContext);
+        const roleFetchers: Record<string, AccessFetcher> = {};
+        for (const role of accessRoles) {
+          const ctx = await this.browserManager.createContext({ ...base, storageState: roleStorageStates[role] });
+          accessContexts.push(ctx);
+          roleFetchers[role] = contextFetcher(ctx);
+        }
+        const guard = getBrowserPolicy()?.guard;
+        const access = await runAccessChecks({
+          targetUrl: options.targetUrl,
+          pages: accessPages,
+          signedOut: contextFetcher(signedOutContext),
+          roles: roleFetchers,
+          markers: Object.fromEntries((options.profile?.roles ?? []).map((r) => [r.role, r.username])),
+          allow: guard ? (url) => guard(url, false) : undefined,
+        });
+        allFindings.push(...access.findings);
+        for (const n of access.notes) if (!notes.includes(n)) notes.push(n);
+      } catch (err) {
+        console.warn('[QA Orchestrator] Access checks did not run:', err instanceof Error ? err.message : err);
+      } finally {
+        for (const c of accessContexts) await c.close().catch(() => {});
+      }
+    }
+
     await this.browserManager.close();
     if (options.finishSignal?.aborted) {
       notes.unshift(
@@ -1549,6 +1618,14 @@ export class FlowTestOrchestrator {
       delta,
       notes: notes.length > 0 ? notes : undefined,
       ...(rolesNotTested.length > 0 ? { rolesNotTested } : {}),
+      ...(wcagByCriterion.size > 0
+        ? {
+            wcagCoverage: [...wcagByCriterion.values()].sort((a, b) =>
+              a.criterion.localeCompare(b.criterion, undefined, { numeric: true })
+            ),
+          }
+        : {}),
+      ...(wcagUnmapped.size > 0 ? { wcagUnmappedTags: [...wcagUnmapped].sort() } : {}),
       ...(documentedItems ? { documentedItems } : {}),
       partial: options.finishSignal?.aborted
         ? { done: results.filter((r) => r.status !== 'Skipped' || !r.skipReason).length, planned: plannedTestPoints }

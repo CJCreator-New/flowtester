@@ -5,7 +5,7 @@ import type { Breakpoint, Finding } from '@qa/types';
  * finding (`needsConfirmation`), so it never counts as a defect or in the grades.
  */
 export function couldNotVerifyFinding(
-  checker: 'performance' | 'seo',
+  checker: 'performance' | 'seo' | 'ux-quality',
   what: string,
   context: { testCaseId?: string; flowId?: string; role: string; breakpoint: Breakpoint; urlPath: string },
   categoryTag?: Finding['categoryTag']

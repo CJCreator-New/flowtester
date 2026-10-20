@@ -63,6 +63,12 @@ export interface RunStartBody {
    * username and password; a failed sign-in ends the run before the crawl.
    */
   signInConsent?: boolean;
+  /** 'smoke': Smoke Check-up. Reads a few known paths of a deployed App (GET only), health first. */
+  preset?: 'smoke';
+  /** Smoke Check-up: health path to read first. Default tries /healthz, /health, /api/health, /status. */
+  healthPath?: string;
+  /** Smoke Check-up: version the deployed App should report; compared only when given. */
+  expectedVersion?: string;
   /** The owner says this host is a test copy (staging). Remembered for the site. */
   stagingHost?: boolean;
   /** Attached design system tokens or styling guidelines. */
