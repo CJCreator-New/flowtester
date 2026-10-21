@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           # Without this, checkout leaves the built-in github-actions[bot] login in git's config, and it
@@ -120,7 +120,7 @@ jobs:
       # Cloud Run's address for this project is fixed, so it can be allowed before the first deploy.
       SERVICE_URL: https://qa-check-up-809804736896.us-central1.run.app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Sign in to Google Cloud
         uses: google-github-actions/auth@v2
