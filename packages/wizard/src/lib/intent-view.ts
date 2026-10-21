@@ -1,4 +1,4 @@
-import type { DiscoveredFlow, PlanIntent, PlanPageTest, ReviewPlan, TestCaseStep } from '@qa/types';
+import type { PlanIntent, ReviewPlan, TestCaseStep } from '@qa/types';
 import { INTENTS, intentOf } from '@qa/types/src/browser.js';
 import { stepToSentence } from './plan-translate.js';
 
@@ -87,9 +87,4 @@ export function openingLine(test: { openingSteps?: TestCaseStep[] }): string | n
 /** A reason from the Plan's "Won't run" list in the words the page uses (Test Copy is a defined term). */
 export function wontRunReason(reason: string): string {
   return reason.replace(/^Needs a test copy/, 'Needs a Test Copy');
-}
-
-/** Whether a journey or form item is switched off by a switched-off Intent. */
-export function offByIntent(item: PlanPageTest | DiscoveredFlow, off: PlanIntent[]): boolean {
-  return off.includes(intentKey(item));
 }

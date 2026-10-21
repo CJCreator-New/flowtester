@@ -78,6 +78,8 @@ async function runSteps(startPage: string, steps: TestStep[], stepTimeoutMs?: nu
     enableSeo: false,
     recordVideo: false,
     stepTimeoutMs,
+    // This file measures one retry; the default is 3 reruns (QSP-003).
+    flakyReruns: 1,
     onEvent: (e) => events.push(e),
   });
   const completed = events.filter(

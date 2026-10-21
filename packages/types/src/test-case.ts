@@ -23,6 +23,8 @@ export interface TestCaseStep {
   /** 'check-link' fetches `value` (a link's address) once and fails only if the link is broken; nothing is clicked. */
   action: 'click' | 'fill' | 'select' | 'check' | 'navigate' | 'wait' | 'check-link';
   selector?: string; // e.g. "[data-testid=new-invoice-btn]"
+  /** Why a CSS selector was used when no role, text or test id was stable. Set on newly generated plans only. */
+  selectorReason?: string;
   value?: string;
   name: string;
   /**

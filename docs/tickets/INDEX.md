@@ -1,6 +1,6 @@
 # Tickets
 
-Source: `docs/GAP_ANALYSIS.md`. Status: todo, planned, approved, built, done, blocked. A gap closes only after its wave's /verify-all passes. Human items: [HUMAN_TODO.md](HUMAN_TODO.md). This table is the committed record; `.claude/work/backlog.md` is git-ignored scratch and loses on conflict. New TODOs in code use `TODO(T-nn)` (see CONTRIBUTING.md).
+Statuses: todo, planned, approved, built, done, blocked.
 
 | id | title | gaps | priority | size | wave | status | depends on |
 |---|---|---|---|---|---|---|---|
@@ -50,3 +50,24 @@ Build batches 1–19, in the order the plan sets (see *Build order and file owne
 | [T-61](REVIEW-REMEDIATION-PLAN.md#t-61-wizard-errors-focus-and-accessibility) | Wizard: errors, focus and accessibility | UX-1, 2, 3, 10, 11, 12 | P1 | M | 16 | todo | T-59, T-36 |
 | [T-62](REVIEW-REMEDIATION-PLAN.md#t-62-wizard-copy-and-small-ux) | Wizard: copy and small UX | UX-4..9, 13, 15..20 | P2 | M | 17 | todo | T-61, T-37b |
 | [T-63](REVIEW-REMEDIATION-PLAN.md#t-63-docs-and-contracts-residual) | Docs and contracts residual | DOC | P2 | M | 18 | todo | T-60, T-62, T-38 |
+
+## qaskills-patterns (plan: `.claude/work/qaskills-patterns/02-plan.md`)
+
+| id | title | status |
+|---|---|---|
+| [QSP-001](QSP-001-adr-0030-passive-vs-active.md) | ADR 0030 passive vs active security boundary | built |
+| [QSP-002](QSP-002-flaky-retry-types.md) | F1 retry telemetry fields | built |
+| [QSP-004](QSP-004-wcag-coverage-types.md) | F2 wcagCoverage types | built |
+| [QSP-007](QSP-007-smoke-preset-types.md) | F3 smoke preset types | built |
+| [QSP-013](QSP-013-selector-reason-type.md) | F5 selectorReason type | built |
+| QSP-003 | F1 rerun, pass rate, likely cause | built |
+| QSP-005 | F2 WCAG coverage checkers | built |
+| QSP-006 | F2 WCAG coverage in orchestrator and report | built |
+| QSP-008 | F3 smoke preset core and CLI (HTTP route wired in 03f) | built |
+| QSP-009 | F3 wizard smoke option | deferred |
+| QSP-010 | F4 passive security checkers (CORS, CSRF) | built |
+| QSP-011 | F4 fixture lab routes | built |
+| QSP-012 | F4 signed-out access and two-role isolation | built |
+| QSP-014 | F5 selector order | built |
+| QSP-015 | F5 web-first Playwright export | built |
+| QSP-016 | F6 API spec checks | built |

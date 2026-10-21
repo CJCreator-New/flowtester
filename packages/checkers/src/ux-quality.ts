@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import axePlaywright from '@axe-core/playwright';
-import type { Finding, Breakpoint } from '@qa/types';
+import type { Finding, Breakpoint, WcagCoverageEntry, WcagCriterionStatus } from '@qa/types';
+import { couldNotVerifyFinding } from './could-not-verify.js';
 
 // Support both ESM default and CJS named export
 const AxeBuilder =
@@ -54,6 +55,62 @@ export function wcagCriteria(tags: string[] = []): string[] {
   return out;
 }
 
+/** Axe tags that name a level or version, not a criterion. */
+const WCAG_LEVEL_TAGS = new Set(['wcag2a', 'wcag2aa', 'wcag2aaa', 'wcag21a', 'wcag21aa', 'wcag22aa']);
+const STATUS_RANK: Record<WcagCriterionStatus, number> = { 'none-found': 0, 'needs-human-judgment': 1, violated: 2 };
+
+interface AxeSummaryInput {
+  violations?: Pick<AxeRule, 'id' | 'tags'>[];
+  passes?: Pick<AxeRule, 'id' | 'tags'>[];
+  incomplete?: Pick<AxeRule, 'id' | 'tags'>[];
+}
+
+/** "1.4.3" from an axe tag such as `wcag143`; undefined for level tags and other tags. */
+function criterionNumber(tag: string): string | undefined {
+  const m = /^wcag(\d)(\d)(\d+)$/.exec(tag);
+  return m ? `${m[1]}.${m[2]}.${m[3]}` : undefined;
+}
+
+/**
+ * Per-criterion WCAG status from one axe run (pure). Never "passes" or "compliant": a criterion
+ * seen only in passing rules is "none-found" (no violation found by automation). A violation whose
+ * tags name no criterion is listed in `unmappedTags`; its finding is still emitted by the caller.
+ * `imagesPresent` makes 1.1.1 "needs-human-judgment" unless it is already violated, because
+ * automation cannot judge whether an image description is meaningful.
+ */
+export function summariseWcag(
+  axeResults: AxeSummaryInput,
+  opts: { imagesPresent?: boolean } = {}
+): { entries: WcagCoverageEntry[]; unmappedTags: string[] } {
+  const status = new Map<string, WcagCriterionStatus>();
+  const raise = (num: string, next: WcagCriterionStatus) => {
+    const cur = status.get(num);
+    if (!cur || STATUS_RANK[next] > STATUS_RANK[cur]) status.set(num, next);
+  };
+  const nums = (tags: string[] = []) => tags.map(criterionNumber).filter((n): n is string => !!n);
+  for (const r of axeResults.passes ?? []) for (const n of nums(r.tags)) raise(n, 'none-found');
+  for (const r of axeResults.incomplete ?? []) for (const n of nums(r.tags)) raise(n, 'needs-human-judgment');
+  const unmapped = new Set<string>();
+  for (const r of axeResults.violations ?? []) {
+    const found = nums(r.tags);
+    for (const n of found) raise(n, 'violated');
+    if (!found.length) {
+      const extra = (r.tags ?? []).filter((t) => !WCAG_LEVEL_TAGS.has(t));
+      if (extra.length) extra.forEach((t) => unmapped.add(t));
+      else unmapped.add(`rule:${r.id}`);
+    }
+  }
+  if (opts.imagesPresent && status.get('1.1.1') !== 'violated') raise('1.1.1', 'needs-human-judgment');
+  const label = (num: string) => wcagCriteria([`wcag${num.replace(/\./g, '')}`])[0] ?? `WCAG ${num}`;
+  const entries = [...status.entries()]
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+    .map(([num, st]) => ({ criterion: label(num), status: st, pages: 1 }));
+  return { entries, unmappedTags: [...unmapped].sort() };
+}
+
+/** Alt texts that are present but say nothing: file names, "image", "photo", "untitled". */
+export const MEANINGLESS_ALT = /^(?:(?:img|image|photo|picture|pic|graphic|untitled|dsc|screenshot|icon|banner|spacer)[\s_-]*\d*|.*\.(?:png|jpe?g|gif|svg|webp|avif|bmp))$/i;
+
 export class UXQualityChecker {
   async check(
     page: Page,
@@ -65,6 +122,8 @@ export class UXQualityChecker {
       enableAxe?: boolean;
       /** The page the review started on. It needs no way back, like a one-screen app. */
       entryPath?: string;
+      /** Gets the per-criterion WCAG status of this page (see `summariseWcag`). */
+      onCoverage?: (entries: WcagCoverageEntry[], unmappedTags: string[]) => void;
     }
   ): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -116,6 +175,46 @@ export class UXQualityChecker {
             },
             resolution: `${violation.helpUrl ? `See ${violation.helpUrl}. ` : ''}Remediation: ${violation.help}.`,
           });
+        }
+
+        // Images and meaningless alt text: automation cannot judge alt quality (WCAG 1.1.1).
+        let imagesPresent = false;
+        try {
+          const alt = await page.evaluate((patternStr) => {
+            const pattern = new RegExp(patternStr, 'i');
+            const imgs = Array.from(document.querySelectorAll('img'));
+            const bad = imgs
+              .map((i) => (i.getAttribute('alt') ?? '').trim())
+              .filter((a) => a !== '' && pattern.test(a));
+            return { count: imgs.length, bad };
+          }, MEANINGLESS_ALT.source);
+          imagesPresent = alt.count > 0;
+          if (alt.bad.length) {
+            const base = couldNotVerifyFinding(
+              'ux-quality',
+              'whether image descriptions (alt text) are meaningful',
+              { testCaseId: context.testCaseId, role: context.role, breakpoint: context.breakpoint, urlPath: context.urlPath }
+            );
+            findings.push({
+              ...base,
+              expectedVsActual: {
+                expected: 'A person confirms each image description says what the image shows',
+                actual: `${alt.bad.length} image${alt.bad.length === 1 ? ' has' : 's have'} a description that may say nothing (for example: ${alt.bad
+                  .slice(0, 3)
+                  .map((a) => `"${a.slice(0, 40)}"`)
+                  .join(', ')}). Automation cannot judge this`,
+              },
+              resolution: 'Check these images by hand and describe what they show, or use an empty alt for decorative images.',
+            });
+          }
+        } catch {
+          // Alt text review is best effort.
+        }
+        try {
+          const summary = summariseWcag(axeResults as AxeSummaryInput, { imagesPresent });
+          context.onCoverage?.(summary.entries, summary.unmappedTags);
+        } catch {
+          // Coverage is best effort.
         }
 
         // "Incomplete" means axe could not decide. It is not a pass and not a failure, so it is

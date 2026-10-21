@@ -28,6 +28,8 @@ export * from './competitive/safe-crawler.js';
 export * from './competitive/robots.js';
 export * from './figma-sync.js';
 export * from './safe-scan.js';
+export * from './post-deploy-smoke.js';
+export * from './api-spec-checks.js';
 export * from './ai/openrouter.js';
 export * from './competitive/benchmarking-engine.js';
 export * from './competitive/ux-gap-synthesizer.js';

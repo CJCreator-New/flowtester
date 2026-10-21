@@ -38,7 +38,7 @@ import {
   summarizeDocument,
   parseHeaderText,
 } from '@qa/types';
-import { githubAnnotations, docxToMarkdown } from '@qa/core';
+import { githubAnnotations, docxToMarkdown, runPostDeploySmoke, smokeReport, ReportGenerator } from '@qa/core';
 import type { AIProviderType, Finding, ReleaseReport, SiteAspectGrades, RunStartBody } from '@qa/types';
 import { createCheckupSession, createCheckupRun, resolveAuthorization } from './session/checkup-session.js';
 
@@ -68,6 +68,14 @@ export interface CheckupArgs {
   customHeaders?: Record<string, string>;
   /** Debug areas to trace to stderr (--debug or QA_DEBUG). */
   debug?: string;
+  /** `--preset smoke`: Smoke Check-up, GET-only reads of a few known paths. */
+  preset?: 'smoke';
+  /** Smoke: `--health-path /health`. */
+  healthPath?: string;
+  /** Smoke: `--expected-version 1.4.2`. */
+  expectedVersion?: string;
+  /** Smoke: `--confirm-live`, needed for an address that is not a test copy. */
+  confirmLive?: boolean;
 }
 
 export interface SignIn {
@@ -225,14 +233,38 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   }
 
   const flagValues = new Set<string>([
-    ...(['--fail-on', '--provider', '--max-pages', '--output', '--test-cap', '--concurrency', '--delay', '--header']
+    ...([
+      '--fail-on',
+      '--provider',
+      '--max-pages',
+      '--output',
+      '--test-cap',
+      '--concurrency',
+      '--delay',
+      '--header',
+      '--preset',
+      '--health-path',
+      '--expected-version',
+    ]
       .map((f) => flag(f))
       .filter(Boolean) as string[]),
     ...(debugValue && debugValue !== 'all' ? [debugValue] : []),
     ...flagDocs,
   ]);
   const signIns = parseRoles(env);
+  const rawPreset = flag('--preset');
+  if (rawPreset !== undefined && rawPreset !== 'smoke') {
+    throw new Error(`--preset must be smoke, not "${rawPreset}"`);
+  }
   return {
+    ...(rawPreset === 'smoke'
+      ? {
+          preset: 'smoke' as const,
+          healthPath: flag('--health-path'),
+          expectedVersion: flag('--expected-version'),
+          confirmLive: argv.includes('--confirm-live') || undefined,
+        }
+      : {}),
     url: argv.find((a) => !a.startsWith('--') && !flagValues.has(a)) ?? env.QA_TARGET_URL,
     staging: argv.includes('--staging') || env.QA_STAGING === 'true',
     failOn: failOn as FailOn,
@@ -400,8 +432,33 @@ export function summaryMarkdown(report: ReleaseReport, args: Pick<CheckupArgs, '
   return lines.join('\n');
 }
 
+/** The Smoke Check-up: reads a few known paths (GET only), writes the report, prints the verdict. */
+async function runSmokeCheckup(args: CheckupArgs): Promise<number> {
+  const result = await runPostDeploySmoke({
+    targetUrl: args.url ?? '',
+    healthPath: args.healthPath,
+    expectedVersion: args.expectedVersion,
+    confirmLive: args.confirmLive || args.staging,
+    beta: process.env.RUNNER_BETA === '1' || process.env.RUNNER_BETA === 'true',
+  });
+  if (result.refused) {
+    console.error(`[checkup] ${result.refused}`);
+    return 2;
+  }
+  const report = smokeReport(result, args.url ?? '');
+  await fs.mkdir(args.outputDir, { recursive: true });
+  await new ReportGenerator(args.outputDir).generate(report);
+  const verdict = releaseVerdict(report.findings, undefined, report.grades, report.coverage);
+  console.log(`\n[checkup] ${verdict.stamp}: ${verdict.reason}`);
+  for (const line of result.notChecked) console.log(`[checkup] Did not check: ${line}`);
+  console.log(`[checkup] Report written to ${args.outputDir}`);
+  return exitCodeFor(report.findings, args.failOn, report.grades);
+}
+
 export async function runCheckup(args: CheckupArgs): Promise<number> {
   if (!args.url) throw new Error('Give the address to check, for example: checkup.js https://preview.example.com');
+
+  if (args.preset === 'smoke') return runSmokeCheckup(args);
 
   const documents = await loadCheckupDocuments(args.docs ?? []);
   if (documents.length > 0) {

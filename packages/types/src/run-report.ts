@@ -80,7 +80,24 @@ export interface RunDelta {
   suppressedFindings: number;
 }
 
+/** Per WCAG criterion: never "passes" or "compliant" (CONTEXT.md: WCAG criterion status). */
+export type WcagCriterionStatus = 'violated' | 'none-found' | 'needs-human-judgment';
+
+export interface WcagCoverageEntry {
+  /** e.g. "1.4.3" */
+  criterion: string;
+  status: WcagCriterionStatus;
+  /** Pages where the criterion was seen. */
+  pages?: number;
+}
+
 export interface ReleaseReport {
+  /** WCAG criteria the automated checks looked at, by status. Absent in older reports. */
+  wcagCoverage?: WcagCoverageEntry[];
+  /** WCAG tags on violations that matched no known criterion; the findings are still reported. */
+  wcagUnmappedTags?: string[];
+  /** "What this did not check" lines a quick post-deploy check adds (health endpoint missing, version not checked...). */
+  notChecked?: string[];
   /** Contract version of the written findings.json (ADR 0017). Absent in files from before the contract. */
   schemaVersion?: number;
   /** Roles that could not sign in, and why. They were not tested. */

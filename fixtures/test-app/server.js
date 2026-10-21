@@ -166,6 +166,7 @@ const server = http.createServer((req, res) => {
     lab.cancelledDeletes = 0;
     lab.signIns = 0;
     lab.headerHits = {};
+    lab.mirrorFirst = undefined;
     labExpiringState.maxRequests = 3;
     labExpiringState.currentRequests = 0;
     labExpiringState.invalidated = false;
@@ -651,6 +652,65 @@ const server = http.createServer((req, res) => {
     };
     const emailOk = (v) => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(v || '');
 
+    // QSP-011: access-control and passive-security lab routes. GET only, linked from nowhere.
+    const labEmail = { admin: 'admin@example.com', manager: 'manager@example.com', viewer: 'viewer@example.com' };
+    if (labPath === '/lab/open-account') {
+      // Protected content with no sign-in at all (a leak).
+      return labPage('Account balance', '<p>Account balance: 4,200 EUR. Invoices: 12.</p>');
+    }
+    if (labPath === '/lab/closed-account') {
+      if (!session) {
+        res.writeHead(302, { Location: '/signin' });
+        res.end();
+        return;
+      }
+      return labPage('Account balance', '<p>Account balance: 4,200 EUR. Invoices: 12.</p>');
+    }
+    if (labPath === '/lab/401') {
+      res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<!DOCTYPE html><html lang="en"><head><title>Unauthorized</title></head><body><h1>Unauthorized 401</h1></body></html>');
+      return;
+    }
+    if (labPath === '/lab/mirror') {
+      // Shows whoever is asking, per session. Correct behaviour.
+      if (!session) {
+        res.writeHead(302, { Location: '/signin' });
+        res.end();
+        return;
+      }
+      return labPage('Profile', `<p>Signed in as ${labEmail[session]}</p>`);
+    }
+    if (labPath === '/lab/mirror-leak') {
+      // Bug on purpose: remembers the first user it saw and shows that name to everyone after.
+      if (!session) {
+        res.writeHead(302, { Location: '/signin' });
+        res.end();
+        return;
+      }
+      const lab2 = getLab();
+      lab2.mirrorFirst = lab2.mirrorFirst || labEmail[session];
+      return labPage('Profile', `<p>Signed in as ${lab2.mirrorFirst}</p>`);
+    }
+    if (labPath === '/lab/csrf-form') {
+      return labPage(
+        'Update profile',
+        '<form method="post" action="/lab/csrf-form"><label for="nick">Nickname</label><input id="nick" name="nickname"><button type="submit">Save</button></form>'
+      );
+    }
+    if (labPath === '/lab/csrf-ok') {
+      return labPage(
+        'Update profile',
+        '<form method="post" action="/lab/csrf-ok"><input type="hidden" name="csrf_token" value="fixture-token"><label for="nick">Nickname</label><input id="nick" name="nickname"><button type="submit">Save</button></form>'
+      );
+    }
+    if (labPath === '/lab/cookie-good') {
+      res.setHeader('Set-Cookie', 'lab_pref=dark; Path=/; HttpOnly; SameSite=Lax');
+      return labPage('Cookie with flags', '<p>Sets a cookie with HttpOnly and SameSite=Lax.</p>');
+    }
+    if (labPath === '/lab/cookie-bad') {
+      res.setHeader('Set-Cookie', 'lab_session_id=abc; Path=/');
+      return labPage('Cookie without flags', '<p>Sets a session-like cookie with no flags.</p>');
+    }
     if (labPath === '/lab/done') return labPage('Done', '<p>Saved. Thank you.</p>');
 
     if (labPath === '/lab/signup') {

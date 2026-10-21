@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import type { Breakpoint, Finding, FindingSeverity } from '@qa/types';
+import type { Breakpoint, Finding, FindingSeverity, WcagCoverageEntry } from '@qa/types';
 import { wcagCriteria } from './ux-quality.js';
 
 /**
@@ -16,6 +16,21 @@ export interface KeyboardA11yContext {
   role: string;
   breakpoint: Breakpoint;
   urlPath: string;
+  /** Gets the WCAG status this check saw on the page (2.1.1, 2.1.2, 2.4.11, 1.4.10). */
+  onCoverage?: (entries: WcagCoverageEntry[], unmappedTags: string[]) => void;
+}
+
+function reportCriteria(
+  context: KeyboardA11yContext,
+  list: Array<{ tag: string; violated: boolean }>
+): void {
+  if (!context.onCoverage) return;
+  const entries: WcagCoverageEntry[] = list.map(({ tag, violated }) => ({
+    criterion: wcagCriteria([tag])[0] ?? tag,
+    status: violated ? 'violated' : 'none-found',
+    pages: 1,
+  }));
+  context.onCoverage(entries, []);
 }
 
 export interface TabStop {
@@ -170,6 +185,12 @@ export class KeyboardA11yChecker {
       const walk = await this.walkTabOrder(page);
       findings.push(...(await this.checkFocusObscured(page, context, walk.stops)));
       findings.push(...(await this.checkFocusTrap(page, context, walk)));
+      const has = (kind: string) => findings.some((f) => f.id.startsWith(`F-A11Y-${kind}-`));
+      reportCriteria(context, [
+        { tag: 'wcag211', violated: has('TAB') },
+        { tag: 'wcag212', violated: has('TRAP') },
+        { tag: 'wcag2411', violated: has('FOCUS-OBSCURED') },
+      ]);
     } catch {
       findings.push({
         ...this.finding('KEYBOARD-NOTRUN', 1, context, {
@@ -406,7 +427,11 @@ export class KeyboardA11yChecker {
         }
         return null;
       });
-      if (!raw || typeof raw !== 'object') return [];
+      if (!raw || typeof raw !== 'object') {
+        reportCriteria(context, [{ tag: 'wcag1410', violated: false }]);
+        return [];
+      }
+      reportCriteria(context, [{ tag: 'wcag1410', violated: true }]);
       const r = raw as { scrollWidth: number; selector: string };
       const crit = wcagCriteria(['wcag1410'])[0];
       return [

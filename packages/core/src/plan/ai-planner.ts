@@ -25,6 +25,7 @@ import { BudgetSpentError, CapSpentError, StoppedEarlyError } from './ai-budget.
 import { linkKey, pathOf, type SharedLink, type SiteGraph } from './site-graph.js';
 import type { PageCoverageInfo } from './sampling.js';
 import type { ParsedRequirementHint } from '../discovery/context-parser.js';
+import { selectorForStep } from './selector-order.js';
 import {
   BIND_BATCH,
   defaultBinding,
@@ -340,7 +341,14 @@ export function fallbackPageTests(page: PageInventoryItem, safety: SafetyFilter)
   for (const el of controls.slice(0, 6)) {
     if (steps.length > 0)
       steps.push({ action: 'navigate', value: page.urlPath, name: `Back to ${page.urlPath}`, optional: true });
-    steps.push({ action: 'click', selector: el.selector, name: `Try “${el.name}”`, optional: true });
+    const chosen = selectorForStep(el.selector, el);
+    steps.push({
+      action: 'click',
+      selector: chosen.selector,
+      ...(chosen.selectorReason ? { selectorReason: chosen.selectorReason } : {}),
+      name: `Try “${el.name}”`,
+      optional: true,
+    });
   }
   return [
     {
@@ -582,9 +590,11 @@ function readPageAnswer(
             ? s.value
             : guessFillValue(`${s.selector} ${target.name}`)
           : undefined;
+      const chosen = selectorForStep(s.selector, target.element);
       steps.push({
         action,
-        selector: s.selector,
+        selector: chosen.selector,
+        ...(chosen.selectorReason ? { selectorReason: chosen.selectorReason } : {}),
         value,
         name: typeof s.name === 'string' && s.name.trim() ? s.name.trim() : target.name,
       });

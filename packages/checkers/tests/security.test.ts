@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { SecurityChecker, urlHasSecretParam } from '../src/security.js';
 import { chromium, type Browser, type Page } from 'playwright';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 describe('SecurityChecker', () => {
   const checker = new SecurityChecker();
@@ -290,6 +292,97 @@ describe('SecurityChecker', () => {
       );
 
       expect(findings).toHaveLength(0);
+    });
+  });
+
+  describe('passive CORS and CSRF checks (QSP-010)', () => {
+    let browser: Browser;
+    beforeAll(async () => {
+      browser = await chromium.launch();
+    });
+    afterAll(async () => {
+      await browser.close();
+    });
+    const base = { role: 'visitor', breakpoint: '1440px' as const, urlPath: '/' };
+    const csrfOn = async (html: string, cookies: Array<Record<string, unknown>> = []) => {
+      const page = await browser.newPage();
+      try {
+        await page.setContent(html);
+        const proxy = {
+          evaluate: page.evaluate.bind(page),
+          url: () => page.url(),
+          context: () => ({ cookies: async () => cookies }),
+        } as unknown as Page;
+        return await checker.checkCsrf(proxy, base);
+      } finally {
+        await page.close();
+      }
+    };
+    const FORM = '<form method="post" action="/save?x=1"><input name="nick"><button>Save</button></form>';
+
+    it('CORS wildcard without credentials is Minor; exact origin or absent header is not flagged', () => {
+      const any = checker.checkCors({ 'Access-Control-Allow-Origin': '*' }, base);
+      expect(any).toHaveLength(1);
+      expect(any[0].severity).toBe('Minor');
+      expect(checker.checkCors({ 'access-control-allow-origin': 'https://app.example.com' }, base)).toHaveLength(0);
+      expect(checker.checkCors({}, base)).toHaveLength(0);
+    });
+
+    it('the security checker never builds an Origin request header or sends a request of its own', () => {
+      const src = readFileSync(fileURLToPath(new URL('../src/security.ts', import.meta.url)), 'utf8');
+      expect(src).not.toMatch(/['"]origin['"]\s*:/i);
+      expect(src).not.toMatch(/setExtraHTTPHeaders|fetch\(|\.post\(|\.put\(|\.delete\(/);
+    });
+
+    it('flags a POST form with no token, by action path only', async () => {
+      const found = await csrfOn(FORM);
+      expect(found).toHaveLength(1);
+      expect(found[0].title).toBe('No CSRF token found on this form');
+      expect(found[0].severity).toBe('Minor');
+      expect(found[0].expectedVsActual.actual).toContain('/save');
+      expect(found[0].expectedVsActual.actual).not.toContain('x=1');
+      expect(JSON.stringify(found)).not.toMatch(/vulnerable|\bsecure\b/i);
+    });
+
+    it('leaves a form with a hidden token, a meta token, a GET form or a sign-in form alone', async () => {
+      expect(await csrfOn('<form method="post"><input type="hidden" name="csrf_token" value="v"></form>')).toHaveLength(0);
+      expect(await csrfOn(`<head><meta name="csrf-token" content="v"></head>${FORM}`)).toHaveLength(0);
+      expect(await csrfOn('<form method="get" action="/s"><input name="q"></form>')).toHaveLength(0);
+      expect(await csrfOn('<form method="post"><input type="password" name="p"></form>')).toHaveLength(0);
+    });
+
+    it('a SameSite=Lax cookie suppresses the finding', async () => {
+      expect(await csrfOn(FORM, [{ name: 'sid', sameSite: 'Lax' }])).toHaveLength(0);
+      expect(await csrfOn(FORM, [{ name: 'sid', sameSite: 'None' }])).toHaveLength(1);
+    });
+
+    it('cookie flags: Secure only on https, HttpOnly on session cookies, no values in text', async () => {
+      const run = async (url: string, cookie: Record<string, unknown>) => {
+        const mockPage = {
+          url: () => url,
+          evaluate: async () => [],
+          context: () => ({ cookies: async () => [cookie] }),
+        } as unknown as Page;
+        return checker.checkPage(mockPage, { ...base });
+      };
+      const local = await run('http://localhost:3050/', {
+        name: 'session_id',
+        value: 'SENTINEL-COOKIE-VALUE',
+        secure: false,
+        httpOnly: true,
+        sameSite: 'Lax',
+      });
+      expect(local.some((f) => f.title.includes('Secure flag'))).toBe(false);
+      const https = await run('https://example.com/', {
+        name: 'session_id',
+        value: 'SENTINEL-COOKIE-VALUE',
+        secure: false,
+        httpOnly: false,
+        sameSite: 'Lax',
+      });
+      expect(https.some((f) => f.title.includes('Secure flag'))).toBe(true);
+      expect(https.some((f) => f.title.includes('HttpOnly'))).toBe(true);
+      expect(JSON.stringify(https)).not.toContain('SENTINEL-COOKIE-VALUE');
     });
   });
 

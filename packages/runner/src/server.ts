@@ -163,6 +163,12 @@ import {
   type OrchestratorEvent,
   writeJsonAtomic,
   readJsonSafe,
+  runPostDeploySmoke,
+  smokeReport,
+  generateApiChecks,
+  runApiChecks,
+  apiChecksSection,
+  ReportGenerator,
 } from '@qa/core';
 import { BenchmarkStore, cleanFlowType, compareSites, siteName } from './benchmarks.js';
 import { SchedulerManager, type CheckupSchedule } from './scheduler.js';
@@ -2850,6 +2856,35 @@ export class RunnerServer {
         code: 'ERR_INVALID_REQUEST',
         suggestion: 'Type an address that starts with http:// or https://.',
       });
+      return;
+    }
+
+    // Smoke Check-up: a few read-only GETs, no browser, no plan. Runs here and answers with the report.
+    if (body.preset === 'smoke') {
+      try {
+        const result = await runPostDeploySmoke({
+          targetUrl: body.targetUrl,
+          healthPath: body.healthPath,
+          expectedVersion: body.expectedVersion,
+          confirmLive: body.stagingHost === true,
+          beta: this.beta,
+        });
+        if (result.refused) {
+          this.sendJson(res, 400, { error: result.refused, code: 'ERR_SMOKE_REFUSED' });
+          return;
+        }
+        const report = smokeReport(result, body.targetUrl);
+        // No API description is given on this route, so the API section says so and nothing is sent.
+        const api = await runApiChecks(generateApiChecks(undefined), { baseUrl: body.targetUrl });
+        report.findings.push(...api.findings);
+        report.notes = [...(report.notes ?? []), ...apiChecksSection(api)];
+        await fs.mkdir(this.outputDir, { recursive: true });
+        await new ReportGenerator(this.outputDir).generate(report);
+        const verdict = releaseVerdict(report.findings, undefined, report.grades, report.coverage);
+        this.sendJson(res, 200, { preset: 'smoke', report, verdict });
+      } catch (err: unknown) {
+        this.sendJson(res, 500, { error: this.redactedMessage(err) });
+      }
       return;
     }
 

@@ -48,7 +48,7 @@ Tickets are built in batches, numbered 1 to 19. The rules that keep them from co
 | 1 | T-41 | `scripts/` (bootstrap), test setup, `docs/TESTING.md` |
 | 1b | T-64 | the files each failing test points to (set during triage, recorded in T-64 before any edit); alone in its batch |
 | 2 | T-42 | `packages/runner/src/server.ts` (benchmark handler, closed routes), `docs/API.md` |
-| 2 | T-43 | `packages/core/src/safe-net.ts`, `packages/core/src/discovery/deterministic-spider.ts`, `packages/core/src/orchestrator.ts` (checkLink only), `packages/checkers/src/seo.ts`, `packages/checkers/src/security-depth.ts`, new ADR 0030 |
+| 2 | T-43 | `packages/core/src/safe-net.ts`, `packages/core/src/discovery/deterministic-spider.ts`, `packages/core/src/orchestrator.ts` (checkLink only), `packages/checkers/src/seo.ts`, `packages/checkers/src/security-depth.ts`, new ADR 0031 |
 | 2 | T-44 | `packages/core/src/redact.ts`, `packages/checkers/src/security.ts` |
 | 2 | T-46 | `packages/runner/src/session/checkup-run.ts` (cleanup in finally), `packages/runner/src/session/run-secrets.ts` (startup sweep), `packages/runner/src/session/checkup-session.ts`, `packages/runner/src/session/plan-store.ts` |
 | 3 | T-45 | `redact.ts` (after T-44), `orchestrator.ts` (secret list, after T-43), `checkup-run.ts` (after T-46), `server.ts` status GET (after T-42), `packages/core/src/visual-capture.ts`, `packages/core/src/evidence.ts` |
@@ -68,10 +68,10 @@ Tickets are built in batches, numbered 1 to 19. The rules that keep them from co
 | 15 | T-60 | `orchestrator.ts` (contexts, after T-57), `checkup-run.ts` (event publish, after T-50), `site-history.ts`, `site-memory.ts`, `discovery-agent.ts` (contexts, after T-53), `packages/core/src/competitive/safe-crawler.ts`, `server.ts` (dead constant, after T-58) |
 | 16 | T-61 | `packages/wizard/src/lib/api.ts`, `App.tsx` (after T-59), `PlanReviewScreen.tsx`, `components/plan/PlanDocument.tsx`, `ReportScreen.tsx`, `BenchmarkScreen.tsx`, `ConfirmDialog.tsx`, `PastCheckupsScreen.tsx`, `CommandPalette.tsx`, `LandingScreen.tsx` (focus only), `TopBar.tsx` (mobile menu) |
 | 17 | T-62 | the screens listed in T-62, after T-61 (same files, so it runs after) |
-| 18 | T-63 | every doc not owned above: `docs/CONFIGURATION.md`, `.env.example`, `README.md` (including line 236, moved from T-42), `CONTRIBUTING.md`, `CONTEXT.md`, ADRs (except 0024 and 0030), `config-docs` test |
+| 18 | T-63 | every doc not owned above: `docs/CONFIGURATION.md`, `.env.example`, `README.md` (including line 236, moved from T-42), `CONTRIBUTING.md`, `CONTEXT.md`, ADRs (except 0024 and 0031), `config-docs` test |
 | 19 | T-23 | the file splits, last, after all code changes |
 
-**Docs rule.** `docs/TESTING.md`: T-41. `docs/API.md`: T-42. `docs/DEPLOYMENT.md`: T-51, then T-52 (Docker lines). ADR 0024: T-48. ADR 0030: T-43 creates it. Every other doc: T-63.
+**Docs rule.** `docs/TESTING.md`: T-41. `docs/API.md`: T-42. `docs/DEPLOYMENT.md`: T-51, then T-52 (Docker lines). ADR 0024: T-48. ADR 0031: T-43 creates it. Every other doc: T-63.
 
 The table gives each ticket's files. Tickets list only the files in their own row; a ticket that needs another file asks for a later batch.
 
@@ -205,7 +205,7 @@ The table gives each ticket's files. Tickets list only the files in their own ro
   - [ ] No call site in `packages/checkers` or `packages/core` calls `request.fetch`, `page.request` or Node `fetch`
         directly on a page-derived URL (a test greps the source).
 - **Tests:** unit tests for the helper with a fake resolver; the fixture-based redirect test; the source-grep test.
-- **ADR needed:** ADR 0030, "Every outbound request uses the pinned, redirect-checked resolver."
+- **ADR needed:** ADR 0031, "Every outbound request uses the pinned, redirect-checked resolver."
 
 ### T-44 Redaction matching
 
